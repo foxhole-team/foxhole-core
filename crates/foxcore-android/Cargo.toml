@@ -1,0 +1,117 @@
+[package]
+name = "foxcore-android"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "JNI boundary for FoxCore"
+
+[features]
+# The protocol set is chosen by the build, and `shipped` is the name of the one
+# choice that is a release.
+#
+# It used to be the literal contents of `default`, which made it the set nobody
+# chose: `scripts/android-build.sh` had a FOXCORE_ANDROID_FEATURES variable that
+# could only *add*, so there was no way to produce a smaller core from the
+# release path at all — every parser of every protocol was in the artifact
+# whatever profile the phone in question used. Naming the set and passing it
+# explicitly is what makes "vless and Tor only" a build rather than a patch:
+#
+#   FOXCORE_ANDROID_FEATURES=vless,tor scripts/android-build.sh
+#
+# and the measured price of the difference is in README.md.
+#
+# `default` stays an alias for `shipped` rather than becoming empty, and that is
+# load-bearing rather than timid. Two of this repository's gates define "the
+# graph that ships" as the workspace resolved with *default* features —
+# `cargo deny check` and `scripts/sbom.sh`, both of which reach cargo through
+# `cargo metadata` at a virtual workspace root, which has nowhere to put a
+# feature list. A `default` that is not the shipment turns both of them into
+# careful statements about a build nobody installs, and the Arti findings
+# decided in deny.toml would silently stop applying to the artifact carrying
+# Arti. The alias keeps them describing the shipment while the build command is
+# still what decides.
+default = ["shipped"]
+
+# What the shipped library contains.
+#
+# `tor` is in here by decision, not by drift: the product is a privacy product,
+# and Tor being a build flag meant a release either had it or did not depending
+# on who typed the build command. The price is known and accepted — Arti carries
+# a static SQLite and roughly doubles the artifact; the public README records
+# the feature decision while release artifacts make the size measurable.
+#
+# Everything that follows from putting it here is followed through rather than
+# left implied: scripts/tor-rsa-gate.sh moved out of the supply-chain job into
+# the main gate, because RUSTSEC-2023-0071 is now an advisory about code in
+# every shipped .so; and deny.toml — the policy for the graph that ships — now
+# carries Arti's findings itself instead of borrowing them from a second file.
+#
+# `onion-service` is also deliberate: public-beta file sharing publishes only
+# through Tor and has no clearnet fallback. proto-tor forces Arti's primary
+# keystore to the in-memory ephemeral implementation, so stopping the engine
+# destroys the onion identity together with the share capability. The wider
+# dependency/licence graph is checked by the ordinary shipped-graph policy.
+#
+# Nothing may be dropped from this list without the app losing a feature it
+# already offers: `fixtures/abi/v1/capabilities.json` freezes `compiled: true`
+# for every protocol here, and scripts/abi-compare-json.py treats a `true` that
+# became `false` as an incompatible change for exactly that reason — an
+# installed app would keep offering a button the core can no longer answer.
+shipped = [
+    "vless",
+    "vmess",
+    "hysteria2",
+    "tuic",
+    "trojan",
+    "shadowsocks",
+    "i2p",
+    "tor",
+    "onion-service",
+    "socks",
+    "http",
+    "naive",
+    "anytls",
+    "shadowtls",
+    "wireguard",
+]
+vless = ["foxcore-runtime/vless"]
+vmess = ["foxcore-runtime/vmess"]
+hysteria2 = ["foxcore-runtime/hysteria2"]
+tuic = ["foxcore-runtime/tuic"]
+trojan = ["foxcore-runtime/trojan"]
+shadowsocks = ["foxcore-runtime/shadowsocks"]
+i2p = ["foxcore-runtime/i2p"]
+tor = ["foxcore-runtime/tor"]
+onion-service = ["tor", "foxcore-runtime/onion-service"]
+socks = ["foxcore-runtime/socks"]
+http = ["foxcore-runtime/http"]
+naive = ["foxcore-runtime/naive"]
+anytls = ["foxcore-runtime/anytls"]
+shadowtls = ["foxcore-runtime/shadowtls"]
+wireguard = ["foxcore-runtime/wireguard"]
+
+[lib]
+name = "foxhole_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-link = { path = "../foxcore-link" }
+foxcore-runtime = { path = "../foxcore-runtime", default-features = false }
+jni.workspace = true
+libc.workspace = true
+# `release_max_level_warn` is the compile-time half of the ceiling described in
+# `logcat.rs`: the 49 debug/trace records in `foxcore-tun` carry the user's
+# connection tuples, and this removes them from the shipped artifact rather than
+# trusting a runtime filter to hide them.
+log = { version = "0.4.33", features = ["release_max_level_warn"] }
+serde.workspace = true
+serde_json.workspace = true
+# The LAN binding the app confirms is identified by a 32-byte hash, exactly as
+# `NetworkBinding::ssid_hash` is. See `lan_session_identity` for what goes into
+# it and why this boundary cannot use the SSID itself.
+sha2.workspace = true
+zeroize.workspace = true

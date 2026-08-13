@@ -1,0 +1,19 @@
+[package]
+name = "foxcore-relay"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Pooled bidirectional stream copying for FoxCore relays"
+
+[dependencies]
+tokio.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "test-util"] }
+
+[[bench]]
+name = "relay_copy"
+harness = false

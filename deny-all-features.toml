@@ -1,0 +1,151 @@
+# Supply-chain policy for the graph `--all-features` pulls in. The shipped
+# Android default now includes both Tor client and onion publication; this file
+# remains the widest-feature cross-check rather than a different product graph.
+#
+# This file was `deny-tor.toml`, and the name described the split it used to
+# guard: Tor was optional, deny.toml was the shipped graph with no exceptions,
+# and Arti's findings lived here because they were about code no release
+# contained. Tor and onion publication are now default foxcore-android features,
+# so all four findings below describe the artifact and are decided in
+# deny.toml too. This file remains because feature additions elsewhere must be
+# audited before they can enter the shipped default.
+#
+# The advisory and licence decisions are duplicated from deny.toml rather than
+# shared — cargo-deny has no include — so the two files must be edited together.
+# The comments there carry the reasoning; the copies here are deliberately
+# short.
+#
+# Run: cargo deny --all-features --config deny-all-features.toml check
+#
+# ----------------------------------------------------------------------------
+# The four findings, all of them inside Arti's tree. Each is decided rather than
+# silenced; the matching rationale is kept beside each exception here and in
+# deny.toml.
+#
+# 1. RUSTSEC-2023-0071 — rsa 0.9.10, Marvin Attack (VULNERABILITY; the vector is
+#    established to be unreachable). Ships. Decided here and in deny.toml.
+# 2. RUSTSEC-2024-0436 — paste 1.0.15, unmaintained proc-macro. Ships.
+# 3. notify 8.2.0 under CC0-1.0, via an unconditional tor-config dependency.
+#    Ships.
+# 4. xxhash-rust 0.8.18 under BSL-1.0, via onion publication. Ships.
+# ----------------------------------------------------------------------------
+
+[graph]
+all-features = true
+targets = [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+
+[advisories]
+yanked = "deny"
+
+# `paste` is archived upstream and has no successor with the same name
+# (RUSTSEC-2024-0436). It reaches us only through Arti — thirteen tor-* crates
+# depend on it directly, plus slotmap-careful — and it is a proc-macro: it
+# produces identifiers at compile time and contributes no code to the artifact
+# (`cargo metadata` reports its only lib target as kind `proc-macro`). deny.toml
+# has always *said*
+# unmaintained should be a reason to plan a replacement rather than to stop a
+# release; that sentence was not true of its own configuration, because
+# cargo-deny's default flags every transitive unmaintained crate as an error.
+# Here the setting matches the stated intent: an unmaintained crate we depend on
+# directly still fails, an unmaintained crate fifteen levels down inside Arti
+# does not.
+unmaintained = "workspace"
+
+[[advisories.ignore]]
+id = "RUSTSEC-2023-0071"
+# rsa 0.9.10, reached via ssh-key-fork-arti -> tor-key-forge and via
+# tor-llcrypto. Non-constant-time RSA leaks private-key information through
+# timing observable over the network; there is no fixed version (0.9.10 is still
+# the newest stable; 0.10 is at rc.18), and every Rust Tor client carries it.
+#
+# The condition this entry used to carry — "establish which RSA operations Arti
+# performs as a client" — has been discharged. The pinned graph and source audit
+# show that Marvin is a timing channel on *private-key* RSA,
+# and the Arti graph we build performs none.
+#
+#   * no RSA decryption exists anywhere in the graph — TAP, the only handshake
+#     that would need it, is not implemented in Arti;
+#   * RSA signing is compiled (tor_llcrypto::pk::rsa::KeyPair::sign is behind no
+#     feature at all) but has no caller: all five call sites are relay or
+#     directory-authority code, under #[cfg(test)] or in crates that are not in
+#     Cargo.lock (tor-relay-crypto, tor-cert-x509);
+#   * what the client does with RSA is verify other people's signatures with a
+#     public key, which has no secret to leak.
+#
+# So the exception stays — cargo deny reasons about the graph, not about
+# reachability, and there is nothing to upgrade to — but it now records a
+# finding instead of an open question. It is still doing its other job: keeping
+# the known advisory from hiding a new one in the same tree.
+#
+# The finding is about pinned sources, so it is re-derived on every supply-chain
+# run by scripts/tor-rsa-gate.sh, which fails if the rsa version moves, if a
+# fourth crate starts depending on it, if the relay features come on, or if a
+# new mention of the private-key API appears anywhere in the graph.
+reason = "no fixed version exists; the Marvin vector (private-key RSA) is unreachable in this graph and scripts/tor-rsa-gate.sh re-checks the pinned-source argument"
+
+[licenses]
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "GPL-3.0-or-later",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+]
+unused-allowed-license = "warn"
+
+[[licenses.exceptions]]
+# Same as deny.toml: aws-lc-sys vendors BoringSSL.
+name = "aws-lc-sys"
+allow = ["ISC", "OpenSSL", "Apache-2.0"]
+
+[[licenses.exceptions]]
+# notify 8.2.0. Not an incidental entry in the graph: tor-config depends on it
+# unconditionally (`[dependencies.notify]`, not optional, no feature), for
+# src/file_watcher.rs — so every Tor build links CC0 code. CC0-1.0 is a
+# public-domain dedication and is GPL-compatible, so combining it with
+# GPL-3.0-or-later is fine. It is granted as a scoped exception rather than
+# added to `allow` on purpose: CC0 contains no patent grant, several
+# distributors restrict it for code for exactly that reason, and blessing it
+# globally would let the next CC0 dependency in without anyone weighing that.
+# One crate, one decision.
+name = "notify"
+allow = ["CC0-1.0"]
+
+[[licenses.exceptions]]
+# xxhash-rust 0.8.18, under growable-bloom-filter, under **tor-hsservice** —
+# publishing an onion service rather than using the Tor client. It is in the
+# public-beta shipped graph and is mirrored in deny.toml.
+# BSL-1.0 (Boost) is OSI-approved, permissive and GPL-compatible. Scoped for
+# the same reason as CC0: this is a decision about one crate, not every future
+# dependency.
+name = "xxhash-rust"
+allow = ["BSL-1.0"]
+
+[bans]
+# A warning here, `deny` plus a pinned skip list in deny.toml. The reason is no
+# longer "these crates are not in the artifact" — most of them are — but that
+# this graph is a superset whose extra members exist only to be looked at. The
+# duplicates that matter are the ones in the shipment, and they are governed by
+# the file that governs the shipment.
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

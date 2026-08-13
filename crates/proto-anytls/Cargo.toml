@@ -1,0 +1,19 @@
+[package]
+name = "proto-anytls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Clean-room AnyTLS v2 TCP and UoT v2 outbound client for FoxCore"
+
+[dependencies]
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+md-5.workspace = true
+rand.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

@@ -1,0 +1,54 @@
+[package]
+name = "proto-tor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Optional in-process Arti Tor outbound for FoxCore"
+
+[features]
+default = []
+arti = [
+    "dep:async-trait",
+    "dep:arti-client",
+    "arti-client/bridge-client",
+    "arti-client/pt-client",
+    "arti-client/onion-service-client",
+    "arti-client/static-sqlite",
+    "dep:futures",
+    "dep:tor-rtcompat",
+    "dep:tokio-util",
+]
+# Publishing a hidden service. FoxCore uses Arti's in-memory primary keystore
+# here: a file share is session-scoped, so its onion identity must disappear
+# with the runtime instead of leaving private identity keys in the Tor state
+# directory.
+onion-service = [
+    "arti",
+    "arti-client/onion-service-service",
+    "arti-client/ephemeral-keystore",
+    "dep:tor-hsservice",
+    "dep:tor-cell",
+    "dep:tor-proto",
+    "dep:tor-config",
+    "dep:tor-keymgr",
+    "dep:safelog",
+]
+
+[dependencies]
+async-trait = { workspace = true, optional = true }
+arti-client = { version = "0.44.0", default-features = false, features = ["tokio", "rustls", "compression", "flowctl-cc"], optional = true }
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+futures = { workspace = true, optional = true }
+tokio.workspace = true
+tokio-util = { workspace = true, optional = true }
+safelog = { version = "0.9.0", optional = true }
+tor-cell = { version = "0.44.0", default-features = false, optional = true }
+tor-config = { version = "0.44.0", default-features = false, optional = true }
+tor-hsservice = { version = "0.44.0", default-features = false, optional = true }
+tor-keymgr = { version = "0.44.0", default-features = false, features = ["keymgr", "ephemeral-keystore"], optional = true }
+tor-proto = { version = "0.44.0", default-features = false, optional = true }
+tor-rtcompat = { version = "0.44.0", default-features = false, features = ["tokio", "rustls"], optional = true }

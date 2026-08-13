@@ -1,0 +1,31 @@
+[package]
+name = "proto-shadowtls"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Clean-room strict ShadowTLS v3 outbound transport for FoxCore"
+
+[features]
+default = []
+# Opens the `pub(crate)` handshake state machine and the stage-2 record reader
+# to the out-of-tree fuzz harness in `fuzz/`. Off by default and enabled by
+# nothing inside this workspace, so the shipped API surface is unchanged.
+fuzzing = []
+
+[dependencies]
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+hmac.workspace = true
+rand.workspace = true
+rustls-pki-types.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+shadowsocks.workspace = true
+subtle.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-util.workspace = true

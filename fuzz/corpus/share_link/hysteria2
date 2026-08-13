@@ -1,0 +1,1 @@
+hysteria2://secret@example.com:8443/?sni=example.com&insecure=1#hy2

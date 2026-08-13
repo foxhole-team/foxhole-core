@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "outbound": {
+    "type": "vless",
+    "server": "vpn.example.com",
+    "server_ip": "203.0.113.10",
+    "port": 443,
+    "uuid": "d0cf0001-0000-4000-8000-000000000000",
+    "tls": {
+      "enabled": true,
+      "server_name": "vpn.example.com"
+    }
+  },
+  "tun": {
+    "mtu": 1400,
+    "ipv4": "10.0.0.2",
+    "ipv6": "fd00::2"
+  },
+  "dns": {
+    "advertise": "10.0.0.1",
+    "upstream": "1.1.1.1"
+  },
+  "traffic": {
+    "default_action": "vpn",
+    "applications": [
+      { "package": "com.example.browser", "action": "direct" },
+      { "package": "com.example.messenger", "action": "block" }
+    ],
+    "kill_switch": false
+  }
+}

@@ -1,0 +1,30 @@
+[package]
+name = "proto-socks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "SOCKS5 outbound client for FoxCore"
+
+[features]
+default = []
+# Opens the `pub(crate)` wire codec to the out-of-tree fuzz harness in `fuzz/`.
+# Off by default and enabled by nothing inside this workspace, so the shipped
+# API surface is unchanged.
+fuzzing = []
+
+[dependencies]
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+# `pause`: the only honest way to ask whether the UDP relay task actually parks
+# is to let the runtime auto-advance its clock, which it will only do while
+# every task is idle. A spinning relay stops virtual time dead.
+tokio = { workspace = true, features = ["test-util"] }

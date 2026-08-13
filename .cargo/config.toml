@@ -1,0 +1,61 @@
+# Force a DT_NEEDED entry for libandroid on every Android target.
+#
+# `#[link(name = "android")]` in foxcore-android is not sufficient on its own: a
+# cdylib is allowed to keep undefined symbols, so the link succeeds even when the
+# linker drops libandroid under `--as-needed`. The breakage then only appears on a
+# real device, as:
+#
+#   java.lang.UnsatisfiedLinkError: dlopen failed:
+#     cannot locate symbol "android_setsocknetwork" referenced by libfoxhole_native.so
+#
+# Keep as-needed disabled when the explicit platform library is considered.
+# `crates/foxcore-android/build.rs` repeats the pair at the cdylib boundary, and
+# the Android ELF gate checks that the final artifact actually retained it.
+
+[target.aarch64-linux-android]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,--no-as-needed",
+    "-C",
+    "link-arg=-landroid",
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,-z,common-page-size=16384",
+]
+
+[target.armv7-linux-androideabi]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,--no-as-needed",
+    "-C",
+    "link-arg=-landroid",
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,-z,common-page-size=16384",
+]
+
+[target.x86_64-linux-android]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,--no-as-needed",
+    "-C",
+    "link-arg=-landroid",
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,-z,common-page-size=16384",
+]
+
+[target.i686-linux-android]
+rustflags = [
+    "-C",
+    "link-arg=-Wl,--no-as-needed",
+    "-C",
+    "link-arg=-landroid",
+    "-C",
+    "link-arg=-Wl,-z,max-page-size=16384",
+    "-C",
+    "link-arg=-Wl,-z,common-page-size=16384",
+]

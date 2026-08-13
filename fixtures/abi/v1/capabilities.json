@@ -1,0 +1,356 @@
+{
+    "capabilities_schema_version": 1,
+    "abi_version": 1,
+    "config_schema_version": 1,
+    "core_version": "0.0.1",
+    "protocols": [
+        {
+            "id": "vless",
+            "compiled": true,
+            "implementation": "native",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "tcp",
+                "tls",
+                "reality_chrome_static",
+                "websocket",
+                "http_upgrade",
+                "grpc",
+                "http2",
+                "udp_over_tcp",
+                "xudp",
+                "packetaddr",
+                "vision"
+            ],
+            "unsupported": [
+                "vision_udp443",
+                "websocket_early_data",
+                "reality_other_fingerprints",
+                "reality_mldsa65",
+                "reality_crawler_fallback"
+            ]
+        },
+        {
+            "id": "vmess",
+            "compiled": true,
+            "implementation": "native_aead",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "tcp",
+                "tls",
+                "websocket",
+                "http_upgrade",
+                "grpc",
+                "http2",
+                "aead"
+            ],
+            "unsupported": [
+                "legacy_alter_id",
+                "xudp",
+                "mux",
+                "reality",
+                "fingerprint_emulation"
+            ]
+        },
+        {
+            "id": "hysteria2",
+            "compiled": true,
+            "implementation": "native",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "quic",
+                "http3",
+                "salamander",
+                "brutal_congestion",
+                "port_hopping"
+            ],
+            "unsupported": [
+                "gecko",
+                "realms"
+            ]
+        },
+        {
+            "id": "tuic",
+            "compiled": true,
+            "implementation": "native_clean_room_v5",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "quic",
+                "tls_exporter_auth",
+                "native_udp",
+                "quic_stream_udp",
+                "cubic",
+                "new_reno",
+                "bounded_reassembly"
+            ],
+            "unsupported": [
+                "bbr",
+                "zero_rtt",
+                "udp_over_stream_extension",
+                "port_hopping"
+            ]
+        },
+        {
+            "id": "trojan",
+            "compiled": true,
+            "implementation": "native",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "tcp",
+                "tls",
+                "websocket",
+                "http_upgrade",
+                "grpc",
+                "http2",
+                "udp_over_tcp"
+            ],
+            "unsupported": []
+        },
+        {
+            "id": "shadowsocks",
+            "compiled": true,
+            "implementation": "native",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "aead",
+                "aead_2022",
+                "websocket",
+                "v2ray_plugin",
+                "simple_obfs_http",
+                "simple_obfs_tls",
+                "outline_prefix"
+            ],
+            "unsupported": [
+                "sip003_plugins",
+                "outline_prefix_aead_2022",
+                "outline_prefix_udp",
+                "outline_dynamic_key"
+            ]
+        },
+        {
+            "id": "anytls",
+            "compiled": true,
+            "implementation": "native_clean_room_v2",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "tls",
+                "session_reuse",
+                "multiplex",
+                "bounded_padding",
+                "padding_update",
+                "synack",
+                "uot_v2"
+            ],
+            "unsupported": [
+                "v1_server",
+                "custom_transport",
+                "tls_fingerprint_emulation",
+                "proactive_heartbeat"
+            ]
+        },
+        {
+            "id": "shadowtls",
+            "compiled": true,
+            "implementation": "native_clean_room_strict_v3_embedded_shadowsocks",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "tls13",
+                "server_proof",
+                "chained_hmac",
+                "inner_shadowsocks",
+                "uot_v2"
+            ],
+            "unsupported": [
+                "v1",
+                "v2",
+                "tls12_non_strict",
+                "generic_detour",
+                "non_shadowsocks_inner",
+                "share_link",
+                "tls_fingerprint_emulation",
+                "h2_muddled_fallback"
+            ]
+        },
+        {
+            "id": "wireguard",
+            "compiled": true,
+            "implementation": "native_l3_packet_tunnel",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "udp",
+                "noise_ikpsk2",
+                "reserved_header",
+                "keepalive",
+                "conf_file_import"
+            ],
+            "unsupported": [
+                "endpoint_roaming",
+                "server_role"
+            ]
+        },
+        {
+            "id": "amneziawg",
+            "compiled": true,
+            "implementation": "native_l3_packet_tunnel",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "jc",
+                "jmin",
+                "jmax",
+                "s1",
+                "s2",
+                "h1",
+                "h2",
+                "h3",
+                "h4"
+            ],
+            "unsupported": [
+                "i1_i5_signatures",
+                "itime",
+                "link_import"
+            ]
+        },
+        {
+            "id": "naive",
+            "compiled": true,
+            "implementation": "native_h2_connect_with_padding",
+            "tcp": true,
+            "udp": false,
+            "transports": [
+                "tls",
+                "http2",
+                "padding_variant1"
+            ],
+            "unsupported": [
+                "udp",
+                "chromium_tls_fingerprint",
+                "rst_stream_padding",
+                "response_header_padding"
+            ]
+        },
+        {
+            "id": "socks",
+            "compiled": true,
+            "implementation": "native_socks5",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "tcp",
+                "udp_associate",
+                "userpass_auth",
+                "remote_dns"
+            ],
+            "unsupported": [
+                "tls",
+                "socks4",
+                "gssapi_auth"
+            ]
+        },
+        {
+            "id": "http",
+            "compiled": true,
+            "implementation": "native_http_connect",
+            "tcp": true,
+            "udp": false,
+            "transports": [
+                "tcp",
+                "tls",
+                "basic_auth",
+                "custom_headers"
+            ],
+            "unsupported": [
+                "udp"
+            ]
+        },
+        {
+            "id": "selector",
+            "compiled": true,
+            "implementation": "native_lazy_members_with_failover",
+            "tcp": true,
+            "udp": true,
+            "transports": [
+                "manual_select",
+                "connect_failover",
+                "urltest_probe"
+            ],
+            "unsupported": [
+                "urltest_https_probe"
+            ]
+        },
+        {
+            "id": "tor",
+            "compiled": false,
+            "implementation": "in_process_arti",
+            "tcp": false,
+            "udp": false,
+            "transports": [
+                "tcp",
+                "onion",
+                "remote_dns",
+                "direct_bridges"
+            ],
+            "unsupported": [
+                "udp",
+                "pluggable_transports"
+            ]
+        },
+        {
+            "id": "i2p",
+            "compiled": true,
+            "implementation": "external_i2pd_socks5_loopback",
+            "tcp": true,
+            "udp": false,
+            "transports": [
+                "tcp",
+                "remote_naming",
+                "fake_ip"
+            ],
+            "unsupported": [
+                "udp",
+                "process_ownership",
+                "clearnet"
+            ]
+        }
+    ],
+    "dns": {
+        "udp": true,
+        "tcp": true,
+        "dot": true,
+        "doh_http2": true,
+        "fake_ip": true,
+        "private_namespaces_fail_closed": [
+            "onion",
+            "i2p"
+        ]
+    },
+    "routing": {
+        "multi_outbound": true,
+        "atomic_policy_reload": true,
+        "uid_package_split": false,
+        "unified_application_policy": true,
+        "firewall_block_action": true,
+        "overlay_network_hot_toggle": true,
+        "shared_uid_conflict_fail_closed": true,
+        "existing_flows_preserved_on_reload": true,
+        "outbound_failure_isolated": true,
+        "max_named_outbounds": 16,
+        "max_selector_members": 64,
+        "link_import": true,
+        "lenient_subscription_import": true,
+        "typed_policy_refusals": true
+    },
+    "share": {
+        "compiled": true,
+        "onion_publication": true
+    }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "proto-tuic"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Native TUIC v5 QUIC outbound for FoxCore"
+
+[dependencies]
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+quinn.workspace = true
+quinn-proto.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+zeroize.workspace = true

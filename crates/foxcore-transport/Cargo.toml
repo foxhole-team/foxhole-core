@@ -1,0 +1,41 @@
+[package]
+name = "foxcore-transport"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Shared stream, datagram, and TLS boundaries for FoxCore protocols"
+
+[dependencies]
+async-trait.workspace = true
+base64.workspace = true
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+futures.workspace = true
+h2.workspace = true
+http.workspace = true
+# The `aws-lc-rs` feature is asked for here, and nowhere else, because this is
+# the crate that spends it: rustls implements HPKE — and therefore ECH — only in
+# its aws-lc-rs provider, and `crypto_provider` in src/tls.rs now runs the
+# handshake on that same provider. That is what gives the rustls path
+# X25519MLKEM768, which `ring` does not have and which a current browser offers
+# first. The aws-lc-sys C library was already linked into every build through
+# foxcore-route, foxcore-tun, proto-reality and proto-wireguard, so this is not
+# a second native blob arriving — what it actually costs is measured on both
+# shipped ABIs.
+rustls = { workspace = true, features = ["aws-lc-rs"] }
+rustls-pki-types.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+tokio-util.workspace = true
+webpki-roots.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+# Same pin proto-reality already uses, so the ECH tests add no crate to the
+# graph cargo-deny reasons about.
+rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

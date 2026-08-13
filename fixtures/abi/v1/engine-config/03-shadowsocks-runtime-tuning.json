@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "outbound": {
+    "type": "shadowsocks",
+    "server": "ss.example.com",
+    "server_ip": "198.51.100.4",
+    "port": 8388,
+    "method": "2022-blake3-aes-256-gcm",
+    "password": "ZGVhZGJlZWZkZWFkYmVlZmRlYWRiZWVmZGVhZGJlZWY="
+  },
+  "tun": {
+    "mtu": 1500,
+    "ipv4": "10.0.0.2"
+  },
+  "runtime": {
+    "worker_threads": 2,
+    "connect_timeout_ms": 8000,
+    "idle_timeout_s": 300
+  }
+}

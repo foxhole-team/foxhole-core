@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc b86918b8f7f76a08572fe9f2d6e8b845fb36d3123008dfd81d9acd7cc3b9d583 # shrinks to rules = [RouteRule { uid: None, package: None, exact_domains: [], domain_suffixes: [], cidrs: [], ports: [], network: None, transport: None, action: Block, expires_at_ms: None }, RouteRule { uid: None, package: None, exact_domains: [], domain_suffixes: [], cidrs: [], ports: [], network: None, transport: None, action: Direct, expires_at_ms: None }], flow = FlowContext { generation: 1, transport: Tcp, source: None, destination: Destination { host: "a", port: 0 }, domain_hint: None, uid: None, package: None, packages: [], network: None, signing_digest: None }
+cc 1f3f72604739b7dc15f4a99780d4582ab40f8d17ac1900bde406c3637da9b3a6 # shrinks to rules = [RouteRule { uid: None, package: None, exact_domains: [], domain_suffixes: [], cidrs: [], ports: [], network: None, transport: None, action: Block, expires_at_ms: Some(18446744073709551615) }, RouteRule { uid: None, package: None, exact_domains: [], domain_suffixes: [], cidrs: [], ports: [], network: None, transport: None, action: Direct, expires_at_ms: None }], flow = FlowContext { generation: 1, transport: Tcp, source: None, destination: Destination { host: "a", port: 0 }, domain_hint: None, uid: None, package: None, packages: [], network: None, signing_digest: None }

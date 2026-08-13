@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://foxhole.invalid/schema/capabilities.schema.json",
+  "title": "FoxCore native capabilities document",
+  "description": "The document nativeCapabilities() and foxhole_core_capabilities_json_write() return. Checked against the emitted bytes by crates/foxcore-android/src/capabilities.rs so the schema and the code cannot drift. Additive only: ABI v1 froze every key that was here before capabilities_schema_version 1, and scripts/abi-gate.sh enforces that against a recorded fixture.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "capabilities_schema_version",
+    "abi_version",
+    "config_schema_version",
+    "core_version",
+    "protocols",
+    "tls",
+    "dns",
+    "routing",
+    "share",
+    "lan_proxy",
+    "loopback_inbounds",
+    "maturity",
+    "protocol_matrix"
+  ],
+  "properties": {
+    "capabilities_schema_version": { "type": "integer", "minimum": 1 },
+    "abi_version": { "type": "integer", "minimum": 1 },
+    "config_schema_version": { "type": "integer", "minimum": 1 },
+    "core_version": { "type": "string" },
+
+    "protocols": {
+      "description": "ABI v1's flat list. Frozen: an app built against v1 reads exactly what it read before. protocol_matrix is the structured view beside it, never instead of it.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/protocolCapability" }
+    },
+
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ech", "ech_grease", "ech_from_https_rr", "ech_refused_by"],
+      "properties": {
+        "ech": { "type": "boolean" },
+        "ech_grease": { "type": "boolean" },
+        "ech_from_https_rr": { "type": "boolean" },
+        "ech_refused_by": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "dns": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["udp", "tcp", "dot", "doh_http2", "fake_ip", "private_namespaces_fail_closed"],
+      "properties": {
+        "udp": { "type": "boolean" },
+        "tcp": { "type": "boolean" },
+        "dot": { "type": "boolean" },
+        "doh_http2": { "type": "boolean" },
+        "fake_ip": { "type": "boolean" },
+        "private_namespaces_fail_closed": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "multi_outbound",
+        "atomic_policy_reload",
+        "uid_package_split",
+        "unified_application_policy",
+        "firewall_block_action",
+        "overlay_network_hot_toggle",
+        "shared_uid_conflict_fail_closed",
+        "existing_flows_preserved_on_reload",
+        "outbound_failure_isolated",
+        "max_named_outbounds",
+        "max_selector_members",
+        "link_import",
+        "lenient_subscription_import",
+        "typed_policy_refusals"
+      ],
+      "properties": {
+        "multi_outbound": { "type": "boolean" },
+        "atomic_policy_reload": { "type": "boolean" },
+        "uid_package_split": { "type": "boolean" },
+        "unified_application_policy": { "type": "boolean" },
+        "firewall_block_action": { "type": "boolean" },
+        "overlay_network_hot_toggle": { "type": "boolean" },
+        "shared_uid_conflict_fail_closed": { "type": "boolean" },
+        "existing_flows_preserved_on_reload": {
+          "description": "The coarse v1 answer. protocol_matrix[].existing_flow_behavior is the per-protocol one, and it is where a packet tunnel differs from a proxy.",
+          "type": "boolean"
+        },
+        "outbound_failure_isolated": { "type": "boolean" },
+        "max_named_outbounds": { "type": "integer", "minimum": 1 },
+        "max_selector_members": { "type": "integer", "minimum": 1 },
+        "link_import": { "type": "boolean" },
+        "lenient_subscription_import": { "type": "boolean" },
+        "typed_policy_refusals": { "type": "boolean" }
+      }
+    },
+
+    "share": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compiled", "onion_publication"],
+      "properties": {
+        "compiled": { "type": "boolean" },
+        "onion_publication": { "type": "boolean" }
+      }
+    },
+
+    "lan_proxy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compiled",
+        "presets",
+        "socks5",
+        "http_connect",
+        "mandatory_credentials",
+        "session_network_confirmation",
+        "wildcard_bind",
+        "cellular_bind",
+        "rebinds_on_network_change",
+        "direct_preset"
+      ],
+      "properties": {
+        "compiled": { "type": "boolean" },
+        "presets": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["vpn", "tor", "mixed"] }
+        },
+        "socks5": { "type": "boolean" },
+        "http_connect": { "type": "boolean" },
+        "mandatory_credentials": { "const": true },
+        "session_network_confirmation": { "const": true },
+        "wildcard_bind": {
+          "description": "A wildcard bind on a phone is reachable from the mobile network. Never true.",
+          "const": false
+        },
+        "cellular_bind": { "const": false },
+        "rebinds_on_network_change": { "const": false },
+        "direct_preset": {
+          "description": "There is no direct preset. LAN traffic leaves through the VPN or through Tor or it does not leave.",
+          "const": false
+        }
+      }
+    },
+
+    "loopback_inbounds": {
+      "description": "Named loopback CONNECT listeners: one authenticated proxy per application, which on Android is the only way to route two web apps in one process differently.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "compiled",
+        "upstreams",
+        "max_inbounds",
+        "max_sessions_per_inbound",
+        "default_sessions_per_inbound",
+        "ephemeral_port",
+        "socks5",
+        "http_connect",
+        "mandatory_credentials",
+        "distinct_credentials_enforced",
+        "configurable_bind_address",
+        "fail_closed_upstream"
+      ],
+      "properties": {
+        "compiled": { "type": "boolean" },
+        "upstreams": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["profile", "tor", "direct"] }
+        },
+        "max_inbounds": { "type": "integer", "minimum": 1 },
+        "max_sessions_per_inbound": { "type": "integer", "minimum": 1 },
+        "default_sessions_per_inbound": { "type": "integer", "minimum": 1 },
+        "ephemeral_port": { "type": "boolean" },
+        "socks5": {
+          "description": "HTTP CONNECT only: the client is an Android Proxy.",
+          "const": false
+        },
+        "http_connect": { "const": true },
+        "mandatory_credentials": { "const": true },
+        "distinct_credentials_enforced": { "const": true },
+        "configurable_bind_address": {
+          "description": "The bind address is absent from the schema; the core binds 127.0.0.1 itself. A config can never widen one of these to the LAN.",
+          "const": false
+        },
+        "fail_closed_upstream": {
+          "description": "An inbound whose upstream is unavailable refuses. It never falls through to direct.",
+          "const": true
+        }
+      }
+    },
+
+    "maturity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["states", "definitions", "ceiling", "live_interop_verified_this_build", "features"],
+      "properties": {
+        "states": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["unavailable", "experimental", "beta", "stable"] }
+        },
+        "definitions": { "type": "array", "items": { "type": "string" } },
+        "ceiling": { "$ref": "#/$defs/maturityState" },
+        "live_interop_verified_this_build": { "type": "boolean" },
+        "features": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "maturity", "note"],
+            "properties": {
+              "id": { "type": "string" },
+              "maturity": { "$ref": "#/$defs/maturityState" },
+              "note": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    "protocol_matrix": {
+      "description": "The structured per-protocol view. Every value is derived from the code that enforces it; a question the code cannot answer has no field here.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["vocabulary", "protocols"],
+      "properties": {
+        "vocabulary": {
+          "description": "The closed vocabularies this block uses, published so a UI does not carry a copy that drifts.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["data_plane", "stream_carrier", "existing_flow_outcome"],
+          "properties": {
+            "data_plane": { "type": "array", "items": { "$ref": "#/$defs/dataPlane" } },
+            "stream_carrier": { "type": "array", "items": { "$ref": "#/$defs/streamCarrier" } },
+            "existing_flow_outcome": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/flowOutcome" }
+            }
+          }
+        },
+        "protocols": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/protocolMatrixEntry" }
+        }
+      }
+    }
+  },
+
+  "$defs": {
+    "maturityState": {
+      "type": "string",
+      "enum": ["unavailable", "experimental", "beta", "stable"]
+    },
+    "dataPlane": {
+      "description": "stream_proxy: one outbound connection per flow, owned by a relay task. packet_tunnel: IP packets sealed whole, routed from a cached 5-tuple decision. group: a selector, which carries nothing of its own.",
+      "type": "string",
+      "enum": ["stream_proxy", "packet_tunnel", "group"]
+    },
+    "streamCarrier": {
+      "description": "The five variants StreamTransportConfig can express.",
+      "type": "string",
+      "enum": ["raw", "websocket", "http_upgrade", "grpc", "http2"]
+    },
+    "flowOutcome": {
+      "description": "What happens to a flow that is already open. reevaluated_after_idle means the decision is re-taken only once the flow has been silent for runtime.idle_timeout_s.",
+      "type": "string",
+      "enum": ["preserved", "revoked", "reevaluated_after_idle"]
+    },
+    "protocolCapability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "compiled", "implementation", "tcp", "udp", "transports", "unsupported", "maturity"],
+      "properties": {
+        "id": { "type": "string" },
+        "compiled": { "type": "boolean" },
+        "implementation": { "type": "string" },
+        "tcp": { "type": "boolean" },
+        "udp": { "type": "boolean" },
+        "transports": { "type": "array", "items": { "type": "string" } },
+        "unsupported": { "type": "array", "items": { "type": "string" } },
+        "maturity": { "$ref": "#/$defs/maturityState" }
+      }
+    },
+    "protocolMatrixEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "compiled",
+        "data_plane",
+        "stream_carriers",
+        "tls",
+        "ech",
+        "reality",
+        "vision",
+        "quic",
+        "udp",
+        "fake_ip_as_primary",
+        "fake_ip_required",
+        "existing_flow_behavior"
+      ],
+      "properties": {
+        "id": {
+          "description": "Joins to protocols[].id. The two lists always carry the same ids in the same order.",
+          "type": "string"
+        },
+        "compiled": { "type": "boolean" },
+        "data_plane": { "$ref": "#/$defs/dataPlane" },
+        "stream_carriers": {
+          "description": "Carriers a profile may configure, read off the protocol's own transport field. Empty means the config has no such field.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/streamCarrier" }
+        },
+        "tls": { "type": "boolean" },
+        "ech": { "type": "boolean" },
+        "reality": { "type": "boolean" },
+        "vision": { "type": "boolean" },
+        "quic": { "type": "boolean" },
+        "udp": { "type": "boolean" },
+        "fake_ip_as_primary": {
+          "description": "dns.mode='fake_ip' may be used with this protocol as the primary outbound. False for the L3 tunnels: a clearnet name answered from the fake pool is sealed as the packet's destination and no peer can route it.",
+          "type": "boolean"
+        },
+        "fake_ip_required": {
+          "description": "Routing anything to this protocol requires dns.mode='fake_ip', or the config is refused.",
+          "type": "boolean"
+        },
+        "existing_flow_behavior": { "$ref": "#/$defs/existingFlowBehavior" }
+      }
+    },
+    "existingFlowBehavior": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on_policy_reload", "on_kill_switch", "on_network_change", "revocable_by_call"],
+      "properties": {
+        "on_policy_reload": { "$ref": "#/$defs/flowOutcome" },
+        "on_kill_switch": { "$ref": "#/$defs/flowOutcome" },
+        "on_network_change": { "$ref": "#/$defs/flowOutcome" },
+        "revocable_by_call": {
+          "description": "Whether nativeRevokeFlows reaches a flow of this kind. False on the L3 path: the call still returns a count, but no task is awaiting the token it cancels, so packets keep moving until the split decision expires.",
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}

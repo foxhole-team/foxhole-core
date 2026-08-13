@@ -1,0 +1,30 @@
+[package]
+name = "proto-wireguard"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "WireGuard Noise IK handshake and transport for FoxCore"
+
+[features]
+default = []
+# Exposes the in-crate WireGuard responder so crates above can drive a real
+# session in their own tests. Never enabled in a shipped build.
+test-support = []
+
+[dependencies]
+aws-lc-rs.workspace = true
+blake2.workspace = true
+chacha20poly1305.workspace = true
+getrandom.workspace = true
+subtle.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+proptest = "1.11.0"
+
+[[bench]]
+name = "wireguard_datapath"
+harness = false

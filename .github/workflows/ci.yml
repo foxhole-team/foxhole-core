@@ -1,0 +1,325 @@
+# The same checks `scripts/gate.sh` runs locally, in the same order. They are
+# kept deliberately identical: a gate that differs from the one developers run
+# teaches people to ignore it.
+name: gate
+
+# Runs on a push to dev and on pull requests into it — nowhere else. The gate is the full
+# suite (fuzz, miri, supply chain), so letting it fire on every branch and every tag turned one
+# change into several identical hour-long runs. main carries only what dev already proved.
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+# This workflow only reads the checkout and publishes a crash artifact when a
+# fuzz target fails. Uploading an Actions artifact does not require repository
+# write access, so every other GITHUB_TOKEN scope stays disabled.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # cargo-fuzz and Miri are nightly-only. A dated channel keeps a rerun of the
+  # same commit on the same compiler instead of silently taking tomorrow's.
+  FOXCORE_NIGHTLY: nightly-2026-08-12
+  CARGO_FUZZ_VERSION: 0.13.2
+  # Wall-clock-sensitive tests (loopback sockets, short timeouts) flake at full
+  # width on a shared runner, the same way they do on a loaded desktop.
+  FOXCORE_TEST_THREADS: 4
+  # Per-target fuzzing budget. Two minutes is not a campaign — it is a
+  # regression check that the corpus in the repository still passes and that a
+  # shallow new crash is caught the day it lands. Raise it here, in one place,
+  # for a nightly or release run.
+  FOXCORE_FUZZ_SECONDS: 120
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      # The toolchain is pinned in rust-toolchain.toml; installing anything else
+      # here would mean CI and developers compile different code.
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace -- --test-threads=${{ env.FOXCORE_TEST_THREADS }}
+
+      # RUSTSEC-2023-0071 (rsa, Marvin Attack) is accepted on the strength of an
+      # argument — the Arti graph performs no private-key RSA operation — and
+      # this re-derives that argument from the resolved graph.
+      #
+      # It lived in the supply-chain job while `tor` was an optional feature,
+      # because the advisory was then about code no release contained. It is a
+      # default feature now, so the crate carrying it is in every shipped .so
+      # and this is a property of the artifact, not of a supply-chain audit.
+      # Here it gates every commit, so every release commit re-derives the
+      # accepted advisory's reachability argument from its own resolved graph.
+      - name: RUSTSEC-2023-0071 is still unreachable
+        run: scripts/tor-rsa-gate.sh
+
+  # Feature combinations that ship. The default build is covered above; these
+  # catch the case where a crate only compiles because some *other* crate
+  # happened to turn its feature on.
+  features:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Minimal — one protocol only
+        run: cargo check -p foxcore-runtime --no-default-features --features vless
+
+      # The library that ships is `foxcore-android`, and its protocol set is now
+      # chosen by whoever builds it (scripts/android-build.sh passes
+      # `--no-default-features --features shipped`). Three points on that axis
+      # are built here, because "the feature turns the protocol off" is a claim
+      # about compilation and nothing else checks it: the workspace jobs above
+      # all resolve every feature on at once, which is the one combination where
+      # a broken `cfg` cannot show.
+      - name: No protocol at all
+        run: cargo check -p foxcore-android --no-default-features
+      - name: One protocol and one overlay
+        run: cargo check -p foxcore-android --no-default-features --features vless,tor
+      - name: The set that ships, named
+        run: cargo check -p foxcore-android --no-default-features --features shipped
+      # And the tests: a reduced build has to be usable, not merely compilable.
+      # The capabilities document is what an app feature-detects on, so its unit
+      # tests are the ones that must hold with the features off.
+      - name: A reduced build passes its own tests
+        run: cargo test -p foxcore-android --no-default-features
+      # Both `tor` and `onion-service` are in the default set, so --all-features
+      # adds nothing Tor-related over the gate job. What it still covers is
+      # every *other* optional feature across the workspace at once, which no
+      # other job builds together.
+      - name: Everything, every optional feature at once
+        run: cargo check --workspace --all-features
+
+  # Build the same two JNI libraries as the release workstation. Host checks
+  # cannot compile Android-only JNI, resolver, or socket-binding paths.
+  android-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: ndk;29.0.14206865
+      - name: Pinned Rust targets and cargo-ndk
+        run: |
+          # The ELF gate greps with ripgrep; the runner image does not ship it.
+          sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo fetch --locked
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> "$GITHUB_ENV"
+      - name: Release JNI for both shipped ABIs
+        env:
+          FOXCORE_JNI_OUTPUT: target/android-jni
+        run: scripts/android-build.sh
+      - name: Verify the release candidate recipe
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        run: |
+          scripts/rollback-artifact.sh record \
+            target/foxcore-release-candidate \
+            --libs target/android-jni
+          mkdir -p target/foxcore-release-candidate/sbom
+          cp sbom/foxcore-aarch64-linux-android.cdx.json \
+            sbom/workspace-all-targets.cdx.json \
+            target/foxcore-release-candidate/sbom/
+          scripts/rollback-artifact.sh verify target/foxcore-release-candidate
+          grep -qx 'abi-gate: PASS' \
+            target/foxcore-release-candidate/abi-gate.log
+          test "$(jq -r .git.commit target/foxcore-release-candidate/MANIFEST.json)" = "$GITHUB_SHA"
+          test "$(jq -r .git.dirty target/foxcore-release-candidate/MANIFEST.json)" = false
+          cmp sbom/foxcore-aarch64-linux-android.cdx.json \
+            target/foxcore-release-candidate/sbom/foxcore-aarch64-linux-android.cdx.json
+          cmp sbom/workspace-all-targets.cdx.json \
+            target/foxcore-release-candidate/sbom/workspace-all-targets.cdx.json
+      # The candidate is deliberately not persisted as an Actions artifact.
+      # Repository-wide artifact quota is unrelated to this source tree and can
+      # otherwise turn a completely green gate red. main selects a successful
+      # dev run with the identical Git tree, rebuilds from the same pinned
+      # Rust/NDK/lockfile inputs, and verifies the rebuilt candidate before it
+      # signs or publishes anything.
+
+  # Everything about what this thing links against, and whether the lockfile
+  # actually decides it.
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      # A lockfile that is not authoritative makes every other check here a
+      # statement about a build nobody will reproduce. `--locked` fails rather
+      # than re-resolving, and the diff catches a lockfile that was updated as a
+      # side effect instead of deliberately.
+      - name: The lockfile is the build
+        run: |
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo check --workspace --locked --quiet
+          git diff --exit-code Cargo.lock
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      # The graph that ships: default features — which now include `tor` — over
+      # the two Android ABIs that ship plus the two hosts anyone develops on.
+      # Arti's advisory and licence findings are decided in deny.toml because
+      # they are findings about the artifact. Duplicate versions are an error
+      # with a pinned, reasoned skip list.
+      - name: Advisories, licences, sources — shipped graph
+        run: cargo deny check
+
+      # The graph `--all-features` pulls in on top of the shipment, which is
+      # `onion-service`. Its findings are decided in deny-all-features.toml
+      # rather than hidden; this job exists so a *new* one in the same tree is
+      # not mistaken for them.
+      - name: Advisories, licences, sources — plus onion-service
+        run: cargo deny --all-features --config deny-all-features.toml check
+
+      # The SBOM is committed, so it is reviewable as a diff. This step fails
+      # when the dependency graph moved and the document did not.
+      - name: SBOM is current
+        run: |
+          scripts/sbom.sh --check
+          scripts/sbom.sh --all --check
+
+  # ABI v1 against the fixtures recorded for it, rather than against the source
+  # that produced it. Separate job: it needs a C compiler and python3, which the
+  # test gate does not.
+  abi:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Exports, C ownership rules, capabilities, on-disk formats
+        run: scripts/abi-gate.sh
+
+  # The fuzz harness on the pinned toolchain: target bodies compile, the seeds
+  # still reach the branches they were written for, and every target has a
+  # corpus. Cheap, and it is what catches a target that stopped compiling
+  # against a parser somebody changed — the failure mode a nightly-only job
+  # would hide until the campaign ran.
+  fuzz-harness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Harness, seeds and corpus
+        run: scripts/fuzz.sh check
+
+  # The campaign. Eight parsers that read bytes somebody *else* chose — not our
+  # config — so this is the only job here that tests the code against an
+  # adversary rather than against us. `share_link` is the sharpest of them: a
+  # subscription body is parsed before any handshake, so nothing has
+  # authenticated it when it reaches the parser.
+  #
+  # `shadowtls_server_stream` is the only one with memory: its input is a
+  # sequence of socket reads fed to a single decoder, which is the only way the
+  # states a session passes *through* — reassembly, a chained HMAC, the
+  # post-authentication rules — are reached at all.
+  #
+  # One job per target so the budget is per target rather than shared, and
+  # `fail-fast: false` because "DNS crashed" must not hide "SOCKS crashed too".
+  # A crash fails the job: libFuzzer exits non-zero and writes the input to
+  # `fuzz/artifacts/`, which is uploaded so the reproducer survives the runner
+  # and can be turned into a regression test in the parser's own crate.
+  fuzz:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - flow_key_from_packet
+          - dns_message
+          - wireguard_message
+          - socks_codec
+          - http_codec
+          - reality_records
+          - share_link
+          - shadowtls_server_stream
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      # cargo-fuzz needs nightly and a linked libFuzzer; the rest of this file
+      # deliberately does not. Installed here and nowhere else.
+      - name: Nightly and cargo-fuzz
+        run: |
+          rustup toolchain install "$FOXCORE_NIGHTLY" --profile minimal
+          cargo +"$FOXCORE_NIGHTLY" install cargo-fuzz \
+            --version "$CARGO_FUZZ_VERSION" --locked
+
+      - name: ${{ matrix.target }}
+        run: scripts/fuzz.sh run ${{ matrix.target }} ${{ env.FOXCORE_FUZZ_SECONDS }}
+
+      # Only the input that broke something is kept. The corpus used to be
+      # uploaded on every run of every target as well, which is a dozen archives
+      # per push for a campaign that found nothing — it filled the account's
+      # artifact quota, and a quota that is full fails the upload step and so
+      # fails a green run. A corpus entry worth keeping is a test input: it comes
+      # back through review, from the crash artifact below.
+      - name: The input that crashed it
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Miri on the crates it can actually run.
+  #
+  # It cannot run most of this workspace, and that is expected rather than a
+  # gap to work around: Miri has no sockets, no epoll and no FFI, so anything
+  # that reaches tokio's I/O driver or a C crypto backend (`aws-lc-rs`, `ring`,
+  # `blake3`) is out by construction. What is left is the part where a
+  # miscompiled assumption would be silent anyway — the sans-io parsers and the
+  # config/link surface — and there Miri checks alignment, provenance and
+  # arithmetic that the tests themselves cannot see.
+  #
+  # The two crates with `unsafe` in them are *not* here, and cannot be:
+  # `foxcore-tun` calls `libc::read` on a real descriptor and `foxcore-android`
+  # is a cdylib behind JNI. Their platform-specific invariants are covered by
+  # the Android cross-build, ABI fixtures, ordinary tests and device acceptance.
+  #
+  # Measured, not guessed: the three crates below cost 8m38s end to end on a
+  # developer machine — Miri's own codegen included, and at 37% CPU because the
+  # machine was busy — of which 51s was interpreting `foxcore-link`'s 43 tests.
+  # That fits a push.
+  miri:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Nightly with Miri
+        run: >-
+          rustup toolchain install "$FOXCORE_NIGHTLY" --profile minimal
+          --component miri --component rust-src
+      # `-Zmiri-disable-isolation` for one reason only: the frozen-ABI fixtures are read
+      # from the repository with `read_dir`, and Miri refuses file I/O by default. Without
+      # it that test aborts the run and the other 139 never report. The flag buys file
+      # access and nothing else — no network, no clock skew.
+      - name: Undefined behaviour in the host-safe crates
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo +"$FOXCORE_NIGHTLY" miri test \
+            -p foxcore-api \
+            -p foxcore-dns \
+            -p foxcore-link

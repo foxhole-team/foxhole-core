@@ -1,0 +1,271 @@
+# Supply-chain policy for FoxCore — **the graph that ships**.
+#
+# The core ships inside a privacy product, so what it links against is part of
+# its threat model: an advisory in a wire parser or a licence that cannot be
+# combined with GPL-3.0 is a release blocker, not a note.
+#
+# This file used to have no exceptions at all, and that was true because Tor was
+# not in the shipped build: Arti's four findings lived in a second file, applied
+# to a graph nobody installed. `tor` is now a default feature of
+# `foxcore-android`, so those findings are findings about the artifact. They
+# moved here — deliberately, one by one, each with the reason and with what
+# would have to change to remove it. The alternative was to leave them in the
+# `--all-features` file and let this one keep saying "no exceptions" about a
+# graph that no longer exists, which is how a policy stops being read.
+#
+# Public-beta sharing makes `onion-service` part of the shipped Android graph.
+# Its one additional licence decision, `xxhash-rust` under BSL-1.0, therefore
+# lives here as a crate-scoped exception. The service uses Arti's ephemeral
+# primary keystore; the runtime owns publication and destroys its identity on
+# stop. `deny-all-features.toml` mirrors the same decision for the widest graph.
+#
+# Run: cargo deny check   (or scripts/gate.sh --supply)
+
+[advisories]
+# A known-vulnerable dependency fails the build.
+yanked = "deny"
+# Unmaintained is a warning rather than an error — a reason to plan a
+# replacement, not to stop a release the same afternoon. That sentence has been
+# in this file for a long time and was not true of its own configuration:
+# cargo-deny's default flags every transitive unmaintained crate as an error.
+# `workspace` makes the setting match the stated intent — an unmaintained crate
+# we depend on directly still fails; one fifteen levels down inside Arti does
+# not.
+#
+# What this currently absorbs is exactly one finding: RUSTSEC-2024-0436, `paste`
+# 1.0.15, archived upstream with no successor under the same name. Thirteen
+# tor-* crates depend on it directly, plus slotmap-careful. It is a proc-macro —
+# `cargo metadata` reports its only lib target as kind `proc-macro` — so it
+# produces identifiers at compile time and contributes no code to the artifact.
+unmaintained = "workspace"
+
+[[advisories.ignore]]
+id = "RUSTSEC-2023-0071"
+# rsa 0.9.10, reached via ssh-key-fork-arti -> tor-key-forge and via
+# tor-llcrypto. Non-constant-time RSA leaks private-key information through
+# timing observable over the network. There is no fixed version (0.9.10 is still
+# the newest stable; 0.10 is at rc.18) and every Rust Tor client carries it, so
+# there is nothing to upgrade to.
+#
+# It is accepted on an argument, not on hope. The graph and pinned-source
+# reasoning is recorded here: Marvin is a timing channel on *private-key* RSA,
+# and the Arti graph we build performs none —
+#
+#   * no RSA decryption exists anywhere in the graph; TAP, the only handshake
+#     that would need it, is not implemented in Arti;
+#   * RSA signing is compiled (tor_llcrypto::pk::rsa::KeyPair::sign is behind no
+#     feature at all) but has no caller: all five call sites are relay or
+#     directory-authority code, under #[cfg(test)] or in crates that are not in
+#     Cargo.lock (tor-relay-crypto, tor-cert-x509);
+#   * what the client does with RSA is verify other people's signatures with a
+#     public key, which has no secret to leak.
+#
+# That argument is about pinned sources, so it is re-derived from the resolved
+# graph by scripts/tor-rsa-gate.sh, which fails if the rsa version moves, if a
+# fourth crate starts depending on it, if the relay features come on, or if a
+# new mention of the private-key API appears anywhere in the graph. Since Tor
+# went into the default build that gate runs in the main path of
+# scripts/gate.sh, not under --supply: it is now a property of every release
+# commit rather than of a job somebody remembers to run.
+reason = "no fixed version exists; the Marvin vector (private-key RSA) is unreachable in this graph and scripts/tor-rsa-gate.sh re-checks the pinned-source argument on every gate run"
+
+[licenses]
+# The workspace is GPL-3.0-or-later, so anything it links must be compatible
+# with distributing under that. Copyleft licences that are *not* GPL-compatible
+# are absent from this list on purpose — they must be a deliberate decision, not
+# a transitive surprise.
+confidence-threshold = 0.9
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unlicense",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "GPL-3.0-or-later",
+    "OpenSSL",
+    "CDLA-Permissive-2.0",
+]
+# Listed but not currently present in the tree. Kept so a dependency that
+# introduces one later lands as a warning to review rather than a build failure
+# on the day someone is trying to ship.
+unused-allowed-license = "warn"
+
+[[licenses.exceptions]]
+# aws-lc-sys vendors BoringSSL, which carries the ISC/OpenSSL pair.
+name = "aws-lc-sys"
+allow = ["ISC", "OpenSSL", "Apache-2.0"]
+
+[[licenses.exceptions]]
+# notify 8.2.0, under CC0-1.0, and it is here because Tor ships.
+#
+# Not an incidental entry in the graph: `tor-config` depends on it
+# unconditionally (`[dependencies.notify]`, not optional, behind no feature) for
+# src/file_watcher.rs. So every Tor build links CC0 code, and every build is a
+# Tor build now. Recording it in the shipped-graph policy rather than leaving it
+# in the --all-features file is the whole point of this move: the licence set of
+# the artifact should be readable from the file that describes the artifact.
+#
+# CC0-1.0 is a public-domain dedication and is GPL-compatible, so combining it
+# with GPL-3.0-or-later is fine. It is granted as a scoped exception rather than
+# added to `allow` on purpose: CC0 contains no patent grant, several
+# distributors restrict it for code for exactly that reason, and blessing it
+# globally would let the next CC0 dependency in without anyone weighing that.
+# One crate, one decision.
+name = "notify"
+allow = ["CC0-1.0"]
+
+[[licenses.exceptions]]
+# xxhash-rust 0.8.18 is reached only through
+# tor-hsservice -> growable-bloom-filter. BSL-1.0 (Boost) is permissive and
+# GPL-compatible. Keep the decision scoped to this crate: shipping one Boost
+# dependency is not a blanket approval for every future dependency.
+name = "xxhash-rust"
+allow = ["BSL-1.0"]
+
+[bans]
+# Two versions of a crypto or parsing crate mean two code paths with different
+# fixes applied — the kind of thing that makes an advisory look handled when it
+# is not.
+#
+# This was "warn", which meant the eleven duplicates in the shipped graph had
+# never been looked at individually: a warning that has always been there reads
+# as background noise, and a twelfth would have joined it unnoticed. Now the
+# known ones are listed below, each with the reason it is accepted, and anything
+# new fails. The list is version-pinned on purpose — it expires by itself when a
+# dependency moves, which forces the question to be asked again rather than
+# inherited.
+multiple-versions = "deny"
+# A wildcard version on a third-party crate means the build is not reproducible.
+# Path dependencies inside this workspace carry no version by design (nothing
+# here is published), so they are exempt rather than silencing the check.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+# The RustCrypto generation split. `digest` 0.10 and 0.11 are separate trait
+# generations, and a crate cannot be on both; the whole cluster below
+# (block-buffer, crypto-common, digest, sha1, cpufeatures) is one boundary
+# between crates that have moved to 0.11 and crates that have not. It closes
+# when the last dependency upgrades, not when we do something here.
+#
+# It is worth being precise about why this is tolerable when the comment above
+# says duplicated crypto is dangerous: none of these carry an open advisory, and
+# they are hashing and buffering primitives rather than protocol implementations
+# — a bug fixed in one generation and not the other would be a correctness bug
+# in a digest, which the golden vectors in the protocol crates would catch.
+[[bans.skip]]
+crate = "block-buffer@0.10.4"
+reason = "RustCrypto digest 0.10 generation; no advisory, buffering primitive"
+[[bans.skip]]
+crate = "crypto-common@0.1.7"
+reason = "RustCrypto digest 0.10 generation; trait crate, no algorithm code"
+[[bans.skip]]
+crate = "digest@0.10.7"
+reason = "RustCrypto digest 0.10 generation; closes when the last dependency upgrades"
+[[bans.skip]]
+crate = "sha1@0.10.7"
+reason = "RustCrypto digest 0.10 generation; only used where SHA-1 is a protocol constant"
+[[bans.skip]]
+crate = "cpufeatures@0.2.17"
+reason = "RustCrypto digest 0.10 generation; CPU feature detection, no state"
+
+# chacha20 0.9 arrives under `chacha20poly1305` 0.10 (share-vault sealing), 0.10
+# under the newer `rand`/`getrandom` cluster. Both are the same reference
+# implementation of the same RFC 8439 cipher.
+[[bans.skip]]
+crate = "chacha20@0.9.1"
+reason = "arrives under chacha20poly1305 0.10 (share-vault sealing); same RFC 8439 cipher as 0.10"
+
+# The `rand` 0.9 -> 0.10 migration, which drags `rand_core` and `getrandom` with
+# it. Nothing in this workspace uses `rand` for key material — that comes from
+# `getrandom` and the AEAD crates directly — so the split is a nuisance rather
+# than a cryptographic risk.
+[[bans.skip]]
+crate = "rand@0.9.4"
+reason = "rand 0.9 -> 0.10 migration; no key material in this workspace comes from rand"
+[[bans.skip]]
+crate = "rand_core@0.6.4"
+reason = "rand 0.9 -> 0.10 migration"
+[[bans.skip]]
+crate = "rand_core@0.9.5"
+reason = "rand 0.9 -> 0.10 migration"
+[[bans.skip]]
+crate = "getrandom@0.2.17"
+reason = "pulled by the rand 0.9 cluster; all three wrap the same OS entropy syscall"
+[[bans.skip]]
+crate = "getrandom@0.3.4"
+reason = "pulled by the rand 0.9 cluster; all three wrap the same OS entropy syscall"
+
+# thiserror 1 survives in a handful of transitive dependencies. A derive macro
+# for error types: no runtime code, no data path.
+[[bans.skip]]
+crate = "thiserror@1.0.69"
+reason = "derive macro for error types; no runtime code, no data path"
+[[bans.skip]]
+crate = "thiserror-impl@1.0.69"
+reason = "derive macro for error types; no runtime code, no data path"
+
+# ---------------------------------------------------------------------------
+# Arti's own tree.
+#
+# Putting Tor in the default build took the duplicate count in this graph from
+# 11 to 35: atomic, const-oid, foldhash, hashbrown ×4, indexmap, keccak, rand
+# ×3, schemars, sha3, spin, the toml/winnow/darling/syn generations, and more.
+# Every one of them is a version split *inside* Arti's dependencies, between
+# crates that have upgraded and crates that have not, and none of them closes
+# because of anything done in this repository.
+#
+# Two bad answers were available. Enumerating all 35 with hand-written reasons
+# produces a list nobody maintains and that churns on every Arti bump — and a
+# reason written to get a build green is not a reason. Downgrading
+# `multiple-versions` to a warning throws away the check for *our* graph too,
+# which is where it was earning its keep: the eleven entries above were each
+# looked at, and a twelfth still has to be.
+#
+# So the boundary is drawn where the responsibility is. `skip-tree` takes Arti's
+# subtree out of the duplicate calculation and leaves everything we choose
+# ourselves under `deny`. Version-pinned, so an Arti bump expires it and the
+# question gets asked again rather than inherited.
+#
+# What it costs, measured rather than assumed. After the skip-tree, cargo-deny
+# reports eight of the eleven entries above as `unnecessary-skip`:
+# block-buffer, chacha20, cpufeatures, crypto-common, digest, rand, thiserror
+# and thiserror-impl. That is not noise — it is the tool saying that both sides
+# of those pairs are reachable from Arti, so the pair is now Arti's split and
+# not ours. The consequence is real and is the price of this line: **a second
+# version of a crate Arti also uses, introduced by our own code, would be
+# hidden by this skip.** Duplicates in crates Arti does not touch still fail.
+#
+# The eight are kept rather than deleted anyway. They are the record of why each
+# split was accepted, they cost a warning and not a failure (`cargo deny check`
+# exits 0), and the day Arti leaves this graph — or bumps, which expires the pin
+# below — they are needed again immediately. Deleting them would mean
+# rediscovering that argument from scratch.
+[[bans.skip-tree]]
+crate = "arti-client@0.44.0"
+reason = "generation splits inside Arti's dependency tree; not ours to close, and pinned so an Arti bump re-opens the question"
+
+[sources]
+# Only crates.io. A git dependency would put an unpinned third party inside the
+# data plane, and a private registry would make the build unreproducible for
+# anyone auditing it.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+[graph]
+# The two ABIs that ship, plus the two hosts the workspace is developed and
+# tested on. The Android x86 targets were here when the build script still had
+# x86_64 in its default ABI list; it does not ship, so checking its
+# cfg-dependent graph is checking a build nobody installs. An emulator build is
+# still possible by name (scripts/android-build.sh) — it is just not what this
+# policy is about.
+targets = [
+    "aarch64-linux-android",
+    "armv7-linux-androideabi",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
