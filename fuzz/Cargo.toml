@@ -1,0 +1,86 @@
+[package]
+name = "foxcore-fuzz"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.91"
+license = "GPL-3.0-or-later"
+publish = false
+
+# Detached from the workspace at the repository root on purpose. Joining it
+# would put `libfuzzer-sys` and its C++ runtime into the main lock file and
+# unify features across every crate, so an ordinary `cargo build` would start
+# compiling the fuzzer.
+#
+# `harness/` is excluded even though it is a path dependency: it is its own
+# workspace root so that `cargo test --manifest-path fuzz/harness/Cargo.toml`
+# resolves without `libfuzzer-sys`, which cannot be linked on stable at all.
+# That command is the only way to exercise the target bodies on the pinned
+# toolchain, so it must not depend on the fuzzer being installable.
+[workspace]
+exclude = ["harness"]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Every target body lives in the harness, which is a plain library that builds
+# on stable. The bodies are therefore reachable from `cargo test` as well, which
+# is the only way to exercise them on a machine without a nightly toolchain.
+foxcore-fuzz-harness = { path = "harness" }
+
+[[bin]]
+name = "flow_key_from_packet"
+path = "fuzz_targets/flow_key_from_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_message"
+path = "fuzz_targets/dns_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wireguard_message"
+path = "fuzz_targets/wireguard_message.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "socks_codec"
+path = "fuzz_targets/socks_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "http_codec"
+path = "fuzz_targets/http_codec.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reality_records"
+path = "fuzz_targets/reality_records.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "share_link"
+path = "fuzz_targets/share_link.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "shadowtls_server_stream"
+path = "fuzz_targets/shadowtls_server_stream.rs"
+test = false
+doc = false
+bench = false

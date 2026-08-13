@@ -1,0 +1,13 @@
+[package]
+name = "proto-i2p"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Loopback SOCKS5 adapter for an external i2pd process"
+
+[dependencies]
+foxcore-api = { path = "../foxcore-api" }
+foxcore-transport = { path = "../foxcore-transport" }
+tokio.workspace = true

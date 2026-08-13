@@ -1,0 +1,99 @@
+[package]
+name = "foxcore-testkit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Host and interoperability harnesses for FoxCore"
+
+[features]
+# The probe is only honest about a protocol it was compiled with, so the harness
+# default carries everything the product ships bar Tor, whose Arti build is heavy
+# enough that it stays opt-in.
+default = [
+    "vless",
+    "vmess",
+    "hysteria2",
+    "tuic",
+    "trojan",
+    "shadowsocks",
+    "i2p",
+    "socks",
+    "http",
+    "naive",
+    "anytls",
+    "shadowtls",
+    "wireguard",
+]
+vless = ["foxcore-outbound/vless", "foxcore-runtime/vless"]
+vmess = ["foxcore-outbound/vmess", "foxcore-runtime/vmess"]
+hysteria2 = ["foxcore-outbound/hysteria2", "foxcore-runtime/hysteria2"]
+tuic = ["foxcore-outbound/tuic", "foxcore-runtime/tuic"]
+trojan = ["foxcore-outbound/trojan", "foxcore-runtime/trojan"]
+shadowsocks = ["foxcore-outbound/shadowsocks", "foxcore-runtime/shadowsocks"]
+i2p = ["foxcore-outbound/i2p", "foxcore-runtime/i2p"]
+tor = ["foxcore-outbound/tor", "foxcore-runtime/tor"]
+socks = ["foxcore-outbound/socks", "foxcore-runtime/socks"]
+http = ["foxcore-outbound/http", "foxcore-runtime/http"]
+naive = ["foxcore-outbound/naive", "foxcore-runtime/naive"]
+anytls = ["foxcore-outbound/anytls", "foxcore-runtime/anytls"]
+shadowtls = ["foxcore-outbound/shadowtls", "foxcore-runtime/shadowtls"]
+wireguard = [
+    "foxcore-outbound/wireguard",
+    "foxcore-runtime/wireguard",
+    "foxcore-tun/wireguard",
+]
+
+[dependencies]
+# The packet-tunnel probe speaks the relay's own channel type, which is the
+# buffer the datapath hands around rather than a `Vec` per packet.
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+# The SOCKS harness runs the audited component server as one of its two modes,
+# so the measurement can be cross-checked against the code the product ships
+# rather than only against a hand-written listener. The component crate depends
+# on `foxcore-api` alone, so this adds no cycle and no protocol code.
+foxcore-component = { path = "../foxcore-component" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-dns = { path = "../foxcore-dns" }
+foxcore-link = { path = "../foxcore-link" }
+foxcore-outbound = { path = "../foxcore-outbound", default-features = false }
+foxcore-relay = { path = "../foxcore-relay" }
+foxcore-route = { path = "../foxcore-route" }
+foxcore-runtime = { path = "../foxcore-runtime", default-features = false }
+foxcore-transport = { path = "../foxcore-transport" }
+foxcore-tun = { path = "../foxcore-tun", default-features = false }
+serde_json.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[[bin]]
+name = "foxcore-tun"
+path = "src/bin/foxcore_tun.rs"
+
+[[bin]]
+name = "foxcore-subscription-probe"
+path = "src/bin/foxcore_subscription_probe.rs"
+
+[[bin]]
+name = "foxcore-outbound-probe"
+path = "src/bin/foxcore_outbound_probe.rs"
+
+[[bin]]
+name = "foxcore-device-config"
+path = "src/bin/foxcore_device_config.rs"
+
+[[bin]]
+name = "foxcore-soak"
+path = "src/bin/foxcore_soak.rs"
+
+[[bin]]
+name = "foxcore-socks"
+path = "src/bin/foxcore_socks.rs"
+
+# Drives both arms of the comparison and deliberately links no workspace crate,
+# so neither subject shares an I/O stack with the thing measuring it.
+[[bin]]
+name = "foxcore-bench-client"
+path = "src/bin/foxcore_bench_client.rs"

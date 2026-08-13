@@ -1,0 +1,67 @@
+[package]
+name = "foxcore-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Single-owner FoxCore lifecycle supervisor"
+
+[features]
+default = [
+    "vless",
+    "vmess",
+    "hysteria2",
+    "tuic",
+    "trojan",
+    "shadowsocks",
+    "i2p",
+    "socks",
+    "http",
+    "naive",
+    "anytls",
+    "shadowtls",
+    "wireguard",
+]
+vless = ["foxcore-outbound/vless"]
+vmess = ["foxcore-outbound/vmess"]
+hysteria2 = ["foxcore-outbound/hysteria2"]
+tuic = ["foxcore-outbound/tuic"]
+trojan = ["foxcore-outbound/trojan"]
+shadowsocks = ["foxcore-outbound/shadowsocks"]
+i2p = ["foxcore-outbound/i2p"]
+tor = ["foxcore-outbound/tor"]
+# Publishing a share as a hidden service. Separate from `tor` so an ordinary
+# Tor build does not carry tor-hsservice and does not grow.
+onion-service = ["tor", "foxcore-outbound/onion-service"]
+socks = ["foxcore-outbound/socks"]
+http = ["foxcore-outbound/http"]
+naive = ["foxcore-outbound/naive"]
+anytls = ["foxcore-outbound/anytls"]
+shadowtls = ["foxcore-outbound/shadowtls"]
+wireguard = ["foxcore-outbound/wireguard", "foxcore-tun/wireguard"]
+
+[dependencies]
+arc-swap.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-component = { path = "../foxcore-component" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-outbound = { path = "../foxcore-outbound", default-features = false }
+foxcore-relay = { path = "../foxcore-relay" }
+foxcore-route = { path = "../foxcore-route" }
+foxcore-share = { path = "../foxcore-share" }
+foxcore-trafficmap = { path = "../foxcore-trafficmap" }
+foxcore-tun = { path = "../foxcore-tun", default-features = false }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+
+[dev-dependencies]
+# Only the tests need it: the named-loopback-inbound tests speak HTTP CONNECT
+# with Basic credentials, which is a client concern. Nothing in this crate
+# encodes base64 on the data path.
+base64.workspace = true
+tempfile = "3.27.0"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

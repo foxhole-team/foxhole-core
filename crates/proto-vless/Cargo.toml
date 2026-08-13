@@ -1,0 +1,19 @@
+[package]
+name = "proto-vless"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "VLESS codec and outbound for FoxCore"
+
+[dependencies]
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+getrandom.workspace = true
+proto-reality = { path = "../proto-reality" }
+sha2.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

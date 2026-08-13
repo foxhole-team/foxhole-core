@@ -1,0 +1,67 @@
+[package]
+name = "foxcore-outbound"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Finite outbound enum for FoxCore"
+
+[features]
+default = [
+    "vless",
+    "vmess",
+    "hysteria2",
+    "tuic",
+    "trojan",
+    "shadowsocks",
+    "i2p",
+    "wireguard",
+    "socks",
+    "http",
+    "naive",
+    "anytls",
+    "shadowtls",
+]
+vless = ["dep:proto-vless"]
+vmess = ["dep:proto-vmess"]
+hysteria2 = ["dep:proto-hysteria2"]
+tuic = ["dep:proto-tuic"]
+trojan = ["dep:proto-trojan"]
+shadowsocks = ["dep:proto-shadowsocks"]
+i2p = ["dep:proto-i2p"]
+tor = ["dep:proto-tor", "proto-tor/arti"]
+# Publishing a hidden service. Separate from `tor` so the ordinary Tor build
+# does not carry a key store and five extra crates for a feature most profiles
+# never use.
+onion-service = ["tor", "proto-tor/onion-service"]
+wireguard = ["dep:proto-wireguard"]
+socks = ["dep:proto-socks"]
+http = ["dep:proto-http"]
+naive = ["dep:proto-naive"]
+anytls = ["dep:proto-anytls"]
+shadowtls = ["dep:proto-shadowtls"]
+
+[dependencies]
+arc-swap.workspace = true
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+proto-http = { path = "../proto-http", optional = true }
+proto-hysteria2 = { path = "../proto-hysteria2", optional = true }
+proto-tuic = { path = "../proto-tuic", optional = true }
+proto-naive = { path = "../proto-naive", optional = true }
+proto-anytls = { path = "../proto-anytls", optional = true }
+proto-shadowtls = { path = "../proto-shadowtls", optional = true }
+proto-socks = { path = "../proto-socks", optional = true }
+proto-i2p = { path = "../proto-i2p", optional = true }
+proto-shadowsocks = { path = "../proto-shadowsocks", optional = true }
+proto-tor = { path = "../proto-tor", optional = true }
+proto-trojan = { path = "../proto-trojan", optional = true }
+proto-vless = { path = "../proto-vless", optional = true }
+proto-vmess = { path = "../proto-vmess", optional = true }
+proto-wireguard = { path = "../proto-wireguard", optional = true }
+base64.workspace = true
+ipnet.workspace = true
+tokio.workspace = true

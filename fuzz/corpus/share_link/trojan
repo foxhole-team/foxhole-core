@@ -1,0 +1,1 @@
+trojan://secret@example.com:443?type=tcp&sni=example.com#trojan

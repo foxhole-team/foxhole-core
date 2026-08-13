@@ -1,0 +1,41 @@
+[package]
+name = "foxcore-fuzz-harness"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.91"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Fuzz target bodies for the eight FoxCore parsers that read the network"
+
+# Its own workspace root, separate from both the repository root and `fuzz/`.
+# Resolving here must not need `libfuzzer-sys`: this crate is what gets built
+# and tested on a stable toolchain, where the fuzzer cannot be linked at all.
+[workspace]
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "seed-corpus"
+path = "src/bin/seed-corpus.rs"
+
+[dependencies]
+foxcore-api = { path = "../../crates/foxcore-api" }
+foxcore-dns = { path = "../../crates/foxcore-dns" }
+# The only parser here that runs on input nobody authenticated: a subscription
+# body is text fetched over HTTPS from a provider, parsed before any handshake.
+foxcore-link = { path = "../../crates/foxcore-link" }
+# Must stay semver-compatible with the workspace pin, or `fake_response` would
+# be handed a prefix type from a second copy of the crate and stop compiling.
+ipnet = "2.11"
+# Default features on purpose: without `wireguard` the crate builds with dead
+# constants and the harness build is never clean.
+foxcore-tun = { path = "../../crates/foxcore-tun" }
+proto-http = { path = "../../crates/proto-http", features = ["fuzzing"] }
+proto-reality = { path = "../../crates/proto-reality", features = ["fuzzing"] }
+proto-socks = { path = "../../crates/proto-socks", features = ["fuzzing"] }
+# The only dependency here that is fuzzed as a *session* rather than as a
+# parser: its two record readers keep state between socket reads, so the target
+# needs the decoder objects themselves, not a free function.
+proto-shadowtls = { path = "../../crates/proto-shadowtls", features = ["fuzzing"] }
+proto-wireguard = { path = "../../crates/proto-wireguard" }

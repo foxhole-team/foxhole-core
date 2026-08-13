@@ -1,0 +1,15 @@
+{
+  "traffic": {
+    "default_action": "block",
+    "kill_switch": true,
+    "tor_enabled": false,
+    "i2p_enabled": false,
+    "continuity": {
+      "seamless_reconnect": true,
+      "seamless_failover": true,
+      "seamless_network_switch": false,
+      "split_tunnel_on_vpn_failure": false,
+      "confirmation_timeout_ms": 0
+    }
+  }
+}

@@ -1,0 +1,270 @@
+#![forbid(unsafe_code)]
+
+//! Client-only REALITY transport.
+//!
+//! The public boundary accepts decoded fixed-size authentication material and
+//! returns a bounded task-backed Tokio stream. A real certificate or an HMAC
+//! mismatch is always rejected; FoxCore never enters Xray's crawler fallback.
+
+mod buf_reader;
+mod reality;
+mod slide_buffer;
+
+use std::io::{self, BufRead as _, Write as _};
+use std::time::Duration;
+
+use foxcore_transport::{InnerCodec, PassthroughCodec, RecordLayer, spawn_relay};
+#[cfg(feature = "fuzzing")]
+pub use reality::fuzz_records as fuzz_internals;
+pub use reality::{CipherSuite, RealityHelloProfile, decode_public_key, decode_short_id};
+use reality::{RealityClientConfig, RealityClientConnection};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
+
+const TLS_IO_BUFFER_SIZE: usize = 16 * 1024;
+const STREAM_BUFFER_CAPACITY: usize = 64 * 1024;
+const MAX_HANDSHAKE_ITERATIONS: usize = 64;
+
+/// Complete a REALITY handshake over an already protected TCP socket and
+/// return a bounded plaintext stream.
+pub async fn wrap_reality<S>(
+    stream: S,
+    public_key: [u8; 32],
+    short_id: [u8; 8],
+    server_name: String,
+    hello_profile: RealityHelloProfile,
+    handshake_timeout: Duration,
+) -> io::Result<DuplexStream>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    wrap_reality_spliced(
+        stream,
+        public_key,
+        short_id,
+        server_name,
+        hello_profile,
+        handshake_timeout,
+        PassthroughCodec,
+    )
+    .await
+}
+
+/// Like [`wrap_reality`], but an inner codec rides above the record layer and
+/// may take the socket over mid-stream (XTLS-style flows).
+///
+/// The handover is only exact because the relay frames records itself; see
+/// [`foxcore_transport::splice`].
+pub async fn wrap_reality_spliced<S, C>(
+    mut stream: S,
+    public_key: [u8; 32],
+    short_id: [u8; 8],
+    server_name: String,
+    hello_profile: RealityHelloProfile,
+    handshake_timeout: Duration,
+    codec: C,
+) -> io::Result<DuplexStream>
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    C: InnerCodec,
+{
+    validate_server_name(&server_name)?;
+    if handshake_timeout.is_zero() || handshake_timeout > Duration::from_secs(60) {
+        return Err(invalid("REALITY handshake timeout must be in 1ms..=60s"));
+    }
+
+    let mut connection = RealityClientConnection::new(RealityClientConfig {
+        public_key,
+        short_id,
+        server_name,
+        hello_profile,
+    })?;
+
+    tokio::time::timeout(
+        handshake_timeout,
+        perform_handshake(&mut connection, &mut stream),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "REALITY handshake timed out"))??;
+
+    Ok(spawn_relay(
+        stream,
+        RealityRecordLayer(connection),
+        codec,
+        STREAM_BUFFER_CAPACITY,
+    ))
+}
+
+/// [`RecordLayer`] over a completed REALITY handshake.
+struct RealityRecordLayer(RealityClientConnection);
+
+impl RecordLayer for RealityRecordLayer {
+    fn read_tls(&mut self, rd: &mut dyn io::Read) -> io::Result<usize> {
+        self.0.read_tls(rd)
+    }
+
+    fn process_new_packets(&mut self) -> io::Result<()> {
+        self.0.process_new_packets()
+    }
+
+    fn read_plaintext(&mut self, out: &mut Vec<u8>) -> io::Result<bool> {
+        let mut reader = self.0.reader();
+        loop {
+            match reader.fill_buf() {
+                Ok([]) => return Ok(true),
+                Ok(available) => {
+                    let count = available.len();
+                    out.extend_from_slice(available);
+                    reader.consume(count);
+                }
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(false),
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn write_plaintext(&mut self, data: &[u8]) -> io::Result<()> {
+        self.0.writer().write_all(data)
+    }
+
+    fn write_tls(&mut self, out: &mut Vec<u8>) -> io::Result<()> {
+        while self.0.wants_write() {
+            let before = out.len();
+            self.0.write_tls(out)?;
+            if out.len() == before {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "REALITY record writer made no progress",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn send_close_notify(&mut self) {
+        self.0.send_close_notify();
+    }
+}
+
+async fn perform_handshake<S>(
+    connection: &mut RealityClientConnection,
+    stream: &mut S,
+) -> io::Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut incoming = vec![0_u8; TLS_IO_BUFFER_SIZE];
+
+    for _ in 0..MAX_HANDSHAKE_ITERATIONS {
+        let wrote = drain_ciphertext(connection, stream).await?;
+        if wrote {
+            stream.flush().await?;
+        }
+
+        if !connection.is_handshaking() {
+            let wrote = drain_ciphertext(connection, stream).await?;
+            if wrote {
+                stream.flush().await?;
+            }
+            return Ok(());
+        }
+        if !connection.wants_read() && !connection.wants_write() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "REALITY handshake state stalled",
+            ));
+        }
+
+        if connection.wants_read() {
+            let count = stream.read(&mut incoming).await?;
+            if count == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "peer closed during REALITY handshake",
+                ));
+            }
+            feed_ciphertext(connection, &incoming[..count])?;
+            connection.process_new_packets()?;
+        }
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "REALITY handshake iteration limit exceeded",
+    ))
+}
+
+fn feed_ciphertext(connection: &mut RealityClientConnection, data: &[u8]) -> io::Result<()> {
+    let mut cursor = io::Cursor::new(data);
+    while cursor.position() < data.len() as u64 {
+        let count = connection.read_tls(&mut cursor)?;
+        if count == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "REALITY ciphertext feeder made no progress",
+            ));
+        }
+    }
+    Ok(())
+}
+
+async fn drain_ciphertext<S>(
+    connection: &mut RealityClientConnection,
+    stream: &mut S,
+) -> io::Result<bool>
+where
+    S: AsyncWrite + Unpin,
+{
+    let mut output = Vec::with_capacity(TLS_IO_BUFFER_SIZE);
+    while connection.wants_write() {
+        let before = output.len();
+        connection.write_tls(&mut output)?;
+        if output.len() == before {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "REALITY record writer made no progress",
+            ));
+        }
+    }
+    if output.is_empty() {
+        return Ok(false);
+    }
+    stream.write_all(&output).await?;
+    Ok(true)
+}
+
+fn validate_server_name(value: &str) -> io::Result<()> {
+    let value = value.trim_end_matches('.');
+    if value.is_empty()
+        || value.len() > 253
+        || value.parse::<std::net::IpAddr>().is_ok()
+        || !value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && !label.starts_with('-')
+                && !label.ends_with('-')
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        })
+    {
+        return Err(invalid("REALITY server name must be an ASCII DNS name"));
+    }
+    Ok(())
+}
+
+fn invalid(message: &'static str) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_dns_server_names() {
+        assert!(validate_server_name("www.example.com").is_ok());
+        assert!(validate_server_name("127.0.0.1").is_err());
+        assert!(validate_server_name("bad name").is_err());
+        assert!(validate_server_name("-bad.example").is_err());
+    }
+}

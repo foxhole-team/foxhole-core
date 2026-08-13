@@ -1,0 +1,23 @@
+[package]
+name = "proto-http"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "HTTP CONNECT outbound client for FoxCore"
+
+[features]
+default = []
+# Opens the `pub(crate)` response parser to the out-of-tree fuzz harness in
+# `fuzz/`. Off by default and enabled by nothing inside this workspace.
+fuzzing = []
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+thiserror.workspace = true
+tokio.workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "proto-shadowsocks"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Shadowsocks and Shadowsocks 2022 outbound for FoxCore"
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+rand.workspace = true
+shadowsocks.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true

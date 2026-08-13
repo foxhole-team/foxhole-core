@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 7a337ce1f2420c764cbcf1d1b342b22d3fa84844a14fda8e0acf08aa5ec8dc1f # shrinks to transport = Tcp, source_port = 1, destination_port = 1, payload = [], cuts = [8]
+cc b82d183b16f9766ce7d7f812d74e41f099e8863b46133befe36db9383e5c9175 # shrinks to transport = Tcp, source_port = 1, destination_port = 1, payload = [], cuts = [8]
+cc 3f569096509ff2de03ceb3be94e85d278dfbf3ff5965e6d95fd2bf5c8ac1f3c1 # shrinks to source_port = 32650, destination_port = 44583, payload = [44, 162, 111, 22, 132, 64, 134, 146, 0, 114, 150, 147, 198, 106, 136, 45, 188, 32, 141, 252, 110, 163, 163, 123, 102, 114, 13, 23, 111, 198, 76, 67, 96, 192, 148, 192, 234, 162, 76, 33, 56, 174, 111, 49, 235, 217, 71, 207, 157, 216, 184, 139, 9, 199, 0, 195, 163, 172, 101, 74, 226, 14, 77, 135, 40, 199, 138, 107, 95, 231, 213, 80, 151, 32, 191, 99, 138, 43, 163, 35, 35, 166, 8, 8, 194, 208, 169, 89, 60, 105, 159, 209, 248], cuts = []

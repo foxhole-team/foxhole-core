@@ -1,0 +1,254 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: foxcore-release
+  cancel-in-progress: false
+
+# Selection is read-only. The release job receives only the four scopes it
+# needs to read the dev gate result, create a release, and sign an attestation.
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main' && github.repository_owner == 'foxhole-team'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Select the fully gated dev source tree
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          visibility="$(gh api "repos/$GITHUB_REPOSITORY" --jq .visibility)"
+          if [[ "$visibility" != public ]]; then
+            echo "Refusing to release while $GITHUB_REPOSITORY is $visibility." >&2
+            echo "Public Sigstore attestations require the public repository." >&2
+            exit 1
+          fi
+
+          # The release points at a commit signed by the owner's hardware key.
+          # The generated tag is lightweight, so this verified commit is its
+          # cryptographic identity rather than a second exportable signing key.
+          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
+              --jq .commit.verification.verified)" != true ]]; then
+            echo "The main release commit is not verified by GitHub; refusing to tag it." >&2
+            exit 1
+          fi
+
+          git fetch --no-tags origin \
+            '+refs/heads/dev:refs/remotes/origin/dev'
+          main_tree="$(git rev-parse "$GITHUB_SHA^{tree}")"
+
+          runs="$(gh api --method GET \
+            "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
+            -f branch=dev -f event=push -f status=success -f per_page=100)"
+
+          run_id=
+          source_sha=
+          while IFS=$'\t' read -r maybe_run maybe_sha; do
+            [[ "$maybe_run" =~ ^[0-9]+$ ]] || continue
+            [[ "$maybe_sha" =~ ^[0-9a-f]{40}$ ]] || continue
+            if ! git cat-file -e "$maybe_sha^{commit}" 2>/dev/null; then
+              git fetch --no-tags origin "$maybe_sha" || continue
+            fi
+            [[ "$(git rev-parse "$maybe_sha^{tree}")" == "$main_tree" ]] || continue
+
+            run_id="$maybe_run"
+            source_sha="$maybe_sha"
+            break
+          done < <(jq -r '.workflow_runs[] | [.id, .head_sha] | @tsv' <<<"$runs")
+
+          if [[ -z "$run_id" || -z "$source_sha" ]]; then
+            echo "No successful dev gate has the main source tree." >&2
+            echo "Run the full dev gate for this tree before releasing it." >&2
+            exit 1
+          fi
+
+          version="$(awk '
+            $0 == "[workspace.package]" { package = 1; next }
+            package && /^\[/ { exit }
+            package && $1 == "version" {
+              gsub(/[\"[:space:]]/, "", $3); print $3; exit
+            }
+          ' Cargo.toml)"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Cargo.toml has no release-safe workspace version: $version" >&2
+            exit 1
+          fi
+          if [[ "$(jq -r .core_version fixtures/abi/v1/capabilities.json)" != "$version" ]]; then
+            echo "The frozen capabilities fixture does not match version $version." >&2
+            exit 1
+          fi
+
+          tag="v$version"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1 || \
+             gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "$tag already exists; bump the core version before another main release." >&2
+            exit 1
+          fi
+
+          {
+            echo "run_id=$run_id"
+            echo "source_sha=$source_sha"
+            echo "source_tree=$main_tree"
+            echo "version=$version"
+            echo "tag=$tag"
+            echo "archive=foxcore-android-$tag.tar.gz"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: ndk;29.0.14206865
+
+      - name: Pinned Rust targets and cargo-ndk
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          rustup target add aarch64-linux-android armv7-linux-androideabi
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo fetch --locked
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> "$GITHUB_ENV"
+
+      # dev already compiled and verified this identical source tree as part of
+      # the successful full gate selected above. The release deliberately
+      # rebuilds rather than pretending these are bytes retained from that run:
+      # every build input is pinned, and the resulting JNI/ABI/manifest/SBOM is
+      # verified again before it is signed.
+      - name: Rebuild the release JNI from pinned inputs
+        env:
+          FOXCORE_JNI_OUTPUT: target/android-jni
+        run: scripts/android-build.sh
+
+      - name: Record the rebuilt release candidate
+        run: |
+          scripts/rollback-artifact.sh record \
+            target/foxcore-release-candidate \
+            --libs target/android-jni
+          mkdir -p target/foxcore-release-candidate/sbom
+          cp sbom/foxcore-aarch64-linux-android.cdx.json \
+            sbom/workspace-all-targets.cdx.json \
+            target/foxcore-release-candidate/sbom/
+
+      - name: Verify and package the rebuilt release bytes
+        env:
+          ARCHIVE_NAME: ${{ steps.candidate.outputs.archive }}
+          DEV_RUN_ID: ${{ steps.candidate.outputs.run_id }}
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+          SOURCE_TREE: ${{ steps.candidate.outputs.source_tree }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          candidate=target/foxcore-release-candidate
+          scripts/rollback-artifact.sh verify "$candidate"
+          grep -qx 'abi-gate: PASS' "$candidate/abi-gate.log"
+          cmp Cargo.lock "$candidate/Cargo.lock"
+          cmp sbom/foxcore-aarch64-linux-android.cdx.json \
+            "$candidate/sbom/foxcore-aarch64-linux-android.cdx.json"
+          cmp sbom/workspace-all-targets.cdx.json \
+            "$candidate/sbom/workspace-all-targets.cdx.json"
+          test "$(git rev-parse "$GITHUB_SHA^{tree}")" = "$SOURCE_TREE"
+          jq -e --arg sha "$GITHUB_SHA" --arg version "$VERSION" '
+            .git.commit == $sha and
+            .git.dirty == false and
+            .core_version == $version and
+            ([.libs[].abi] | sort) == ["arm64-v8a", "armeabi-v7a"]
+          ' "$candidate/MANIFEST.json" >/dev/null
+
+          jq -n \
+            --arg version "$VERSION" \
+            --arg tag "$TAG" \
+            --arg main_commit "$GITHUB_SHA" \
+            --arg source_dev_commit "$SOURCE_SHA" \
+            --arg source_tree "$SOURCE_TREE" \
+            --arg gate_run "https://github.com/$GITHUB_REPOSITORY/actions/runs/$DEV_RUN_ID" \
+            '{
+              schema: 1,
+              version: $version,
+              tag: $tag,
+              main_commit: $main_commit,
+              source_dev_commit: $source_dev_commit,
+              source_tree: $source_tree,
+              gate_run: $gate_run
+            }' > "$candidate/RELEASE.json"
+
+          mkdir -p release
+          epoch="$(git show -s --format=%ct "$GITHUB_SHA")"
+          tar --sort=name --format=posix --mtime="@$epoch" \
+            --owner=0 --group=0 --numeric-owner \
+            --pax-option=delete=atime,delete=ctime \
+            -C "$candidate" -cf - . | gzip -n -9 > "release/$ARCHIVE_NAME"
+          (cd release && sha256sum "$ARCHIVE_NAME" > SHA256SUMS)
+
+      # Keyless Sigstore signing: the short-lived certificate binds both
+      # release files to this repository, workflow and main commit. No private
+      # release key is exportable or stored in GitHub Secrets.
+      - name: Sign build provenance
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: release/*
+          subject-version: ${{ steps.candidate.outputs.version }}
+
+      - name: Create the GitHub release and tag
+        env:
+          ARCHIVE_NAME: ${{ steps.candidate.outputs.archive }}
+          DEV_RUN_ID: ${{ steps.candidate.outputs.run_id }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ steps.candidate.outputs.source_sha }}
+          TAG: ${{ steps.candidate.outputs.tag }}
+          VERSION: ${{ steps.candidate.outputs.version }}
+        run: |
+          set -euo pipefail
+          notes="$RUNNER_TEMP/foxcore-release-notes.md"
+          {
+            echo "Android JNI libraries for arm64-v8a and armeabi-v7a."
+            echo
+            echo "The source tree passed dev gate run $DEV_RUN_ID at commit $SOURCE_SHA."
+            echo "This release rebuilt the JNI from pinned inputs on main, whose source"
+            echo "tree is identical, and verified its ABI, manifest, SBOM, and hashes."
+            echo
+            echo "Verify the archive checksum with SHA256SUMS and its keyless"
+            echo "Sigstore provenance with:"
+            echo
+            echo '```sh'
+            echo "gh attestation verify $ARCHIVE_NAME --repo $GITHUB_REPOSITORY"
+            echo '```'
+          } > "$notes"
+
+          gh release create "$TAG" \
+            "release/$ARCHIVE_NAME" release/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "FoxHole Core $VERSION" \
+            --notes-file "$notes" \
+            --latest
+
+          tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" \
+            --jq .object.sha)"
+          [[ "$tag_sha" == "$GITHUB_SHA" ]]
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '[.assets[].name] | sort' | \
+            jq -e --arg archive "$ARCHIVE_NAME" \
+              '(["SHA256SUMS", $archive] | sort) as $expected | . == $expected' \
+              >/dev/null

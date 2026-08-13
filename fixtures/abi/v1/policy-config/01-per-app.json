@@ -1,0 +1,12 @@
+{
+  "expected_revision": 3,
+  "traffic": {
+    "default_action": "vpn",
+    "applications": [
+      { "package": "com.example.browser", "action": "direct" },
+      { "package": "com.example.leaky", "action": "block", "expires_at_ms": 1893456000000 }
+    ],
+    "kill_switch": false,
+    "quarantine_new_apps": false
+  }
+}

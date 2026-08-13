@@ -1,0 +1,106 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/foxcore-api",
+    "crates/foxcore-dialer",
+    "crates/foxcore-transport",
+    "crates/foxcore-route",
+    "crates/foxcore-relay",
+    "crates/foxcore-dns",
+    "crates/foxcore-link",
+    "crates/proto-reality",
+    "crates/proto-vless",
+    "crates/proto-vmess",
+    "crates/proto-hysteria2",
+    "crates/proto-tuic",
+    "crates/proto-trojan",
+    "crates/proto-shadowsocks",
+    "crates/proto-tor",
+    "crates/proto-wireguard",
+    "crates/proto-i2p",
+    "crates/proto-socks",
+    "crates/proto-http",
+    "crates/proto-naive",
+    "crates/proto-anytls",
+    "crates/proto-shadowtls",
+    "crates/foxcore-outbound",
+    "crates/foxcore-trafficmap",
+    "crates/foxcore-tun",
+    "crates/foxcore-runtime",
+    "crates/foxcore-component",
+    "crates/foxcore-share",
+    "crates/foxcore-android",
+    "crates/foxcore-testkit",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.91"
+license = "GPL-3.0-or-later"
+publish = false
+
+[workspace.dependencies]
+arc-swap = "1.9.2"
+aes = "0.8.4"
+argon2 = "0.5.3"
+aes-gcm = "0.10.3"
+async-trait = "0.1.89"
+aws-lc-rs = { version = "1.17.1", default-features = false, features = ["non-fips"] }
+base64 = "0.22.1"
+blake2 = "0.10.6"
+bytes = "1.12.1"
+chacha20poly1305 = "0.10.1"
+# Benchmarks only. `plotters` and `rayon` are off: the numbers are read off the
+# run by hand, and neither gnuplot output nor a thread pool is worth the extra
+# tree in a workspace whose supply chain is part of its threat model.
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+fst = "0.4.7"
+futures = "0.3.31"
+getrandom = "0.3.4"
+h2 = "0.4.15"
+hmac = "0.12.1"
+http = "1.4.2"
+ipnet = { version = "2.11.0", features = ["serde"] }
+ipstack = "1.0.0"
+jni = "0.21.1"
+libc = "0.2.186"
+md-5 = "0.10.6"
+percent-encoding = "2.3.2"
+qpack = { version = "0.1.0", default-features = false }
+quinn = { version = "0.11.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }
+quinn-proto = { version = "0.11.16", default-features = false }
+rand = "0.9.2"
+rustls = { version = "0.23.41", default-features = false, features = ["ring", "std"] }
+rustls-pki-types = "1.15.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.10.9"
+sha1 = "0.10.7"
+sha3 = "0.10.8"
+shadowsocks = { version = "1.24.0", default-features = false, features = ["aead-cipher", "aead-cipher-2022"] }
+subtle = "2.6.1"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"] }
+tokio-util = { version = "0.7.17", features = ["compat", "rt"] }
+url = "2.5.8"
+webpki-roots = "1.0.6"
+x509-parser = "0.18.0"
+zerocopy = { version = "0.8.54", features = ["derive"] }
+zeroize = { version = "1.9.0", features = ["derive"] }
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+# Unwind, not abort. The JNI layer wraps every fallible entry point in
+# `catch_unwind` and promises Java an `IllegalStateException` instead of a
+# crash — and with `panic = "abort"` that promise was dead code: a panic
+# anywhere in the data plane took the whole Android process down, with no
+# stack trace reaching the app. The entry points that lack `catch_unwind`
+# only return constants, so no unwind can cross an FFI boundary uncaught.
+# Costs some binary size; buys the failure mode the code already documents.
+panic = "unwind"
+strip = "symbols"

@@ -1,0 +1,20 @@
+[package]
+name = "proto-naive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "NaiveProxy (HTTP/2 CONNECT with padding) outbound client for FoxCore"
+
+[dependencies]
+base64.workspace = true
+bytes.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-transport = { path = "../foxcore-transport" }
+h2.workspace = true
+http.workspace = true
+rand.workspace = true
+thiserror.workspace = true
+tokio.workspace = true

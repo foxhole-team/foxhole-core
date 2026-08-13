@@ -1,0 +1,9 @@
+target
+# Crashing inputs libFuzzer writes out. A reproducer belongs in a unit test in
+# the crate that owns the parser, not as a loose file here.
+artifacts
+coverage
+
+# `corpus/` is deliberately NOT ignored. cargo-fuzz's own template ignores it,
+# which is how a project ends up fuzzing from noise on every fresh checkout.
+# The seeds under it come from `scripts/fuzz.sh seed` and are part of the tree.

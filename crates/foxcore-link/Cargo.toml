@@ -1,0 +1,18 @@
+[package]
+name = "foxcore-link"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+description = "Strict share-link importer for FoxCore profiles"
+
+[dependencies]
+ipnet.workspace = true
+base64.workspace = true
+foxcore-api = { path = "../foxcore-api" }
+percent-encoding.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
