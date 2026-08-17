@@ -55,6 +55,18 @@ TUN → flow engine → routing policy → outbound
 > **Status:** early beta. Production hardening and part of the device gates are
 > not yet complete. Protocol maturity is listed in the table below; independently
 > verified interoperability is documented in [`interop.md`](docs/interop.md).
+>
+> **TLS fingerprint:** a Reality connection sends a browser-faithful
+> ClientHello — nine profiles, seven transcribed from uTLS and two from
+> first-party captures, matching real Chromium on
+> the human-readable part of JA4. **The generic TLS path is not browser-shaped:**
+> it uses rustls' own hello, measured at 10 cipher suites and 11 extensions
+> against Chromium's 15 and 16, so it is distinguishable from a browser. Nothing
+> measured shows a censor keying on that today. It is not reachable by
+> configuration either: rustls implements none of the RSA and CBC suites Chrome
+> carries and exposes no API for GREASE or extension order. Under active
+> development and experiment; a different TLS stack (BoringSSL) is a candidate
+> for closing it.
 
 ### Documentation
 
@@ -118,7 +130,7 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 
 | Protocol | Support | Maturity |
 | --- | --- | --- |
-| **VLESS** | raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH; Reality and Vision over raw TCP | `beta` |
+| **VLESS** | raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH; Reality under any stream transport, Vision over raw TCP | `beta` |
 | **VMess** | AEAD (`alterId=0`), TCP/UDP, raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH | `beta` |
 | **Hysteria2** | QUIC/H3, Brutal, Salamander obfs, TCP/UDP, destination port hopping | `beta` |
 | **WireGuard** | implementation of the Noise_IKpsk2 handshake, L3 tunnel, `reserved`, `wg://`, `.conf` | `beta` |
@@ -132,7 +144,8 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 | **ShadowTLS** | strict v3 / TLS 1.3, Shadowsocks inner only | `experimental` |
 | **SOCKS5** | CONNECT, UDP ASSOCIATE, authentication | `beta` |
 | **HTTP** | CONNECT proxy | `beta` |
-| **Tor** | Arti, TCP, `.onion`, bridges, pluggable transports, onion service | `beta` |
+| **Tor** | Arti, TCP, `.onion`, bridges, pluggable transports | `beta` |
+| Tor onion **service** (publishing) | compiled, never exercised on a device — the artifact every acceptance run covered was built without it | `experimental` |
 | **I2P** | TCP-only SOCKS5 adapter to external `i2pd` | `experimental` |
 | **Selector** | named outbound group, connect failover, urltest | `beta` |
 
@@ -142,7 +155,7 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 
 The protocol list above is not a freely composable transport matrix:
 
-- **Reality** works only over raw TCP and is mutually exclusive with normal TLS. It cannot be placed under WebSocket, HTTP Upgrade, gRPC or H2.
+- **Reality** is a security layer, not a carrier, and is mutually exclusive with normal TLS. A stream transport may sit above it: WebSocket, HTTP Upgrade, gRPC and H2 are all accepted, gRPC being the common shape in the wild. **Vision** is the exception — it requires raw TCP.
 - **Vision**, in this implementation, requires TLS 1.3 on the outer layer and `packet_encoding = xudp`, and rejects UDP on port 443.
 - **Outline** `prefix=` applies to AEAD ciphers over TCP; it is not carried over to AEAD-2022 or UDP.
 - **Hysteria2 port hopping** rotates the destination port from the configured set while retaining one protected local UDP socket. The reference client also rotates the source port, so this implementation is deliberately narrower.
@@ -399,14 +412,15 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-Release ABIs:
+Release ABI:
 
 ```text
 arm64-v8a
-armeabi-v7a
 ```
 
-`x86_64` is in development.
+arm64 only, deliberately: no live traffic, protocol matrix or Tor leg was ever
+verified on 32-bit ARM, so shipping it would mean shipping untested. `armeabi-v7a`
+and `x86_64` build and pass the ELF gate; neither is published.
 
 Native build gates:
 

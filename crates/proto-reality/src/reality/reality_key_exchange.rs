@@ -45,6 +45,9 @@ pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
 /// ML-KEM-768 shared secret, FIPS 203.
 pub const ML_KEM_768_SHARED_SECRET_LEN: usize = 32;
 
+/// Uncompressed P-256 point, SEC1: `0x04 ‖ X ‖ Y`.
+pub const P256_PUBLIC_LEN: usize = 65;
+
 /// Client `key_share` for `X25519MLKEM768`: `ek ‖ x25519_pub`.
 pub const X25519MLKEM768_CLIENT_SHARE_LEN: usize = ML_KEM_768_ENCAPSULATION_KEY_LEN + X25519_LEN;
 /// Server `key_share` for `X25519MLKEM768`: `ct ‖ x25519_pub`.
@@ -60,6 +63,13 @@ pub const X25519MLKEM768_SHARED_SECRET_LEN: usize = ML_KEM_768_SHARED_SECRET_LEN
 pub enum NamedGroup {
     Secp256r1,
     Secp384r1,
+    /// Named by the Safari and iOS tables. Never executed: no share is sent for
+    /// it and a server that selects it is refused by name.
+    Secp521r1,
+    /// Finite-field groups Firefox names in `supported_groups`. Never executed;
+    /// no share is sent and a server selecting one is refused by name.
+    Ffdhe2048,
+    Ffdhe3072,
     X25519,
     X25519MlKem768,
 }
@@ -70,6 +80,9 @@ impl NamedGroup {
         match self {
             Self::Secp256r1 => 0x0017,
             Self::Secp384r1 => 0x0018,
+            Self::Secp521r1 => 0x0019,
+            Self::Ffdhe2048 => 0x0100,
+            Self::Ffdhe3072 => 0x0101,
             Self::X25519 => 0x001d,
             // draft-ietf-tls-ecdhe-mlkem §5.
             Self::X25519MlKem768 => 0x11ec,
@@ -80,6 +93,9 @@ impl NamedGroup {
         match id {
             0x0017 => Some(Self::Secp256r1),
             0x0018 => Some(Self::Secp384r1),
+            0x0019 => Some(Self::Secp521r1),
+            0x0100 => Some(Self::Ffdhe2048),
+            0x0101 => Some(Self::Ffdhe3072),
             0x001d => Some(Self::X25519),
             0x11ec => Some(Self::X25519MlKem768),
             _ => None,
@@ -90,6 +106,9 @@ impl NamedGroup {
         match self {
             Self::Secp256r1 => "secp256r1",
             Self::Secp384r1 => "secp384r1",
+            Self::Secp521r1 => "secp521r1",
+            Self::Ffdhe2048 => "ffdhe2048",
+            Self::Ffdhe3072 => "ffdhe3072",
             Self::X25519 => "x25519",
             Self::X25519MlKem768 => "X25519MLKEM768",
         }
@@ -98,7 +117,7 @@ impl NamedGroup {
     /// Whether this client can complete a handshake on the group, as opposed to
     /// merely listing it in `supported_groups` because Chrome does.
     pub const fn is_executable(self) -> bool {
-        matches!(self, Self::X25519 | Self::X25519MlKem768)
+        matches!(self, Self::X25519 | Self::X25519MlKem768 | Self::Secp256r1)
     }
 }
 
@@ -114,6 +133,16 @@ pub struct ClientKeyExchange {
     x25519_private: [u8; X25519_LEN],
     x25519_public: [u8; X25519_LEN],
     hybrid: Option<HybridKeyExchange>,
+    p256: Option<P256KeyExchange>,
+}
+
+/// A P-256 ephemeral, for the one profile that sends a P-256 share.
+///
+/// `agreement::PrivateKey` is not `Clone` and cannot be re-derived from bytes
+/// for this curve the way X25519 can, so the key itself is held.
+struct P256KeyExchange {
+    private: agreement::PrivateKey,
+    public: Vec<u8>,
 }
 
 struct HybridKeyExchange {
@@ -145,18 +174,34 @@ impl ClientKeyExchange {
     /// `key_share` — so an unexpected entry is a construction error, not a
     /// runtime surprise.
     pub fn generate(groups: &[NamedGroup]) -> io::Result<Self> {
+        Self::generate_with_reuse(groups, false)
+    }
+
+    /// `reuse_classical` makes the standalone `x25519` share carry the *same*
+    /// public key as the X25519 half of the hybrid share.
+    ///
+    /// Chrome generates the two independently, and reusing one there would be
+    /// 32 bytes visibly repeated inside a 1216-byte field. Firefox does the
+    /// opposite: uTLS' `ReuseHybridAndClassicalKeyShares` marks the pair so
+    /// that one classical key backs both entries, and a Firefox parrot that
+    /// sent two different keys would be as wrong as a Chrome one that sent the
+    /// same key twice. So it is per profile, not a global rule.
+    pub fn generate_with_reuse(groups: &[NamedGroup], reuse_classical: bool) -> io::Result<Self> {
         let mut rng = rand::rng();
-        let mut x25519_private = [0_u8; X25519_LEN];
-        rng.fill_bytes(&mut x25519_private);
-        let x25519_public = x25519_public_key(&x25519_private)?;
 
         let mut hybrid = None;
+        let mut p256 = None;
         for group in groups {
             match group {
                 NamedGroup::X25519 => {}
                 NamedGroup::X25519MlKem768 => {
                     if hybrid.is_none() {
                         hybrid = Some(HybridKeyExchange::generate(&mut rng)?);
+                    }
+                }
+                NamedGroup::Secp256r1 => {
+                    if p256.is_none() {
+                        p256 = Some(P256KeyExchange::generate()?);
                     }
                 }
                 other => {
@@ -171,10 +216,23 @@ impl ClientKeyExchange {
             }
         }
 
+        // The reused case takes the hybrid's classical scalar so both shares
+        // carry one public key. Without a hybrid there is nothing to reuse.
+        let (x25519_private, x25519_public) = match (reuse_classical, hybrid.as_ref()) {
+            (true, Some(hybrid)) => (hybrid.x25519_private, hybrid.x25519_public),
+            _ => {
+                let mut private = [0_u8; X25519_LEN];
+                rng.fill_bytes(&mut private);
+                let public = x25519_public_key(&private)?;
+                (private, public)
+            }
+        };
+
         Ok(Self {
             x25519_private,
             x25519_public,
             hybrid,
+            p256,
         })
     }
 
@@ -188,6 +246,7 @@ impl ClientKeyExchange {
     pub fn share_bytes(&self, group: NamedGroup) -> Option<Vec<u8>> {
         match group {
             NamedGroup::X25519 => Some(self.x25519_public.to_vec()),
+            NamedGroup::Secp256r1 => self.p256.as_ref().map(|p256| p256.public.clone()),
             NamedGroup::X25519MlKem768 => self.hybrid.as_ref().map(|hybrid| {
                 // draft-ietf-tls-ecdhe-mlkem §3.1: ek first, X25519 second.
                 let mut share = Vec::with_capacity(X25519MLKEM768_CLIENT_SHARE_LEN);
@@ -206,6 +265,16 @@ impl ClientKeyExchange {
     pub fn complete(&self, server_share: &ServerKeyShare) -> io::Result<Vec<u8>> {
         match server_share {
             ServerKeyShare::X25519(peer) => Ok(x25519_agree(&self.x25519_private, peer)?.to_vec()),
+            ServerKeyShare::Secp256r1(peer) => {
+                let p256 = self.p256.as_ref().ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "REALITY server answered with secp256r1, which this hello did not offer a \
+                         share for",
+                    )
+                })?;
+                Ok(p256.agree(peer.as_slice())?.to_vec())
+            }
             ServerKeyShare::X25519MlKem768 {
                 ml_kem_ciphertext,
                 x25519,
@@ -280,6 +349,9 @@ impl HybridKeyExchange {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerKeyShare {
     X25519([u8; X25519_LEN]),
+    /// Uncompressed SEC1 point. Only the Firefox profile offers a P-256 share,
+    /// so only that profile can reach this arm.
+    Secp256r1(Box<[u8; P256_PUBLIC_LEN]>),
     X25519MlKem768 {
         ml_kem_ciphertext: Box<[u8; ML_KEM_768_CIPHERTEXT_LEN]>,
         x25519: [u8; X25519_LEN],
@@ -298,6 +370,41 @@ pub fn random_x25519_public_key() -> io::Result<[u8; X25519_LEN]> {
     let public = x25519_public_key(&private);
     private.zeroize();
     public
+}
+
+impl P256KeyExchange {
+    fn generate() -> io::Result<Self> {
+        let private = agreement::PrivateKey::generate(&agreement::ECDH_P256)
+            .map_err(|_| io::Error::other("failed to generate a P-256 key"))?;
+        let public = private
+            .compute_public_key()
+            .map_err(|_| io::Error::other("failed to compute a P-256 public key"))?;
+        let public = public.as_ref().to_vec();
+        if public.len() != P256_PUBLIC_LEN {
+            return Err(io::Error::other(
+                "P-256 public key is not an uncompressed SEC1 point",
+            ));
+        }
+        Ok(Self { private, public })
+    }
+
+    fn agree(&self, peer: &[u8]) -> io::Result<[u8; 32]> {
+        let peer_key = agreement::UnparsedPublicKey::new(&agreement::ECDH_P256, peer);
+        let mut secret = [0_u8; 32];
+        agreement::agree(
+            &self.private,
+            peer_key,
+            io::Error::new(io::ErrorKind::InvalidData, "REALITY P-256 agreement failed"),
+            |material| {
+                if material.len() != 32 {
+                    return Err(io::Error::other("P-256 produced an unexpected secret"));
+                }
+                secret.copy_from_slice(material);
+                Ok(())
+            },
+        )?;
+        Ok(secret)
+    }
 }
 
 fn x25519_public_key(private: &[u8; X25519_LEN]) -> io::Result<[u8; X25519_LEN]> {
@@ -368,12 +475,62 @@ mod tests {
         assert_eq!(NamedGroup::from_id(0x11eb), None);
     }
 
+    /// Three executable groups, and the rest are names only.
+    ///
+    /// `Secp256r1` joined the first list when the Firefox table arrived: that
+    /// profile sends a real P-256 key share, so the client has to be able to
+    /// complete one. Everything else here is named in `supported_groups`
+    /// because a browser names it, and a ServerHello selecting one is refused.
     #[test]
-    fn only_the_two_implemented_groups_are_executable() {
+    fn only_the_implemented_groups_are_executable() {
         assert!(NamedGroup::X25519.is_executable());
         assert!(NamedGroup::X25519MlKem768.is_executable());
-        assert!(!NamedGroup::Secp256r1.is_executable());
+        assert!(NamedGroup::Secp256r1.is_executable());
+
         assert!(!NamedGroup::Secp384r1.is_executable());
+        assert!(!NamedGroup::Secp521r1.is_executable());
+        assert!(!NamedGroup::Ffdhe2048.is_executable());
+        assert!(!NamedGroup::Ffdhe3072.is_executable());
+    }
+
+    /// A P-256 share is real key material, not a filled-in constant.
+    #[test]
+    fn the_p256_share_is_an_uncompressed_sec1_point() {
+        let exchange = ClientKeyExchange::generate(&[NamedGroup::X25519, NamedGroup::Secp256r1])
+            .expect("P-256 shares are generated");
+        let share = exchange
+            .share_bytes(NamedGroup::Secp256r1)
+            .expect("a P-256 share was asked for");
+        assert_eq!(share.len(), P256_PUBLIC_LEN);
+        assert_eq!(share[0], 0x04, "SEC1 uncompressed point marker");
+
+        // Two connections must not reuse a key.
+        let other = ClientKeyExchange::generate(&[NamedGroup::Secp256r1]).unwrap();
+        assert_ne!(share, other.share_bytes(NamedGroup::Secp256r1).unwrap());
+    }
+
+    /// Firefox repeats one classical key in both shares; Chrome must not.
+    #[test]
+    fn classical_key_share_reuse_is_per_profile() {
+        let groups = [NamedGroup::X25519MlKem768, NamedGroup::X25519];
+
+        let reused = ClientKeyExchange::generate_with_reuse(&groups, true).unwrap();
+        let hybrid = reused.share_bytes(NamedGroup::X25519MlKem768).unwrap();
+        let flat = reused.share_bytes(NamedGroup::X25519).unwrap();
+        assert_eq!(
+            &hybrid[ML_KEM_768_ENCAPSULATION_KEY_LEN..],
+            flat.as_slice(),
+            "with reuse the standalone share must repeat the hybrid's classical half"
+        );
+
+        let independent = ClientKeyExchange::generate_with_reuse(&groups, false).unwrap();
+        let hybrid = independent.share_bytes(NamedGroup::X25519MlKem768).unwrap();
+        let flat = independent.share_bytes(NamedGroup::X25519).unwrap();
+        assert_ne!(
+            &hybrid[ML_KEM_768_ENCAPSULATION_KEY_LEN..],
+            flat.as_slice(),
+            "without reuse the two shares must be independent keys"
+        );
     }
 
     #[test]
@@ -491,8 +648,14 @@ mod tests {
     fn a_group_this_build_cannot_execute_is_a_construction_error() {
         // `expect_err` would need `Debug` on a type that holds private key
         // material, and a `Debug` that prints it is worse than a match.
-        let Err(error) = ClientKeyExchange::generate(&[NamedGroup::Secp256r1]) else {
-            panic!("secp256r1 shares are not implemented and must not be generated");
+        let Err(error) = ClientKeyExchange::generate(&[NamedGroup::Secp384r1]) else {
+            panic!("secp384r1 shares are not implemented and must not be generated");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Unsupported);
+
+        // The finite-field groups Firefox names are the same kind of refusal.
+        let Err(error) = ClientKeyExchange::generate(&[NamedGroup::Ffdhe2048]) else {
+            panic!("ffdhe2048 shares are not implemented and must not be generated");
         };
         assert_eq!(error.kind(), io::ErrorKind::Unsupported);
     }

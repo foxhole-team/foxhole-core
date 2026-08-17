@@ -1,5 +1,22 @@
 //! The mini-platform's JNI surface: isolated web apps, and the share vault.
 //!
+//! **This module is behind the `mini-platform` feature and the shipped build
+//! does not enable it.** Everything here is groundwork for a later release: the
+//! Java classes `com.foxhole.core.component.FoxholeNativeComponents` and
+//! `FoxholeNativeShares` that these entry points are named for do not exist in
+//! the app yet, so every symbol below is an export nothing can call. It is
+//! compiled, type-checked and tested under `--features mini-platform` rather
+//! than commented out, because commented-out code stops compiling without
+//! anyone finding out. `scripts/android-elf-gate.sh` checks both halves of that
+//! arrangement: the exports must be absent from a release artifact, and the
+//! feature must not be in the crate's `shipped` set.
+//!
+//! What leaves the shipped artifact with these symbols is the ability to
+//! *publish* a share as an onion service. Tor as a transport is untouched: it is
+//! an outbound and a route inside the engine config, reached through
+//! `nativeStart*`, `nativeReloadPolicy` and `nativeStats` in `lib.rs`, none of
+//! which is gated, and there has never been a `nativeTor*` entry point.
+//!
 //! Two rules shape everything here, and neither is checkable by the compiler.
 //!
 //! **No secret crosses the boundary.** A component lease carries a 256-bit
@@ -21,12 +38,12 @@ use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use foxcore_runtime::{
     ComponentError, ComponentEventKind, ComponentId, ComponentLease, ComponentOperation,
     ComponentRoute, CoreRuntime, CreatedShare, FileId, FileShareConfig, LeasePurpose,
-    PublishedShare, ShareConfig, ShareError, ShareEventKind, ShareId, ShareManager, WebAppConfig,
+    PublishedShare, ShareConfig, ShareEventKind, ShareId, ShareManager, WebAppConfig,
 };
 use jni::JNIEnv;
 use jni::objects::{JByteArray, JClass, JString};
@@ -34,6 +51,11 @@ use jni::sys::{jboolean, jint, jlong, jstring};
 use serde::Serialize;
 use zeroize::Zeroizing;
 
+use crate::boundary::{
+    RESULT_DENIED, RESULT_INVALID_ARGUMENT, RESULT_NO_ENGINE, RESULT_NOT_FOUND, RESULT_OK,
+    RESULT_PANICKED, RESULT_RUNTIME_UNAVAILABLE, RESULT_VAULT_ERROR, component_result, guarded,
+    lock, read_string, share_result,
+};
 use crate::runtime;
 
 /// Route codes. Numeric because they cross the ABI, and a mistyped string would
@@ -54,26 +76,6 @@ const OPERATION_NOTIFICATION_DELIVERY: jint = 3;
 const OPERATION_NOTIFICATION_ACTION: jint = 4;
 const OPERATION_FILE_SHARE_PUBLISH: jint = 5;
 const OPERATION_FILE_SHARE_DOWNLOAD: jint = 6;
-
-/// Result codes shared by every call that returns a verdict rather than a
-/// value. Negative is "the boundary itself failed"; zero is success.
-///
-/// Reused by the LAN proxy entry points in `lib.rs` rather than copied: those
-/// answer with the same `ComponentError`s these do, and a second numbering for
-/// the same refusals is how an app ends up reading "denied" as "ok".
-pub(crate) const RESULT_OK: jint = 0;
-pub(crate) const RESULT_INVALID_ARGUMENT: jint = 1;
-pub(crate) const RESULT_NO_ENGINE: jint = 2;
-pub(crate) const RESULT_NOT_FOUND: jint = 3;
-pub(crate) const RESULT_ALREADY_EXISTS: jint = 4;
-pub(crate) const RESULT_CAPACITY: jint = 5;
-pub(crate) const RESULT_DENIED: jint = 6;
-pub(crate) const RESULT_RUNTIME_UNAVAILABLE: jint = 7;
-pub(crate) const RESULT_VAULT_ERROR: jint = 8;
-pub(crate) const RESULT_NETWORK_REFUSED: jint = 9;
-pub(crate) const RESULT_NETWORK_UNCONFIRMED: jint = 10;
-pub(crate) const RESULT_BIND_FAILED: jint = 11;
-pub(crate) const RESULT_PANICKED: jint = -1;
 
 /// The largest event batch one call will assemble.
 const MAX_EVENT_BATCH: usize = 512;
@@ -109,35 +111,6 @@ fn leases() -> &'static Mutex<HashMap<u64, OwnedLease>> {
 
 fn shares() -> &'static Mutex<HashMap<u64, OwnedShare>> {
     SHARES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-/// A poisoned table is recovered rather than propagated: one panicked call must
-/// not make every component permanently unusable.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-pub(crate) fn component_result(error: ComponentError) -> jint {
-    match error {
-        ComponentError::InvalidIdentity
-        | ComponentError::InvalidOrigin
-        | ComponentError::OriginMismatch => RESULT_INVALID_ARGUMENT,
-        ComponentError::AlreadyExists => RESULT_ALREADY_EXISTS,
-        ComponentError::NotFound => RESULT_NOT_FOUND,
-        ComponentError::Capacity => RESULT_CAPACITY,
-        ComponentError::InvalidLease
-        | ComponentError::WrongPurpose
-        | ComponentError::NotificationsDisabled
-        | ComponentError::Blocked => RESULT_DENIED,
-        ComponentError::RuntimeUnavailable | ComponentError::RandomUnavailable => {
-            RESULT_RUNTIME_UNAVAILABLE
-        }
-        ComponentError::LanBindingRefused => RESULT_NETWORK_REFUSED,
-        ComponentError::LanNetworkNotConfirmed => RESULT_NETWORK_UNCONFIRMED,
-        ComponentError::LanBindFailed => RESULT_BIND_FAILED,
-    }
 }
 
 struct OwnedPublication {
@@ -382,15 +355,6 @@ fn write_new_private_file(path: &str, contents: &[u8]) -> std::io::Result<()> {
     file.sync_all()
 }
 
-fn share_result(error: &ShareError) -> jint {
-    match error {
-        ShareError::InvalidConfig | ShareError::InvalidMetadata => RESULT_INVALID_ARGUMENT,
-        ShareError::Capacity => RESULT_CAPACITY,
-        ShareError::NotFound => RESULT_NOT_FOUND,
-        _ => RESULT_VAULT_ERROR,
-    }
-}
-
 fn route(code: jint) -> Option<ComponentRoute> {
     match code {
         ROUTE_VPN => Some(ComponentRoute::Vpn),
@@ -431,19 +395,8 @@ fn operation(code: jint) -> Option<ComponentOperation> {
     }
 }
 
-pub(crate) fn read_string(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Option<String> {
-    if value.is_null() {
-        return None;
-    }
-    env.get_string(value).ok().map(Into::into)
-}
-
 fn component_id(env: &mut JNIEnv<'_>, value: &JString<'_>) -> Option<ComponentId> {
     ComponentId::new(read_string(env, value)?).ok()
-}
-
-pub(crate) fn guarded(action: impl FnOnce() -> jint) -> jint {
-    catch_unwind(AssertUnwindSafe(action)).unwrap_or(RESULT_PANICKED)
 }
 
 /// Register an isolated web application under its own route and identity.
@@ -1192,31 +1145,6 @@ fn remove_engine_entries<T>(
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_code_this_abi_hands_out_is_distinct() {
-        // A collision here is a caller that reads "denied" as "ok", which is the
-        // one direction this boundary must never fail in.
-        let codes = [
-            RESULT_OK,
-            RESULT_INVALID_ARGUMENT,
-            RESULT_NO_ENGINE,
-            RESULT_NOT_FOUND,
-            RESULT_ALREADY_EXISTS,
-            RESULT_CAPACITY,
-            RESULT_DENIED,
-            RESULT_RUNTIME_UNAVAILABLE,
-            RESULT_VAULT_ERROR,
-            RESULT_NETWORK_REFUSED,
-            RESULT_NETWORK_UNCONFIRMED,
-            RESULT_BIND_FAILED,
-            RESULT_PANICKED,
-        ];
-        let mut seen = codes.to_vec();
-        seen.sort_unstable();
-        seen.dedup();
-        assert_eq!(seen.len(), codes.len());
-    }
-
     /// `nativeExportFile` returns a byte count, so its failure codes have to be
     /// on the other side of zero from every count it can legitimately produce.
     /// It used to negate an already-negative constant and hand back `+1`, which
@@ -1227,32 +1155,6 @@ mod tests {
             export_panic_code() < 0,
             "the value nativeExportFile returns on a panic must not be a byte count"
         );
-    }
-
-    #[test]
-    fn a_refusal_never_maps_to_success() {
-        for error in [
-            ComponentError::LanBindingRefused,
-            ComponentError::LanNetworkNotConfirmed,
-            ComponentError::LanBindFailed,
-            ComponentError::InvalidLease,
-            ComponentError::WrongPurpose,
-            ComponentError::NotificationsDisabled,
-            ComponentError::Blocked,
-            ComponentError::OriginMismatch,
-            ComponentError::RuntimeUnavailable,
-        ] {
-            let label = format!("{error:?}");
-            assert_ne!(component_result(error), RESULT_OK, "{label}");
-        }
-        for error in [
-            ShareError::InvalidConfig,
-            ShareError::NotFound,
-            ShareError::Revoked,
-            ShareError::Authentication,
-        ] {
-            assert_ne!(share_result(&error), RESULT_OK, "{error:?}");
-        }
     }
 
     #[test]

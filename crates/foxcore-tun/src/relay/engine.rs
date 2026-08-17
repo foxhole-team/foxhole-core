@@ -3,6 +3,7 @@ use super::*;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use foxcore_api::{BlockReason, CoreEvent, Destination, EventSink, IpTransport};
@@ -142,8 +143,19 @@ impl PacketTunnelRelay {
         let refusals = RefusalReporter::default();
         let mut inbound = vec![0_u8; MAX_DATAGRAM];
         let mut decrypted_arena = PacketArena::new(DECRYPTED_PACKET_HINT);
-        let mut ticker = tokio::time::interval(TICK);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // How long the relay may sleep before its next timer pass. Recomputed
+        // at the top of every iteration from what the state machine actually
+        // has pending, rather than a fixed tick — see `TICK`.
+        let mut rebind_backoff = REBIND_BACKOFF_MIN;
+        // Pinned outside the loop, and reset rather than recreated, because the
+        // timer has to stay *armed* while another arm is being served. A
+        // `sleep` built inside the `select!` is dropped the moment any other
+        // branch wins, which leaves the relay with no registered timer for as
+        // long as that branch's body runs — the `Interval` this replaced kept
+        // its registration across iterations, and the liveness deadline depends
+        // on that being true.
+        let timer = tokio::time::sleep(TICK);
+        tokio::pin!(timer);
         // `None` is the fail-closed state: the network moved and no protected
         // socket could be built for the new one. Packets are dropped and
         // counted while it holds, and every tick retries.
@@ -163,8 +175,51 @@ impl PacketTunnelRelay {
         let mut heard_ms = 0_u64;
         let mut sent_since_heard = false;
         let mut silence_reported = false;
+        // Derived from the profile, not a constant: an idle-but-healthy tunnel
+        // is unheard for one keepalive interval at a time. See
+        // `peer_silence_window`.
+        let peer_silence = peer_silence_window(tunnel.persistent_keepalive_s());
 
         loop {
+            // The three things that can want a timer, resolved to one sleep.
+            //
+            // Anything else that could change the tunnel's state — a packet, a
+            // datagram, a network change, cancellation — is its own arm below
+            // and wakes the loop on its own, so nothing here has to be polled
+            // for. Clamped into `TICK..=MAX_IDLE_TICK`: the floor is what makes
+            // this unable to wake more often than the fixed tick it replaces,
+            // and it also keeps a deadline that is already past from spinning.
+            let now = elapsed_ms(started);
+            let mut wake = tunnel
+                .next_deadline_ms()
+                .map(|deadline| deadline.saturating_sub(now))
+                .unwrap_or(MAX_IDLE_TICK.as_millis() as u64);
+            if socket.is_none() {
+                wake = wake.min(rebind_backoff.as_millis() as u64);
+            }
+            // The silence window is measured from the last thing the peer
+            // authenticated, and `heard_ms` starts at zero — so the deadline
+            // exists from the moment the relay does, and not only once
+            // something has gone out. Arming it on `sent_since_heard` instead
+            // made the report's timing depend on when the loop happened to
+            // wake next, which is exactly the property D15 needs it not to
+            // have. `sent_since_heard` still decides whether it is *reported*;
+            // it has no business deciding whether the relay is awake to ask.
+            // Only while it is still ahead. A stale deadline is not a deadline:
+            // once the window has passed, either this pass reports (the tick
+            // arm below asks) or nothing ever will, because `sent_since_heard`
+            // is false and only traffic can set it. Clamping on it regardless
+            // pinned `wake` at the `TICK` floor for the rest of the tunnel's
+            // life on the one profile with no keepalive to move `heard_ms` —
+            // 1 Hz forever, which is the exact cost this loop was rewritten to
+            // remove, reintroduced on the quietest path there is.
+            let silence_due = heard_ms.saturating_add(peer_silence.as_millis() as u64);
+            if !silence_reported && silence_due > now {
+                wake = wake.min(silence_due.saturating_sub(now));
+            }
+            let wake = Duration::from_millis(wake).clamp(TICK, MAX_IDLE_TICK);
+            timer.as_mut().reset(Instant::now() + wake);
+
             tokio::select! {
                 _ = cancel.cancelled() => return Ok(()),
                 changed = network.changed(), if network_signalled => {
@@ -178,6 +233,11 @@ impl PacketTunnelRelay {
                     // it accepts every send and delivers nothing, which is
                     // indistinguishable from a working tunnel from inside.
                     socket = None;
+                    // A different network is a fresh reason to try at once:
+                    // whatever the backoff had grown to was earned against the
+                    // network that just went away. This is what keeps the
+                    // backoff from ever delaying a recovery.
+                    rebind_backoff = REBIND_BACKOFF_MIN;
                     // Cancellation is polled *during* the rebind, not only
                     // between them. `rebind` resolves the peer under
                     // `connect_timeout_ms`, which defaults to 10 s — more than
@@ -327,7 +387,18 @@ impl PacketTunnelRelay {
                             // network is full of, and treating it as an answer
                             // would let anything on the path silence the
                             // liveness report below.
-                            flush(&mut tunnel, socket.as_ref(), &metrics).await;
+                            //
+                            // But what the flush puts on the wire still counts.
+                            // Dropping this return value was the one asymmetry
+                            // in the silence bookkeeping: a datagram that fails
+                            // to decrypt can still push a retry out — the tunnel
+                            // may be mid-handshake — and the report below only
+                            // fires once something has gone out since the peer
+                            // was last heard. So a tunnel whose entire inbound
+                            // stream was undecryptable sent into silence without
+                            // ever being able to say so.
+                            sent_since_heard |=
+                                flush(&mut tunnel, socket.as_ref(), &metrics).await;
                             continue;
                         }
                     }
@@ -338,12 +409,15 @@ impl PacketTunnelRelay {
                     silence_reported = false;
                     sent_since_heard = flush(&mut tunnel, socket.as_ref(), &metrics).await;
                 }
-                _ = ticker.tick() => {
-                    // The retry. One second is the relay's existing timer and
-                    // finer than anything WireGuard measures, so a rebind that
-                    // failed because the new interface was not up yet costs at
-                    // most a tick — while a rebind loop of its own would need a
-                    // second timer and a second place to get the backoff wrong.
+                _ = timer.as_mut() => {
+                    // The retry, on a backoff rather than every second. A
+                    // rebind that failed because the new interface was not up
+                    // yet is retried a second later; one that keeps failing
+                    // because there is no network at all doubles out to
+                    // `REBIND_BACKOFF_MAX`, because repeating a resolve and a
+                    // bind every second against no route all night is pure
+                    // battery. The network-change arm above resets it, so
+                    // connectivity returning is still acted on at once.
                     let retried = if socket.is_none() {
                         // Same reason as the network-change branch above.
                         tokio::select! {
@@ -357,6 +431,10 @@ impl PacketTunnelRelay {
                         socket = Some(fresh);
                         peer = address;
                         offline_reported = false;
+                        rebind_backoff = REBIND_BACKOFF_MIN;
+                    } else if socket.is_none() {
+                        rebind_backoff =
+                            (rebind_backoff * 2).min(REBIND_BACKOFF_MAX);
                     }
                     let _ = tunnel.tick(elapsed_ms(started));
                     sent_since_heard |= flush(&mut tunnel, socket.as_ref(), &metrics).await;
@@ -371,7 +449,7 @@ impl PacketTunnelRelay {
                     if sent_since_heard
                         && !silence_reported
                         && elapsed_ms(started).saturating_sub(heard_ms)
-                            >= PEER_SILENCE.as_millis() as u64
+                            >= peer_silence.as_millis() as u64
                     {
                         silence_reported = true;
                         metrics.tunnel_peer_silent();

@@ -1,7 +1,11 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 
+mod boundary;
 mod capabilities;
+/// The component and share entry points. Off in the shipped build; see the
+/// module's own documentation and `mini-platform` in `Cargo.toml`.
+#[cfg(feature = "mini-platform")]
 mod ecosystem;
 mod link;
 #[cfg(target_os = "android")]
@@ -19,7 +23,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(target_os = "android")]
 use std::time::{Duration, Instant};
 
@@ -45,11 +49,11 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::capabilities::capabilities_json;
-use crate::ecosystem::{
+use crate::boundary::{
     RESULT_INVALID_ARGUMENT, RESULT_NO_ENGINE, RESULT_NOT_FOUND, RESULT_OK, RESULT_PANICKED,
-    component_result, guarded, read_string,
+    component_result, guarded, lock, read_string, release_engine_handles,
 };
+use crate::capabilities::capabilities_json;
 
 static RUNTIMES: OnceLock<Mutex<HashMap<u64, Arc<CoreRuntime>>>> = OnceLock::new();
 static STOP_REAPERS: OnceLock<Mutex<HashMap<u64, std::thread::JoinHandle<()>>>> = OnceLock::new();
@@ -363,6 +367,69 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeI
     }
 }
 
+/// Install a verified ClientHello table document.
+///
+/// The app has already checked the signature, the manifest, the artifact hash
+/// and each profile's own digest before these bytes exist on disk; the core
+/// re-establishes everything it can check for itself — schema, digests, the
+/// slot vocabulary, and whether each table can actually produce a hello — and
+/// refuses the document whole if any of it fails.
+///
+/// **Never throws.** A failure here is not an error the app has to handle: the
+/// tables compiled into this library are always a complete set, so the honest
+/// response to a bad document is to keep using them. The return value is
+/// diagnostic only, and a caller that ignores it entirely is still correct.
+///
+/// Returns the number of profiles the document replaced, or a negative code:
+/// `-1` the byte array could not be read, `-2` the core refused the document,
+/// `-3` a panic was contained at this boundary.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeInstallTlsFingerprintTables(
+    env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    document: JByteArray<'_>,
+) -> jint {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let Ok(bytes) = read_bounded_array(
+            &env,
+            &document,
+            MAX_TLS_FINGERPRINT_DOCUMENT_BYTES,
+            "fingerprint tables",
+        ) else {
+            return TLS_FINGERPRINT_TABLES_UNREADABLE;
+        };
+        match proto_reality::install_fingerprint_tables(&bytes) {
+            Ok(replaced) => jint::try_from(replaced).unwrap_or(jint::MAX),
+            Err(error) => {
+                log::warn!("tls fingerprint tables refused: {error}");
+                TLS_FINGERPRINT_TABLES_REFUSED
+            }
+        }
+    }));
+    result.unwrap_or(TLS_FINGERPRINT_TABLES_PANICKED)
+}
+
+/// Drop any installed document and go back to the tables compiled in.
+///
+/// The app calls this when the feed is switched off or its stored document
+/// stops reading back cleanly. It cannot fail, because the built-in set needs
+/// nothing to be usable.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeClearTlsFingerprintTables(
+    _env: JNIEnv<'_>,
+    _class: JClass<'_>,
+) {
+    let _ = catch_unwind(AssertUnwindSafe(proto_reality::clear_fingerprint_tables));
+}
+
+const TLS_FINGERPRINT_TABLES_UNREADABLE: jint = -1;
+const TLS_FINGERPRINT_TABLES_REFUSED: jint = -2;
+const TLS_FINGERPRINT_TABLES_PANICKED: jint = -3;
+
+/// The same ceiling the app's downloader enforces on the artifact. The
+/// committed set is under 100 KiB.
+const MAX_TLS_FINGERPRINT_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
+
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeStop(
     mut env: JNIEnv<'_>,
@@ -377,7 +444,7 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeS
         let Some(runtime) = lock(registry()).get(&key).cloned() else {
             return NATIVE_STOP_UNKNOWN_HANDLE;
         };
-        ecosystem::release_engine_handles(key, &runtime);
+        release_engine_handles(key, &runtime);
         match runtime.stop() {
             StopResult::Stopped => {
                 lock(registry()).remove(&key);
@@ -443,7 +510,7 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeF
         let Some(runtime) = lock(registry()).remove(&key) else {
             return NATIVE_STOP_UNKNOWN_HANDLE;
         };
-        ecosystem::release_engine_handles(key, &runtime);
+        release_engine_handles(key, &runtime);
         match runtime.force_kill() {
             StopResult::Stopped => NATIVE_STOPPED,
             StopResult::AlreadyStopped => NATIVE_ALREADY_STOPPED,
@@ -629,7 +696,11 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeD
 /// refusal code: `-1` invalid policy, `-2` unknown outbound, `-3` Tor
 /// unavailable in this build or profile, `-4` I2P unavailable, `-5` an overlay
 /// route without fake-IP DNS, `-6` per-app routing with no platform
-/// attribution, `-7` revision conflict. Zero means the handle is not running.
+/// attribution, `-7` revision conflict, `-8` fake-IP DNS asked of a packet-tunnel
+/// primary, `-9` `dns.route = "primary"` asked of a packet-tunnel primary. Zero
+/// means the handle is not running. The list is the negation of
+/// [`PolicyRefusal`], which `docs/abi.md` also tabulates; the numbers are ABI
+/// and must not be reordered.
 ///
 /// Codes rather than an exception because the app has to act differently on
 /// each: "this build has no Tor" is permanent and should retire the switch,
@@ -638,7 +709,7 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeD
 /// prose inside it, so the app could only ever show the same shrug (D11). The
 /// live tunnel is unaffected either way — a refused reload changes nothing.
 ///
-/// Seven of the eight codes name the thing that was wrong and can be acted on
+/// Every code but `-1` names the thing that was wrong and can be acted on
 /// alone. `-1` cannot: it covers a truncated write, a missing comma, a field
 /// spelled wrong and a field this schema removed, and the app is expected to
 /// respond differently to at least the first and the last. The words are kept
@@ -2022,12 +2093,6 @@ fn next_handle() -> u64 {
             return handle;
         }
     }
-}
-
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 #[cfg(target_os = "android")]

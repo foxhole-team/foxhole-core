@@ -133,7 +133,10 @@ impl IpStackUnknownTransport {
                     payload: Some(p),
                 })
             }
-            _ => unreachable!(),
+            // Same as the UDP stream's: the two ends come from one IP header,
+            // so a mixed pair is unreachable in practice — and a panic is
+            // still the wrong answer to a packet on the tun's own path.
+            _ => Err(IpStackError::InvalidPacket.into()),
         }
     }
 }

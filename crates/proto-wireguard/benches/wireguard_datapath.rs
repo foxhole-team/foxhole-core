@@ -15,7 +15,7 @@
 use std::hint::black_box;
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use proto_wireguard::amnezia::AmneziaParams;
+use proto_wireguard::amnezia::{AmneziaParams, HeaderRange};
 use proto_wireguard::message::{TRANSPORT_HEADER_LEN, TYPE_TRANSPORT};
 use proto_wireguard::noise::TransportKeys;
 use proto_wireguard::session::TransportSession;
@@ -78,10 +78,10 @@ fn tuned_params() -> AmneziaParams {
         response_junk_size: 15,
         cookie_junk_size: 0,
         transport_junk_size: 0,
-        header_initiation: 0x1000_0001,
-        header_response: 0x2000_0002,
-        header_cookie: 0x3000_0003,
-        header_transport: 0x4000_0004,
+        header_initiation: HeaderRange::single(0x1000_0001),
+        header_response: HeaderRange::single(0x2000_0002),
+        header_cookie: HeaderRange::single(0x3000_0003),
+        header_transport: HeaderRange::single(0x4000_0004),
     }
 }
 

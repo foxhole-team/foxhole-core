@@ -5,6 +5,8 @@ pub mod codec;
 mod connection;
 mod hop;
 mod obfs;
+#[cfg(test)]
+mod quic_fingerprint;
 mod session;
 mod udp;
 pub mod varint;

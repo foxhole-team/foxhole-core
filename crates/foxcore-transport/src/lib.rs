@@ -1,10 +1,19 @@
 #![forbid(unsafe_code)]
 
+pub mod backoff;
 mod datagram;
 mod grpc;
 mod h2io;
 mod http2;
 mod httpupgrade;
+/// JA3/JA4 over ClientHello bytes. Test tooling; see the module docs.
+#[cfg(feature = "fingerprinting")]
+pub mod ja;
+pub mod quic;
+/// QUIC Initial packets taken apart, for the QUIC half of the fingerprint
+/// surface. Test tooling; see the module docs.
+#[cfg(feature = "fingerprinting")]
+pub mod quic_initial;
 mod serverfirst;
 pub mod splice;
 mod tls;
@@ -57,7 +66,9 @@ pub fn ensure_process_crypto_provider() -> std::io::Result<()> {
 
 /// Compose the TLS layer (with ALPN forced to `h2` for gRPC/HTTP2 transports)
 /// and the stream transport into one client byte stream. Reality is handled by
-/// its own crate because it replaces TLS on raw TCP only.
+/// its own crate, which owns the ClientHello; a Reality profile substitutes
+/// that handshake for the TLS one here and then calls
+/// [`wrap_stream_transport`] itself with the same arguments.
 pub async fn establish_stream<S>(
     tcp: S,
     tls: &TlsConfig,

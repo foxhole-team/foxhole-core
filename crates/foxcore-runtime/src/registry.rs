@@ -4,9 +4,66 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
-use foxcore_api::{CoreEvent, EventSink, NamedOutboundConfig, OutboundConfig, OutboundId};
+use foxcore_api::{
+    CoreEvent, EventSink, NamedOutboundConfig, OutboundConfig, OutboundId, TrafficPolicyConfig,
+};
 use foxcore_dialer::ProtectedDialer;
-use foxcore_outbound::{InterruptionSink, Outbound, OutboundRegistry};
+use foxcore_outbound::{
+    DeferredOutbound, InterruptionSink, Outbound, OutboundKind, OutboundRegistry,
+};
+
+/// Whether each private overlay may be built at all.
+///
+/// Read *before* the outbounds are created, which is the whole fix: the gates
+/// used to be resolved after the registry existed and were consulted only at
+/// routing time, so a profile with `tor_enabled: false` still paid for a full
+/// Arti bootstrap — directory fetch, guard connections, timers — at every
+/// start, and could be delayed by `bootstrap_timeout_s` for a lane it was
+/// never going to use.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OverlayGates {
+    tor: bool,
+    i2p: bool,
+}
+
+impl OverlayGates {
+    /// The gates as the profile states them, answerable without a registry.
+    ///
+    /// `None` means "follow the profile" and is resolved later against the
+    /// built registry — it never means off, so nothing is skipped for it.
+    /// Only an explicit `false` is a decision this can act on.
+    pub(crate) fn from_traffic(traffic: &TrafficPolicyConfig) -> Self {
+        Self {
+            tor: traffic.tor_enabled != Some(false),
+            i2p: traffic.i2p_enabled != Some(false),
+        }
+    }
+
+    pub(crate) fn new(tor: bool, i2p: bool) -> Self {
+        Self { tor, i2p }
+    }
+
+    fn allows(self, kind: OutboundKind) -> bool {
+        match kind {
+            OutboundKind::Tor => self.tor,
+            OutboundKind::I2p => self.i2p,
+            _ => true,
+        }
+    }
+
+    /// Whether a rebuild of this entry is worth starting.
+    ///
+    /// A lane skipped because its overlay was off is not a failure and is not
+    /// retried on a network change. It becomes buildable again only when the
+    /// live policy has turned the overlay back on — a decision the user made,
+    /// not a condition that changed under them.
+    pub(crate) fn may_build(self, deferred: &DeferredOutbound) -> bool {
+        if deferred.is_gated_off() {
+            return self.allows(deferred.kind());
+        }
+        deferred.is_retryable()
+    }
+}
 
 /// The addresses the platform put on the tun.
 ///
@@ -62,21 +119,33 @@ type PacketTunnel = foxcore_outbound::PacketTunnelOutbound;
 #[cfg(not(feature = "wireguard"))]
 type PacketTunnel = std::convert::Infallible;
 
+// One more than clippy's threshold, and the argument that pushed it over is the
+// gate: it has to arrive here rather than be resolved after the registry, or
+// the build it suppresses has already happened.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_outbound_registry(
     default_config: OutboundConfig,
     named_configs: Vec<NamedOutboundConfig>,
     dialer: ProtectedDialer,
     handshake_timeout_ms: u64,
+    gates: OverlayGates,
     events: &EventSink,
     interruption: &InterruptionSink,
     #[allow(unused_variables)] tun: &foxcore_api::TunConfig,
 ) -> io::Result<(OutboundRegistry, Option<PacketTunnel>)> {
     let is_packet_tunnel = default_config.is_packet_tunnel();
     let mut tasks = tokio::task::JoinSet::new();
+    let mut default = None;
+    let mut named = HashMap::new();
     let default_dialer = dialer.clone();
     // Held back when the primary is a packet tunnel: it is built after the
     // proxies, by a path that produces an `OutboundMode` instead of an
     // `Outbound`.
+    // Deliberately not gated, even when it is the Tor profile. The route gate
+    // blocks `RouteAction::Tor` and `Outbound("tor")`, and the default route is
+    // `Outbound("default")` — so a profile whose *primary* is Tor still carries
+    // every unmatched flow through it while the overlay switch is off. Skipping
+    // this build would turn a working profile into one that refuses everything.
     let packet_tunnel_config = if is_packet_tunnel {
         Some(default_config)
     } else {
@@ -98,6 +167,22 @@ pub(crate) async fn create_outbound_registry(
         outbound,
     } in named_configs
     {
+        let kind = OutboundKind::of(&outbound);
+        // The overlay is switched off, so the build is skipped rather than
+        // performed and discarded. For Tor that build is a full Arti bootstrap;
+        // running it for a lane the user turned off is the traffic the switch
+        // exists to suppress, and it can hold the start for the whole
+        // `bootstrap_timeout_s`. The entry stays under the same id and kind, so
+        // routing still refuses .onion as "the overlay is off".
+        if !gates.allows(kind) {
+            named.insert(
+                id.clone(),
+                Arc::new(Outbound::Deferred(DeferredOutbound::gated_off(
+                    id, kind, outbound,
+                ))),
+            );
+            continue;
+        }
         let dialer = dialer.clone();
         let interruption = interruption.clone();
         tasks.spawn(async move {
@@ -112,8 +197,6 @@ pub(crate) async fn create_outbound_registry(
         });
     }
 
-    let mut default = None;
-    let mut named = HashMap::new();
     while let Some(joined) = tasks.join_next().await {
         // A `JoinError` is a panic in our own build task, not a network
         // failure, and it takes the id and the profile down with it — there is
@@ -226,15 +309,21 @@ fn unavailable_outbound(
 /// bootstraps. Entries whose failure cannot be fixed by retrying — a malformed
 /// key, a protocol this build does not carry — are skipped rather than
 /// hammered.
+///
+/// `gates` is read live rather than captured at start, and it is what keeps a
+/// switched-off overlay switched off: a lane skipped by the gate is never
+/// rebuilt by a network change, and is rebuilt by a reload only once that
+/// reload has turned the overlay back on.
 pub(crate) async fn retry_deferred_outbounds(
     outbounds: Arc<OutboundRegistry>,
     dialer: ProtectedDialer,
     handshake_timeout_ms: u64,
+    gates: OverlayGates,
     events: EventSink,
 ) -> Vec<String> {
     let mut attempts = tokio::task::JoinSet::new();
     for deferred in outbounds.deferred() {
-        if !deferred.is_retryable() || !deferred.begin_attempt() {
+        if !gates.may_build(&deferred) || !deferred.begin_attempt() {
             continue;
         }
         let dialer = dialer.clone();

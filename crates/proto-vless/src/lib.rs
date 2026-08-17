@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod codec;
+pub mod encryption;
 pub mod packetaddr;
 pub mod vision;
 pub mod xudp;
@@ -11,15 +12,18 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
+use encryption::{ClientInstance, LiveCrypto};
 use foxcore_api::{
     Destination, PacketEncoding, RealityFingerprint, StreamTransportConfig, TlsConfig, VlessConfig,
 };
 use foxcore_dialer::ProtectedDialer;
 use foxcore_transport::{
-    BoxDatagramSession, BoxStream, Datagram, datagram_channel, establish_stream, wrap_tls_spliced,
+    BoxDatagramSession, BoxStream, Datagram, datagram_channel, establish_stream,
+    wrap_stream_transport, wrap_tls_spliced,
 };
 use proto_reality::{
-    RealityHelloProfile, decode_public_key, decode_short_id, wrap_reality, wrap_reality_spliced,
+    RealityHello, RealityHelloProfile, decode_public_key, decode_short_id, wrap_reality,
+    wrap_reality_spliced,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
@@ -35,6 +39,10 @@ pub struct VlessOutbound {
     /// `flow=xtls-rprx-vision`. Vision replaces the whole stream setup, so it is
     /// resolved once here instead of being re-parsed per connection.
     vision: bool,
+    /// VLESS Encryption, when the profile carries `encryption=`. Shared across
+    /// connections because the 0-RTT ticket it caches is what makes the second
+    /// and later connections skip the key exchange.
+    encryption: Option<Arc<ClientInstance>>,
 }
 
 struct PreparedReality {
@@ -43,8 +51,10 @@ struct PreparedReality {
     server_name: String,
     /// Which ClientHello the transport writes. Resolved once here so the
     /// config name and the profile table are reconciled at outbound
-    /// construction rather than per connection.
-    hello_profile: RealityHelloProfile,
+    /// construction rather than per connection. `Randomized` is the one value
+    /// that resolves to no table at all: it names uTLS' generator, which draws
+    /// a fresh hello inside every connection.
+    hello: RealityHello,
     handshake_timeout: Duration,
 }
 
@@ -63,16 +73,23 @@ impl VlessOutbound {
                         "VLESS Reality and ordinary TLS are mutually exclusive",
                     ));
                 }
-                if !matches!(config.transport, StreamTransportConfig::Raw) {
-                    return Err(invalid("VLESS Reality currently requires raw TCP"));
-                }
+                // No transport gate: REALITY stands where TLS would stand, and
+                // the stream transport is composed above it by `connect`.
                 Ok(Arc::new(PreparedReality {
                     public_key: decode_public_key(reality.public_key.expose())?,
                     short_id: decode_short_id(reality.short_id.expose())?,
                     server_name: reality.server_name.clone(),
-                    hello_profile: match reality.fingerprint {
-                        RealityFingerprint::Chrome133 => RealityHelloProfile::Chrome133,
-                        RealityFingerprint::Chrome131 => RealityHelloProfile::Chrome131,
+                    hello: match reality.fingerprint {
+                        RealityFingerprint::Chrome151 => RealityHelloProfile::Chrome151.into(),
+                        RealityFingerprint::Chrome133 => RealityHelloProfile::Chrome133.into(),
+                        RealityFingerprint::Chrome131 => RealityHelloProfile::Chrome131.into(),
+                        RealityFingerprint::Edge85 => RealityHelloProfile::Edge85.into(),
+                        RealityFingerprint::Safari263 => RealityHelloProfile::Safari263.into(),
+                        RealityFingerprint::Ios14 => RealityHelloProfile::Ios14.into(),
+                        RealityFingerprint::Qq111 => RealityHelloProfile::Qq111.into(),
+                        RealityFingerprint::Firefox153 => RealityHelloProfile::Firefox153.into(),
+                        RealityFingerprint::Firefox148 => RealityHelloProfile::Firefox148.into(),
+                        RealityFingerprint::Randomized => RealityHello::Randomized,
                     },
                     handshake_timeout: Duration::from_millis(reality.handshake_timeout_ms),
                 }))
@@ -100,6 +117,29 @@ impl VlessOutbound {
                 ));
             }
         }
+        // The encryption layer sits between the transport and the inner VLESS
+        // protocol, so it is orthogonal to `tls`/`reality` and composes with
+        // any of them. Parsed once here: a profile that names a variant this
+        // build cannot execute must fail at construction, not per connection.
+        let encryption = config
+            .encryption
+            .as_ref()
+            .map(|spec| {
+                if vision {
+                    // Upstream pairs XTLS with this layer deliberately, but the
+                    // handover needs a splice point the record layer does not
+                    // expose yet.
+                    return Err(invalid(
+                        "VLESS Vision over VLESS encryption is not implemented",
+                    ));
+                }
+                let params = encryption::parse_encryption(spec.expose()).map_err(|error| {
+                    io::Error::new(io::ErrorKind::Unsupported, error.to_string())
+                })?;
+                Ok(Arc::new(ClientInstance::new(params)))
+            })
+            .transpose()?;
+
         let mut global_id_key = [0_u8; 32];
         getrandom::fill(&mut global_id_key)
             .map_err(|_| io::Error::other("operating system RNG failed"))?;
@@ -109,6 +149,7 @@ impl VlessOutbound {
             dialer,
             global_id_key,
             vision,
+            encryption,
         })
     }
 
@@ -246,7 +287,7 @@ impl VlessOutbound {
                     reality.public_key,
                     reality.short_id,
                     reality.server_name.clone(),
-                    reality.hello_profile,
+                    reality.hello,
                     reality.handshake_timeout,
                     codec,
                 )
@@ -268,20 +309,30 @@ impl VlessOutbound {
             .dialer
             .connect_tcp_server(&self.config.server, self.config.port, self.config.server_ip)
             .await?;
-        // Reality replaces TLS on raw TCP (config-enforced Raw transport); every
-        // other profile composes TLS + stream transport via establish_stream.
+        // Reality takes the place of TLS, not of the carrier: the handshake
+        // runs on the TCP socket, and gRPC/WebSocket/HTTP2 are composed above
+        // its record layer by the same `wrap_stream_transport` that
+        // `establish_stream` calls after a TLS handshake. `tls: true` there is
+        // the scheme the transport announces (`wss://`, `https://`), which is
+        // what the peer expects behind a TLS-shaped handshake.
         let mut stream: BoxStream = if let Some(reality) = &self.reality {
-            Box::new(
-                wrap_reality(
-                    tcp,
-                    reality.public_key,
-                    reality.short_id,
-                    reality.server_name.clone(),
-                    reality.hello_profile,
-                    reality.handshake_timeout,
-                )
-                .await?,
+            let secured = wrap_reality(
+                tcp,
+                reality.public_key,
+                reality.short_id,
+                reality.server_name.clone(),
+                reality.hello,
+                reality.handshake_timeout,
             )
+            .await?;
+            wrap_stream_transport(
+                secured,
+                &self.config.transport,
+                &self.config.server,
+                self.config.port,
+                true,
+            )
+            .await?
         } else {
             establish_stream(
                 tcp,
@@ -292,6 +343,9 @@ impl VlessOutbound {
             )
             .await?
         };
+        if let Some(encryption) = &self.encryption {
+            stream = Box::new(encryption.handshake(stream, &mut LiveCrypto).await?);
+        }
         let request = self.request_header(command, destination)?;
         stream.write_all(&request).await?;
         stream.flush().await?;

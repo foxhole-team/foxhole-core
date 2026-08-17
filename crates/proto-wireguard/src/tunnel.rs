@@ -83,11 +83,117 @@ pub struct PeerSettings {
     /// these are a list the tunnel walks — and because the receiving side never
     /// looks at them, so they are not part of what both peers must agree on.
     pub init_packets: Vec<InitPacket>,
+    /// AmneziaWG 3.0 timer overrides. Every field defaults to the WireGuard
+    /// constant of the same name.
+    pub timers: PeerTimers,
+}
+
+/// A profile's replacements for the five WireGuard timing constants, in seconds.
+///
+/// AmneziaWG 3.0 writes each as a range and the reference re-draws inside it
+/// every time it arms the corresponding timer. This tunnel draws once, in
+/// [`PeerTunnel::new`], and the difference is deliberate: none of these five
+/// values ever appears on the wire — they decide only when *this* side acts — so
+/// re-drawing per use buys no unlinkability a per-tunnel draw lacks, while a
+/// value that changed under `is_expired` would make "may this key still send?"
+/// answer differently on two consecutive calls with the same clock.
+///
+/// The headers are the opposite case and are treated the opposite way: `H1..H4`
+/// go on every datagram, so they are drawn per datagram.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PeerTimers {
+    pub rekey_timeout_s: Option<(u16, u16)>,
+    pub rekey_after_time_s: Option<(u16, u16)>,
+    pub reject_after_time_s: Option<(u16, u16)>,
+    pub keepalive_timeout_s: Option<(u16, u16)>,
+    pub max_handshake_attempts: Option<(u16, u16)>,
+}
+
+/// The five timers with one value each, in milliseconds, for the life of a
+/// tunnel. Built once from [`PeerTimers`] plus the spec defaults.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResolvedTimers {
+    rekey_timeout_ms: u64,
+    rekey_after_time_ms: u64,
+    reject_after_time_ms: u64,
+    keepalive_timeout_ms: u64,
+    max_handshake_attempts: u32,
+}
+
+impl ResolvedTimers {
+    fn resolve(timers: &PeerTimers, entropy: &mut dyn Entropy) -> Result<Self, WireguardError> {
+        // A range is inclusive at both ends, like every other AmneziaWG range.
+        let mut draw = |range: Option<(u16, u16)>, default_s: u64| -> Result<u64, WireguardError> {
+            let Some((low, high)) = range else {
+                return Ok(default_s);
+            };
+            let (low, high) = (u64::from(low), u64::from(high.max(low)));
+            if low == high {
+                return Ok(low);
+            }
+            let span = high - low + 1;
+            Ok(low + u64::from(entropy.next_u32()?) % span)
+        };
+        let rekey_timeout_ms = draw(timers.rekey_timeout_s, REKEY_TIMEOUT_MS / 1_000)? * 1_000;
+        let attempts = draw(
+            timers.max_handshake_attempts,
+            REKEY_ATTEMPT_TIME_MS / REKEY_TIMEOUT_MS,
+        )?;
+        Ok(Self {
+            // A zero here would turn the retry into a busy loop, so the floor is
+            // one second — the smallest interval this API can even express.
+            rekey_timeout_ms: rekey_timeout_ms.max(1_000),
+            rekey_after_time_ms: draw(timers.rekey_after_time_s, REKEY_AFTER_TIME_MS / 1_000)?
+                * 1_000,
+            reject_after_time_ms: draw(timers.reject_after_time_s, REJECT_AFTER_TIME_MS / 1_000)?
+                * 1_000,
+            keepalive_timeout_ms: draw(timers.keepalive_timeout_s, KEEPALIVE_TIMEOUT_MS / 1_000)?
+                * 1_000,
+            max_handshake_attempts: u32::try_from(attempts).unwrap_or(u32::MAX).max(1),
+        })
+    }
 }
 
 /// WireGuard §6.1 `REKEY_TIMEOUT`: how long an unanswered initiation stands
 /// before it is sent again.
 pub const REKEY_TIMEOUT_MS: u64 = 5_000;
+
+/// WireGuard §6.1 `REKEY_TIMEOUT` jitter: the retry is spread over up to a third
+/// of a second past the timeout rather than landing exactly on it.
+///
+/// The reference is `REKEY_TIMEOUT_JITTER_MAX_JIFFIES = HZ / 3`, applied in
+/// `wg_timers_handshake_initiated`. It is not decoration: without it every
+/// client of one provider that lost connectivity at the same moment — a cell
+/// handover, a rebooted upstream — retries in lockstep every five seconds, and
+/// the far end sees a synchronised burst instead of a spread. On the phone it is
+/// also what stops several peers' retries from waking the CPU together.
+pub const REKEY_TIMEOUT_JITTER_MAX_MS: u64 = 333;
+
+/// WireGuard §6.4 `REKEY_ATTEMPT_TIME`: after this long of unanswered
+/// initiations the peer is given up on and the retry stops.
+///
+/// Without it `retry_handshake_if_due` sent a fresh initiation every five
+/// seconds for as long as the tunnel object lived — and on an AmneziaWG profile
+/// that is not one datagram but the whole `I1..I5` chain, `Jc` junk packets and
+/// the initiation, seventeen thousand times a day against a peer that is not
+/// there. The lost-connectivity case is exactly the one where the radio is
+/// already the most expensive thing on the device.
+///
+/// Giving up is not the same as giving up permanently: `send_packet` starts a
+/// fresh series the moment the tun has something to send, which is the
+/// reference's behaviour (`wg_packet_send_staged_packets` with no keypair).
+pub const REKEY_ATTEMPT_TIME_MS: u64 = 90_000;
+
+/// WireGuard §6.5 `KEEPALIVE_TIMEOUT`: having received a validated data packet
+/// and sent nothing back for this long, send an empty one.
+///
+/// This is the *passive* keepalive and it is not the persistent one: it needs no
+/// configuration, it is what the protocol requires of every implementation, and
+/// it is what makes a receiver's silence mean something. A peer that has heard
+/// nothing back cannot tell a working tunnel from a dead one — which is the
+/// assumption the relay's own peer-silence window above this crate already
+/// makes about *our* peer.
+pub const KEEPALIVE_TIMEOUT_MS: u64 = 10_000;
 
 /// WireGuard §6.1 `REKEY_AFTER_TIME`: a session starts a replacement handshake
 /// at this age, well before `REJECT_AFTER_TIME` makes it unusable.
@@ -150,7 +256,14 @@ pub const COOKIE_LIFETIME_MS: u64 = 120_000;
 /// An initiation that is waiting for its response.
 struct InFlight {
     handshake: Box<Handshake>,
-    sent_ms: u64,
+    /// When this initiation may be replaced: `REKEY_TIMEOUT` plus this attempt's
+    /// own jitter, computed once when it went out rather than at each tick.
+    ///
+    /// A stamp rather than the "sent at" it replaced, because with jitter the
+    /// two are no longer the same question: the deadline a caller is told about
+    /// through `next_deadline_ms` has to be the one `tick` acts on, and deriving
+    /// it twice from a start time would re-draw the jitter each time.
+    retry_at_ms: u64,
     /// The `mac1` of the initiation that went out.
     ///
     /// Kept because it is the associated data of the cookie reply this message
@@ -173,8 +286,8 @@ struct Live {
 
 impl Live {
     /// Past `REJECT_AFTER_TIME` the key is dead for every purpose (§6.1).
-    fn is_expired(&self, now_ms: u64) -> bool {
-        now_ms.saturating_sub(self.established_ms) >= REJECT_AFTER_TIME_MS
+    fn is_expired(&self, now_ms: u64, reject_after_ms: u64) -> bool {
+        now_ms.saturating_sub(self.established_ms) >= reject_after_ms
     }
 
     /// Whether this session may still seal outbound packets.
@@ -182,8 +295,8 @@ impl Live {
     /// Two independent limits, both hard: the age above, and
     /// `REJECT_AFTER_MESSAGES` on the counter. Sending past either is a nonce
     /// the peer has been told to refuse, which is worse than not sending.
-    fn can_send(&self, now_ms: u64) -> bool {
-        !self.is_expired(now_ms) && self.session.can_send()
+    fn can_send(&self, now_ms: u64, reject_after_ms: u64) -> bool {
+        !self.is_expired(now_ms, reject_after_ms) && self.session.can_send()
     }
 }
 
@@ -231,6 +344,19 @@ pub struct PeerTunnel {
     /// When the last datagram was handed to the peer's endpoint. The persistent
     /// keepalive is measured from here, not from the last tick.
     last_sent_ms: u64,
+    /// The five WireGuard timing constants as this profile set them.
+    timers: ResolvedTimers,
+    /// Initiations sent in the current series. Reset when a handshake completes
+    /// and when a new series starts; compared against
+    /// `timers.max_handshake_attempts` to enforce `REKEY_ATTEMPT_TIME`.
+    handshake_attempts: u32,
+    /// When the last *validated data packet* arrived — WireGuard §6.5's trigger
+    /// for the passive keepalive.
+    ///
+    /// Only a packet that carried payload counts. The peer's own keepalives are
+    /// empty, and answering an empty packet with an empty packet is a loop two
+    /// implementations can sustain forever between them.
+    data_received_ms: Option<u64>,
     transmit: VecDeque<Outgoing>,
     /// Packets that arrived before a session existed. They are held rather than
     /// dropped so the first connection attempt is not lost, and never sent in
@@ -266,16 +392,23 @@ const MAX_SPARE_BUFFERS: usize = 4;
 const MAX_SPARE_CAPACITY: usize = 2048;
 
 impl PeerTunnel {
-    pub fn new(settings: PeerSettings, entropy: Box<dyn Entropy>) -> Result<Self, WireguardError> {
+    pub fn new(
+        settings: PeerSettings,
+        mut entropy: Box<dyn Entropy>,
+    ) -> Result<Self, WireguardError> {
         settings.amnezia.validate()?;
         let identity = StaticIdentity::new(
             &settings.private_key,
             settings.peer_public_key,
             settings.preshared_key,
         )?;
+        let timers = ResolvedTimers::resolve(&settings.timers, entropy.as_mut())?;
         Ok(Self {
             identity,
             amnezia: settings.amnezia,
+            timers,
+            handshake_attempts: 0,
+            data_received_ms: None,
             persistent_keepalive_s: settings.persistent_keepalive_s,
             reserved: settings.reserved,
             entropy,
@@ -297,6 +430,16 @@ impl PeerTunnel {
     /// costs one allocation and a recycled one costs none.
     fn take_buffer(&mut self) -> Vec<u8> {
         self.spare.pop_front().unwrap_or_default()
+    }
+
+    /// The persistent keepalive this peer was configured with, in seconds.
+    ///
+    /// Exposed because the layer above has to reason about it and cannot
+    /// otherwise: a tunnel that is idle but healthy is silent for one keepalive
+    /// interval at a time, so any "the peer has stopped answering" window up
+    /// there has to be derived from this value rather than guessed at.
+    pub fn persistent_keepalive_s(&self) -> Option<u16> {
+        self.persistent_keepalive_s.filter(|value| *value > 0)
     }
 
     /// How many datagram buffers are parked for reuse. Test observability: the
@@ -371,15 +514,13 @@ impl PeerTunnel {
         if self
             .live
             .as_ref()
-            .is_some_and(|live| live.is_expired(self.now_ms))
+            .is_some_and(|live| live.is_expired(self.now_ms, self.timers.reject_after_time_ms))
         {
             self.live = None;
         }
-        if self
-            .previous
-            .as_ref()
-            .is_some_and(|previous| previous.is_expired(self.now_ms))
-        {
+        if self.previous.as_ref().is_some_and(|previous| {
+            previous.is_expired(self.now_ms, self.timers.reject_after_time_ms)
+        }) {
             self.previous = None;
         }
     }
@@ -388,7 +529,7 @@ impl PeerTunnel {
     fn can_seal(&self) -> bool {
         self.live
             .as_ref()
-            .is_some_and(|live| live.can_send(self.now_ms))
+            .is_some_and(|live| live.can_send(self.now_ms, self.timers.reject_after_time_ms))
     }
 
     /// Seal one packet against the live session and queue the datagram.
@@ -557,6 +698,10 @@ impl PeerTunnel {
         let Some(length) = ip_packet_len(plaintext) else {
             return Ok(Received::None);
         };
+        // §6.5's trigger, and only here: `ip_packet_len` already returned `None`
+        // for an empty plaintext above, so a peer's keepalive never reaches this
+        // line and never provokes one back.
+        self.data_received_ms = Some(self.now_ms);
         // `ip_packet_len` refuses a declared length longer than what arrived, so
         // this range is inside the plaintext by construction.
         out.put_packet(&plaintext[..length]);
@@ -620,6 +765,9 @@ impl PeerTunnel {
             .consume_response(&self.identity, &response)?;
         // Committed from here on: the response opened, so it came from the peer.
         self.handshake = None;
+        // `wg_timers_handshake_complete`: the series is over, so the next one
+        // starts from zero rather than inheriting a spent budget.
+        self.handshake_attempts = 0;
         // The outgoing session rotates; the one it replaces stays for receiving
         // until `REJECT_AFTER_TIME` retires it, so datagrams already in flight
         // under the old key still arrive.
@@ -651,19 +799,109 @@ impl PeerTunnel {
         self.expire_sessions();
         self.retry_handshake_if_due()?;
         self.rekey_if_due()?;
+        self.send_passive_keepalive_if_due()?;
         self.send_keepalive_if_due()
+    }
+
+    /// When [`Self::tick`] next has something to do, on the caller's clock.
+    ///
+    /// `None` means no timer is pending at all: nothing to expire, no handshake
+    /// to retry, no rekey due and no keepalive to send. A caller that has this
+    /// can sleep until the deadline instead of polling, and a caller that gets
+    /// `None` can sleep until traffic arrives.
+    ///
+    /// The point is the phone. WireGuard is silent by design when nothing is
+    /// moving, but a fixed one-second tick above it is 86 400 wakeups a day
+    /// against a shortest real deadline of the 25-second keepalive — the timer,
+    /// not the protocol, is then what keeps the CPU out of deep idle.
+    ///
+    /// Every arm mirrors one condition in [`Self::tick`]; keep them in step.
+    pub fn next_deadline_ms(&self) -> Option<u64> {
+        let mut next: Option<u64> = None;
+        let mut consider = |deadline: u64| {
+            next = Some(next.map_or(deadline, |current: u64| current.min(deadline)));
+        };
+
+        let reject_after_ms = self.timers.reject_after_time_ms;
+        if let Some(in_flight) = &self.handshake {
+            consider(in_flight.retry_at_ms);
+        }
+        if let Some(live) = &self.live {
+            consider(live.established_ms.saturating_add(reject_after_ms));
+            if self.handshake.is_none() {
+                // `REKEY_AFTER_MESSAGES` is a counter and not a clock, so a
+                // session already past it is due now rather than at a stamp.
+                if live.session.needs_rekey() {
+                    consider(self.now_ms);
+                } else {
+                    consider(
+                        live.established_ms
+                            .saturating_add(self.timers.rekey_after_time_ms),
+                    );
+                }
+            }
+            if live.can_send(self.now_ms, reject_after_ms) {
+                if let Some(interval_s) = self.persistent_keepalive_s.filter(|value| *value > 0) {
+                    consider(
+                        self.last_sent_ms
+                            .saturating_add(u64::from(interval_s).saturating_mul(1_000)),
+                    );
+                }
+                // The §6.5 arm. It is the shortest deadline a tunnel normally
+                // has — ten seconds against the keepalive's twenty-five — so
+                // leaving it out would have the caller sleep straight through
+                // the one thing the protocol requires of it.
+                if let Some(received_ms) = self
+                    .data_received_ms
+                    .filter(|_| self.last_sent_ms < self.data_received_ms.unwrap_or_default())
+                {
+                    consider(received_ms.saturating_add(self.timers.keepalive_timeout_ms));
+                }
+            }
+        }
+        if let Some(previous) = &self.previous {
+            consider(previous.established_ms.saturating_add(reject_after_ms));
+        }
+        next
     }
 
     fn retry_handshake_if_due(&mut self) -> Result<(), WireguardError> {
         let Some(in_flight) = &self.handshake else {
             return Ok(());
         };
-        if self.now_ms.saturating_sub(in_flight.sent_ms) < REKEY_TIMEOUT_MS {
+        if self.now_ms < in_flight.retry_at_ms {
+            return Ok(());
+        }
+        // WireGuard §6.4: past `REKEY_ATTEMPT_TIME` the peer is deemed
+        // unreachable and the series stops. What made this worth fixing is what
+        // one attempt costs on an obfuscated profile — `I1..I5`, `Jc` junk
+        // datagrams and the initiation — repeated every five seconds against a
+        // peer that is not answering, which is precisely the lost-connectivity
+        // case where the radio is already the most expensive thing running.
+        if self.handshake_attempts >= self.timers.max_handshake_attempts {
+            self.handshake = None;
+            // The reference purges its staged packets here too. Holding them
+            // would mean the first packet sent after the network returns is one
+            // from before it left, and the queue is bounded memory kept for a
+            // session that has been given up on.
+            self.pending.clear();
             return Ok(());
         }
         // A fresh initiation, not a retransmission of the old bytes: the peer
         // rejects a replayed timestamp, and a new ephemeral costs nothing here.
         self.start_handshake()
+    }
+
+    /// Whether the retry series has been abandoned and nothing is outstanding.
+    ///
+    /// Test observability, and the one thing "gave up" looks like from outside:
+    /// no handshake in flight, no session, and attempts already spent. A caller
+    /// cannot distinguish it from "never started" by watching the wire, which is
+    /// the whole point — both are silent.
+    pub fn handshake_abandoned(&self) -> bool {
+        self.handshake.is_none()
+            && self.live.is_none()
+            && self.handshake_attempts >= self.timers.max_handshake_attempts
     }
 
     /// Start a new handshake before the current session ages out. The live
@@ -679,7 +917,7 @@ impl PeerTunnel {
         // the counter's early warning in the same way `REKEY_AFTER_TIME` is the
         // age's, and waiting for the next outbound packet to notice would put
         // the replacement handshake after the point where sending has to stop.
-        if self.now_ms.saturating_sub(live.established_ms) < REKEY_AFTER_TIME_MS
+        if self.now_ms.saturating_sub(live.established_ms) < self.timers.rekey_after_time_ms
             && !live.session.needs_rekey()
         {
             return Ok(());
@@ -700,6 +938,39 @@ impl PeerTunnel {
         }
         // An empty sealed packet is WireGuard's keepalive: it refreshes the NAT
         // mapping without handing the peer anything to forward.
+        self.pending.push_back(Vec::new());
+        self.flush_pending()
+    }
+
+    /// WireGuard §6.5: having received a validated data packet and sent nothing
+    /// back for `KEEPALIVE_TIMEOUT`, send an empty one.
+    ///
+    /// This is required of every implementation and has nothing to do with the
+    /// persistent keepalive above, which is optional and configured. It is what
+    /// makes a peer's silence informative — and this crate was already relying
+    /// on the *other* peer implementing it, because the relay's peer-silence
+    /// window is derived from the assumption that a live peer answers.
+    ///
+    /// The trigger is cleared by sending, not by a timer: anything authenticated
+    /// leaving for the endpoint satisfies "packets have been sent to the peer",
+    /// which is why the comparison is against `last_sent_ms` rather than a flag.
+    fn send_passive_keepalive_if_due(&mut self) -> Result<(), WireguardError> {
+        let Some(received_ms) = self.data_received_ms else {
+            return Ok(());
+        };
+        if self.last_sent_ms >= received_ms {
+            // Something has already gone back since that packet arrived, so the
+            // peer has its answer and there is nothing to say.
+            self.data_received_ms = None;
+            return Ok(());
+        }
+        if self.now_ms.saturating_sub(received_ms) < self.timers.keepalive_timeout_ms {
+            return Ok(());
+        }
+        if !self.can_seal() {
+            return Ok(());
+        }
+        self.data_received_ms = None;
         self.pending.push_back(Vec::new());
         self.flush_pending()
     }
@@ -727,6 +998,12 @@ impl PeerTunnel {
             initiation.mac2 = compute_mac2(cookie, &initiation.encode(), INITIATION_MAC2_OFFSET);
         }
         let mac1 = initiation.mac1;
+        // The jitter of `wg_timers_handshake_initiated`, drawn per attempt. It
+        // is added to the timeout and never subtracted: the spec's five seconds
+        // is a floor, and retrying early would be a change to the protocol
+        // rather than to its scheduling.
+        let jitter_ms =
+            u64::from(self.entropy.next_u32()?) % (REKEY_TIMEOUT_JITTER_MAX_MS.saturating_add(1));
         let datagram = self.obfuscate(&initiation.encode())?;
         self.transmit.extend(init_packets);
         self.transmit.extend(junk_packets);
@@ -736,9 +1013,13 @@ impl PeerTunnel {
         });
         self.handshake = Some(InFlight {
             handshake: Box::new(handshake),
-            sent_ms: self.now_ms,
+            retry_at_ms: self
+                .now_ms
+                .saturating_add(self.timers.rekey_timeout_ms)
+                .saturating_add(jitter_ms),
             mac1,
         });
+        self.handshake_attempts = self.handshake_attempts.saturating_add(1);
         Ok(())
     }
 
@@ -832,8 +1113,14 @@ impl PeerTunnel {
         let mut datagram = self.take_buffer();
         let entropy = &mut self.entropy;
         let mut fill_result = Ok(());
-        amnezia.obfuscate_into(message, &mut datagram, |junk| {
-            fill_result = entropy.fill(junk);
+        // Called more than once on a 2.0 profile — junk prefix, then the header
+        // draw — so the first failure is the one that is kept: overwriting it
+        // with a later `Ok` would let a datagram out with entropy that was never
+        // supplied.
+        amnezia.obfuscate_into(message, &mut datagram, |bytes| {
+            if fill_result.is_ok() {
+                fill_result = entropy.fill(bytes);
+            }
         })?;
         fill_result?;
         // Stamped after the transform, never before: the transform classifies
@@ -854,8 +1141,10 @@ impl PeerTunnel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::amnezia::AmneziaParams;
-    use crate::message::{INITIATION_LEN, Initiation, TYPE_INITIATION, message_type};
+    use crate::amnezia::{AmneziaParams, HeaderRange};
+    use crate::message::{
+        INITIATION_LEN, Initiation, TYPE_INITIATION, TYPE_TRANSPORT, message_type,
+    };
     use crate::noise::TransportKeys;
     use crate::noise::test_support::Responder;
     use crate::session::{TransportSession, ip_packet_len};
@@ -895,6 +1184,7 @@ mod tests {
             persistent_keepalive_s: None,
             reserved: [0, 0, 0],
             init_packets: Vec::new(),
+            timers: PeerTimers::default(),
         }
     }
 
@@ -914,6 +1204,13 @@ mod tests {
             .expect("a packet with no session starts a handshake");
         Initiation::decode(&datagram).unwrap()
     }
+
+    /// The earliest tick at which a retry is certainly due.
+    ///
+    /// The retry is `REKEY_TIMEOUT` plus up to `REKEY_TIMEOUT_JITTER_MAX_MS`, so
+    /// a test that wants the retry to have happened has to clear the whole
+    /// jitter window rather than land on the timeout itself.
+    const RETRY_DUE_MS: u64 = REKEY_TIMEOUT_MS + REKEY_TIMEOUT_JITTER_MAX_MS;
 
     /// The initiation the retry timer produces, decoded.
     fn retried_initiation(tunnel: &mut PeerTunnel, now_ms: u64) -> Initiation {
@@ -968,7 +1265,7 @@ mod tests {
              much to do; the existing retry timer carries the cookie"
         );
 
-        let retried = retried_initiation(&mut tunnel, REKEY_TIMEOUT_MS + 10);
+        let retried = retried_initiation(&mut tunnel, RETRY_DUE_MS + 10);
         assert_ne!(retried.mac2, [0; MAC_LEN]);
         assert_eq!(
             retried.mac2,
@@ -1005,7 +1302,7 @@ mod tests {
             .unwrap();
 
         assert_ne!(
-            retried_initiation(&mut tunnel, REKEY_TIMEOUT_MS).mac2,
+            retried_initiation(&mut tunnel, RETRY_DUE_MS).mac2,
             [0; MAC_LEN],
             "this test is only meaningful while the cookie is actually attached"
         );
@@ -1054,7 +1351,7 @@ mod tests {
         );
 
         assert_eq!(
-            retried_initiation(&mut tunnel, REKEY_TIMEOUT_MS + 10).mac2,
+            retried_initiation(&mut tunnel, RETRY_DUE_MS + 10).mac2,
             [0; MAC_LEN],
             "and neither refusal may have left a cookie behind"
         );
@@ -1127,6 +1424,61 @@ mod tests {
         let mut initiation = Vec::new();
         assert!(tunnel.poll_transmit(&mut initiation).is_some());
         assert_eq!(&initiation[1..4], &[0, 0, 0]);
+    }
+
+    /// The reserved field is the peer's to use, and this crate says so twice:
+    /// `message_kind` reads a type through it, and every decoder is built on
+    /// that. The receive path did not — it classified on all four header bytes
+    /// as one little-endian word, so a provider that stamps a client identifier
+    /// and echoes it back had every transport datagram refused. The handshake
+    /// completes, `bytes_up` climbs, and not one packet ever reaches the tun.
+    #[test]
+    fn a_peer_that_stamps_the_reserved_bytes_is_still_understood() {
+        let (mut tunnel, mut peer) = established(0);
+        let reply = ipv4_packet();
+        let mut datagram = Vec::new();
+        peer.seal(&reply, &mut datagram).unwrap();
+        datagram[1..4].copy_from_slice(&[0x11, 0x22, 0x33]);
+
+        let mut out = Vec::new();
+        assert_eq!(
+            tunnel.receive_datagram(&mut datagram, 1, &mut out).unwrap(),
+            Received::Packet,
+            "the protocol tells receivers to ignore these three bytes"
+        );
+        assert_eq!(out, reply);
+    }
+
+    /// The same rule one message earlier. A response whose reserved bytes are
+    /// stamped must still complete the handshake, or the tunnel never comes up
+    /// at all and the failure is indistinguishable from an unreachable peer.
+    #[test]
+    fn a_handshake_response_with_stamped_reserved_bytes_still_completes() {
+        let mut tunnel = tunnel(AmneziaParams::default());
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+
+        let mut initiation_bytes = Vec::new();
+        assert!(tunnel.poll_transmit(&mut initiation_bytes).is_some());
+        let initiation = Initiation::decode(&initiation_bytes).unwrap();
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let (response, _, _) = responder
+            .respond(&initiation, &SERVER_EPHEMERAL, 0xABCD)
+            .unwrap();
+
+        let mut datagram = response.encode().to_vec();
+        datagram[1..4].copy_from_slice(&[0x11, 0x22, 0x33]);
+        let mut out = Vec::new();
+        assert_eq!(
+            tunnel.receive_datagram(&mut datagram, 1, &mut out).unwrap(),
+            Received::None
+        );
+        // The session is installed, so the packet that started the handshake
+        // has now been sealed and is waiting to go out.
+        let mut sealed = Vec::new();
+        assert!(
+            tunnel.poll_transmit(&mut sealed).is_some(),
+            "a response that opened must install the session"
+        );
     }
 
     #[test]
@@ -1280,6 +1632,56 @@ mod tests {
         }
     }
 
+    /// amnezia-vpn/amneziawg-go#141: upstream renders a trailing empty `I` slot
+    /// and sends the result, putting a zero-length UDP datagram on the wire. A
+    /// datagram with no payload is a signature of its own, and no WireGuard
+    /// message type can be that short, so it identifies the sender as AmneziaWG
+    /// to anyone counting packet sizes.
+    ///
+    /// `<d>` is the case that matters: the tag list is not empty, so a length
+    /// check on the template's *tags* would pass it. Every zero-width slot must
+    /// be dropped, and the ones after it must still be sent in order.
+    #[test]
+    fn a_zero_width_init_template_never_becomes_an_empty_datagram() {
+        use crate::initpacket::InitPacket;
+
+        let params = obfuscated_params();
+        let init = vec![
+            InitPacket::parse("<b 0xc0000000>").unwrap(),
+            // Zero-width: an init packet has no payload for `<d>` to carry.
+            InitPacket::parse("<d>").unwrap(),
+            InitPacket::parse("<r 8>").unwrap(),
+        ];
+        let mut tunnel = PeerTunnel::new(
+            PeerSettings {
+                amnezia: params,
+                init_packets: init,
+                ..settings_with_init(Vec::new())
+            },
+            Box::new(CountingEntropy(0)),
+        )
+        .unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+
+        let mut datagram = Vec::new();
+        let mut sizes = Vec::new();
+        while tunnel.poll_transmit(&mut datagram).is_some() {
+            assert!(
+                !datagram.is_empty(),
+                "a zero-length datagram reached the wire"
+            );
+            sizes.push(datagram.len());
+        }
+        // I1 and I3 only, in that order; I2 is gone rather than empty.
+        assert_eq!(sizes[0], 4, "I1 is four literal bytes");
+        assert_eq!(sizes[1], 8, "I3 follows I1 directly");
+        assert_eq!(
+            sizes.len(),
+            2 + usize::from(params.junk_packet_count) + 1,
+            "two init packets, the junk, and the initiation"
+        );
+    }
+
     #[test]
     fn init_packets_lead_every_handshake_attempt_including_the_retry() {
         use crate::initpacket::InitPacket;
@@ -1327,7 +1729,7 @@ mod tests {
 
         // The retry repeats them: an attempt that dropped the templates would
         // look different from the one before it.
-        tunnel.tick(REKEY_TIMEOUT_MS).unwrap();
+        tunnel.tick(RETRY_DUE_MS).unwrap();
         assert!(tunnel.poll_transmit(&mut datagram).is_some());
         assert_eq!(datagram.len(), 12);
         assert_eq!(&datagram[..4], &[0xc0, 0x00, 0x00, 0x00]);
@@ -1455,10 +1857,10 @@ mod tests {
             response_junk_size: 16,
             cookie_junk_size: 0,
             transport_junk_size: 0,
-            header_initiation: 0x1111_1111,
-            header_response: 0x2222_2222,
-            header_cookie: 0x3333_3333,
-            header_transport: 0x4444_4444,
+            header_initiation: HeaderRange::single(0x1111_1111),
+            header_response: HeaderRange::single(0x2222_2222),
+            header_cookie: HeaderRange::single(0x3333_3333),
+            header_transport: HeaderRange::single(0x4444_4444),
         }
     }
 
@@ -1491,7 +1893,7 @@ mod tests {
                     .try_into()
                     .unwrap()
             ),
-            params.header_initiation,
+            params.header_initiation.start(),
             "H1 must replace the standard message type"
         );
     }
@@ -1548,7 +1950,7 @@ mod tests {
             "a handshake must not be retried before the timeout"
         );
 
-        tunnel.tick(REKEY_TIMEOUT_MS + 1).unwrap();
+        tunnel.tick(RETRY_DUE_MS).unwrap();
         assert!(
             tunnel.poll_transmit(&mut retry).is_some(),
             "a lost initiation must be retried, otherwise the tunnel wedges forever"
@@ -1624,7 +2026,7 @@ mod tests {
         assert!(tunnel.poll_transmit(&mut sealed).is_some());
         assert_eq!(
             u32::from_le_bytes(sealed[..4].try_into().unwrap()),
-            params.header_transport,
+            params.header_transport.start(),
             "H4 must replace the transport header on data packets too"
         );
         let standard = params.deobfuscate_transport(&mut sealed).unwrap();
@@ -1683,6 +2085,320 @@ mod tests {
         let mut drained = Vec::new();
         while tunnel.poll_transmit(&mut drained).is_some() {}
         (tunnel, peer)
+    }
+
+    /// A fresh tunnel has no timer at all, so the relay above it may sleep
+    /// until traffic arrives rather than poll.
+    #[test]
+    fn a_tunnel_with_nothing_pending_reports_no_deadline() {
+        let tunnel = tunnel(AmneziaParams::default());
+        assert_eq!(tunnel.next_deadline_ms(), None);
+    }
+
+    /// WireGuard §6.4: the retry series is bounded by `REKEY_ATTEMPT_TIME`.
+    ///
+    /// Before this, `retry_handshake_if_due` sent a fresh initiation every five
+    /// seconds for as long as the tunnel lived. Against a peer that is simply
+    /// not reachable — the ordinary lost-connectivity case — that is seventeen
+    /// thousand handshakes a day, and on an obfuscated profile each one is the
+    /// whole `I1..I5` chain and `Jc` junk datagrams on top of the initiation.
+    #[test]
+    fn a_peer_that_never_answers_is_given_up_on_after_rekey_attempt_time() {
+        let mut tunnel = tunnel(AmneziaParams::default());
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+
+        let mut datagram = Vec::new();
+        let mut sent = 0_u32;
+        let mut now = 0_u64;
+        // Well past the 90-second budget, ticking often enough that every retry
+        // the tunnel is willing to make has its chance.
+        while now < REKEY_ATTEMPT_TIME_MS * 3 {
+            now += 1_000;
+            tunnel.tick(now).unwrap();
+            while tunnel.poll_transmit(&mut datagram).is_some() {
+                if message_type(&datagram) == Some(TYPE_INITIATION) {
+                    sent += 1;
+                }
+            }
+        }
+
+        // Eighteen attempts of five seconds each is the ninety seconds
+        // `REKEY_ATTEMPT_TIME` allows, and the loop ran for three times that —
+        // so this number is the cap doing its job and not the clock running out.
+        let cap = (REKEY_ATTEMPT_TIME_MS / REKEY_TIMEOUT_MS) as u32;
+        assert_eq!(
+            sent, cap,
+            "the series is REKEY_ATTEMPT_TIME / REKEY_TIMEOUT initiations and \
+             then silence; before this it never stopped at all"
+        );
+        assert!(
+            tunnel.handshake_abandoned(),
+            "past REKEY_ATTEMPT_TIME the peer is deemed unreachable"
+        );
+        assert_eq!(
+            tunnel.next_deadline_ms(),
+            None,
+            "and nothing is pending, so the relay above may sleep instead of \
+             waking every five seconds to send into a hole"
+        );
+    }
+
+    /// Giving up is not giving up permanently. The reference restarts the series
+    /// when the tun has something to send, and so must this: a phone that
+    /// regains connectivity has to reconnect on its own.
+    #[test]
+    fn a_new_outbound_packet_starts_a_fresh_series_after_the_series_was_abandoned() {
+        let mut tunnel = tunnel(AmneziaParams::default());
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut datagram = Vec::new();
+        let mut now = 0_u64;
+        while now < REKEY_ATTEMPT_TIME_MS * 2 {
+            now += 1_000;
+            tunnel.tick(now).unwrap();
+            while tunnel.poll_transmit(&mut datagram).is_some() {}
+        }
+        assert!(tunnel.handshake_abandoned());
+
+        tunnel.send_packet(&ipv4_packet(), now + 1).unwrap();
+        assert!(
+            tunnel.poll_transmit(&mut datagram).is_some(),
+            "traffic after the network returns must start a new handshake"
+        );
+        assert_eq!(message_type(&datagram), Some(TYPE_INITIATION));
+    }
+
+    /// WireGuard §6.1: the retry carries up to a third of a second of jitter, so
+    /// every client of one provider that lost connectivity together does not
+    /// retry in lockstep.
+    #[test]
+    fn the_rekey_timeout_carries_jitter_rather_than_landing_on_the_second() {
+        let mut deadlines = Vec::new();
+        for seed in 0..24_u8 {
+            let mut tunnel = PeerTunnel::new(
+                settings(AmneziaParams::default()),
+                Box::new(CountingEntropy(seed.wrapping_mul(37))),
+            )
+            .unwrap();
+            tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+            let deadline = tunnel.next_deadline_ms().expect("an initiation is pending");
+            assert!(
+                (REKEY_TIMEOUT_MS..=REKEY_TIMEOUT_MS + REKEY_TIMEOUT_JITTER_MAX_MS)
+                    .contains(&deadline),
+                "jitter may only ever delay the retry, never bring it forward: {deadline}"
+            );
+            deadlines.push(deadline);
+        }
+        deadlines.sort_unstable();
+        deadlines.dedup();
+        assert!(
+            deadlines.len() > 1,
+            "a fixed deadline is exactly the lockstep the jitter exists to break"
+        );
+    }
+
+    /// WireGuard §6.5, the passive keepalive: having received a validated data
+    /// packet and sent nothing back for `KEEPALIVE_TIMEOUT`, send an empty one.
+    ///
+    /// Required of every implementation, and this one did not do it — while the
+    /// relay above it already assumed the *peer* did, because its peer-silence
+    /// window is only meaningful if a live peer answers.
+    #[test]
+    fn a_validated_data_packet_is_answered_within_the_keepalive_timeout() {
+        let (mut tunnel, mut peer) = established(0);
+        let mut drained = Vec::new();
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        // The peer sends one real packet, which we take but do not answer.
+        let mut datagram = Vec::new();
+        peer.seal(&ipv4_packet(), &mut datagram).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut datagram, 1_000, &mut out)
+                .unwrap(),
+            Received::Packet
+        );
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        assert_eq!(
+            tunnel.next_deadline_ms(),
+            Some(1_000 + KEEPALIVE_TIMEOUT_MS),
+            "the keepalive this owes the peer is the tunnel's nearest deadline"
+        );
+
+        tunnel.tick(1_000 + KEEPALIVE_TIMEOUT_MS - 1).unwrap();
+        assert!(
+            tunnel.poll_transmit(&mut drained).is_none(),
+            "nothing is owed before the timeout"
+        );
+
+        tunnel.tick(1_000 + KEEPALIVE_TIMEOUT_MS).unwrap();
+        assert!(
+            tunnel.poll_transmit(&mut drained).is_some(),
+            "§6.5 requires an empty packet once the timeout passes"
+        );
+        assert_eq!(message_type(&drained), Some(TYPE_TRANSPORT));
+    }
+
+    /// The other half of §6.5: answering is what discharges the debt, so a
+    /// tunnel that was already talking back owes nothing extra.
+    #[test]
+    fn a_data_packet_already_answered_provokes_no_extra_keepalive() {
+        let (mut tunnel, mut peer) = established(0);
+        let mut drained = Vec::new();
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        let mut datagram = Vec::new();
+        peer.seal(&ipv4_packet(), &mut datagram).unwrap();
+        let mut out = Vec::new();
+        tunnel
+            .receive_datagram(&mut datagram, 1_000, &mut out)
+            .unwrap();
+        // Our own traffic goes back before the timeout expires.
+        tunnel.send_packet(&ipv4_packet(), 2_000).unwrap();
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        tunnel.tick(1_000 + KEEPALIVE_TIMEOUT_MS + 1).unwrap();
+        assert!(
+            tunnel.poll_transmit(&mut drained).is_none(),
+            "the peer has already heard from us, so there is nothing to say"
+        );
+    }
+
+    /// A peer's own keepalive carries no payload, and answering an empty packet
+    /// with an empty packet is a loop two conforming implementations would keep
+    /// up forever. §6.5 says *data* packet, and this pins that word.
+    #[test]
+    fn a_peers_keepalive_does_not_provoke_one_back() {
+        let (mut tunnel, mut peer) = established(0);
+        let mut drained = Vec::new();
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        let mut datagram = Vec::new();
+        peer.seal(&[], &mut datagram).unwrap();
+        let mut out = Vec::new();
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut datagram, 1_000, &mut out)
+                .unwrap(),
+            Received::None,
+            "an empty sealed packet is a keepalive and carries nothing for the tun"
+        );
+
+        tunnel.tick(1_000 + KEEPALIVE_TIMEOUT_MS + 1).unwrap();
+        assert!(
+            tunnel.poll_transmit(&mut drained).is_none(),
+            "keepalives must not answer keepalives"
+        );
+    }
+
+    /// AmneziaWG 3.0 replaces the spec constants from the profile. A server that
+    /// rejects a key after sixty seconds discards traffic a client holding the
+    /// spec's hundred and eighty still believes it may send.
+    #[test]
+    fn an_amneziawg_reject_after_time_shortens_the_life_of_a_key() {
+        let mut tunnel = PeerTunnel::new(
+            PeerSettings {
+                timers: PeerTimers {
+                    reject_after_time_s: Some((60, 60)),
+                    ..PeerTimers::default()
+                },
+                ..settings(AmneziaParams::default())
+            },
+            Box::new(CountingEntropy(0)),
+        )
+        .unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let _peer = complete_handshake(&mut tunnel, 0);
+        let mut drained = Vec::new();
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        assert_eq!(
+            tunnel.send_packet(&ipv4_packet(), 59_000).unwrap(),
+            Queued::Sealed,
+            "inside the profile's own reject-after the key still seals"
+        );
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+        assert_eq!(
+            tunnel.send_packet(&ipv4_packet(), 60_000).unwrap(),
+            Queued::Held,
+            "past it the key is dead, exactly as the profile asked — the spec's \
+             180 s would have kept encrypting under a key the server discarded"
+        );
+    }
+
+    /// An outstanding handshake is due one `REKEY_TIMEOUT` after it went out —
+    /// not one tick after, and not sooner — plus this attempt's jitter, which
+    /// the spec allows to be anywhere in a third of a second.
+    #[test]
+    fn an_outstanding_handshake_is_due_at_rekey_timeout() {
+        let mut tunnel = tunnel(AmneziaParams::default());
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let deadline = tunnel.next_deadline_ms().expect("an initiation is pending");
+        assert!(
+            (REKEY_TIMEOUT_MS..=RETRY_DUE_MS).contains(&deadline),
+            "the retry is due in [REKEY_TIMEOUT, REKEY_TIMEOUT + jitter], got {deadline}"
+        );
+    }
+
+    /// The deadline an idle established tunnel reports is its keepalive, which
+    /// is the whole reason the relay can stop waking every second: at the
+    /// ordinary 25 seconds that is one wakeup where there were twenty-five.
+    #[test]
+    fn an_idle_session_is_due_at_its_keepalive_not_at_a_fixed_tick() {
+        let mut tunnel = PeerTunnel::new(
+            PeerSettings {
+                persistent_keepalive_s: Some(25),
+                ..settings(AmneziaParams::default())
+            },
+            Box::new(CountingEntropy(0)),
+        )
+        .unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let peer = complete_handshake(&mut tunnel, 0);
+        drop(peer);
+        let mut drained = Vec::new();
+        while tunnel.poll_transmit(&mut drained).is_some() {}
+
+        let deadline = tunnel.next_deadline_ms().expect("a live session has one");
+        assert_eq!(
+            deadline, 25_000,
+            "the keepalive is the earliest thing the tunnel actually has to do"
+        );
+    }
+
+    /// With no keepalive configured the earliest deadline is the rekey, which
+    /// is two minutes rather than one second.
+    #[test]
+    fn a_session_without_a_keepalive_is_due_at_the_rekey() {
+        let (tunnel, _peer) = established(0);
+        assert_eq!(tunnel.next_deadline_ms(), Some(REKEY_AFTER_TIME_MS));
+    }
+
+    /// Every deadline the accessor reports must be one `tick` would act on:
+    /// a tick taken at the reported stamp has to produce the handshake the
+    /// tunnel was waiting to send.
+    #[test]
+    fn the_reported_deadline_is_the_one_tick_acts_on() {
+        let (mut tunnel, _peer) = established(0);
+        let deadline = tunnel.next_deadline_ms().expect("a live session has one");
+
+        // One millisecond early, nothing is due.
+        tunnel.tick(deadline - 1).unwrap();
+        let mut nothing = Vec::new();
+        assert!(
+            tunnel.poll_transmit(&mut nothing).is_none(),
+            "a tick before the deadline must not produce anything"
+        );
+
+        // At the deadline, the rekey it promised goes out.
+        tunnel.tick(deadline).unwrap();
+        let mut initiation = Vec::new();
+        assert!(
+            tunnel.poll_transmit(&mut initiation).is_some(),
+            "the deadline the tunnel reported must be the one it acts on"
+        );
+        assert_eq!(message_type(&initiation), Some(TYPE_INITIATION));
     }
 
     /// WireGuard §6.1: a key older than `REJECT_AFTER_TIME` must not encrypt
@@ -1917,7 +2633,7 @@ mod tests {
 
         // Neither refusal may have cost the handshake.
         assert_eq!(
-            retried_initiation(&mut tunnel, REKEY_TIMEOUT_MS + 10).mac2,
+            retried_initiation(&mut tunnel, RETRY_DUE_MS + 10).mac2,
             [0; MAC_LEN]
         );
     }

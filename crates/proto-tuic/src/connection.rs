@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use foxcore_api::{Destination, TuicConfig, TuicCongestionControl};
 use foxcore_dialer::ProtectedDialer;
-use foxcore_transport::rustls_client_config;
+use foxcore_transport::{quic, rustls_client_config};
 use quinn::{Connection, Endpoint, RecvStream, SendStream, VarInt};
 use quinn_proto::congestion::{CubicConfig, NewRenoConfig};
 use tokio::io::Join;
@@ -12,7 +12,6 @@ use zeroize::Zeroize;
 
 use crate::codec;
 
-const QUIC_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const AUTH_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 const MAX_INCOMING_UNI_STREAMS: u32 = 256;
 
@@ -40,33 +39,44 @@ impl TuicConnection {
         }))
     }
 
-    async fn connect_address(
+    /// Crate-visible rather than private so the fingerprint measurement in
+    /// `quic_fingerprint.rs` can dial one address it owns. `connect` resolves a
+    /// name first, and a measurement that had to go through DNS would be
+    /// measuring the resolver as well as the QUIC client.
+    pub(crate) async fn connect_address(
         config: &TuicConfig,
         dialer: &ProtectedDialer,
         server_address: std::net::SocketAddr,
     ) -> io::Result<Arc<Self>> {
         let socket = dialer.bind_udp_std(server_address.is_ipv6())?;
-        let mut endpoint = Endpoint::new(
-            quinn::EndpointConfig::default(),
-            None,
-            socket,
-            Arc::new(quinn::TokioRuntime),
-        )?;
+        let mut endpoint_config = quinn::EndpointConfig::default();
+        quic_shape::apply_endpoint_shape(&mut endpoint_config);
+        let mut endpoint =
+            Endpoint::new(endpoint_config, None, socket, Arc::new(quinn::TokioRuntime))?;
         endpoint.set_default_client_config(build_client_config(config)?);
 
         let sni = config.tls.server_name.as_deref().unwrap_or(&config.server);
         let connecting = endpoint
             .connect(server_address, sni)
             .map_err(|error| other(format!("TUIC QUIC connect config: {error}")))?;
-        let connection = tokio::time::timeout(QUIC_HANDSHAKE_TIMEOUT, connecting)
+        // The profile's budget, not a constant in this file. Its default is the
+        // 15 seconds that used to be hardcoded here, so a profile that says
+        // nothing behaves exactly as it did.
+        let connection = tokio::time::timeout(dialer.handshake_timeout(), connecting)
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TUIC QUIC handshake timed out"))?
             .map_err(|error| other(format!("TUIC QUIC handshake: {error}")))?;
 
         authenticate(&connection, config).await?;
+        if let Some(diagnostic) = config.heartbeat_clamp() {
+            // Recorded rather than silent: the profile asked for a spacing this
+            // connection is not using, and `logcat.rs` forwards `warn` and
+            // above from every crate, including in a release build.
+            log::warn!("{diagnostic}");
+        }
         spawn_heartbeat(
             connection.clone(),
-            Duration::from_millis(config.heartbeat_ms),
+            Duration::from_millis(config.effective_heartbeat_ms()),
         );
 
         Ok(Arc::new(Self {
@@ -131,17 +141,37 @@ async fn authenticate(connection: &Connection, config: &TuicConfig) -> io::Resul
 fn spawn_heartbeat(connection: Connection, interval: Duration) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
+        // Never a catch-up burst. The default `Burst` behaviour counts the
+        // ticks a sleeping phone missed and fires all of them the moment it
+        // wakes: ten minutes of doze at the default interval is sixty
+        // heartbeats back to back, which is a radio wakeup and sixty datagrams
+        // to say the same thing once.
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // The authentication command itself is activity; the first heartbeat
         // belongs one full interval later, not immediately at task creation.
         ticker.tick().await;
+        let mut last_sent = connection.stats().udp_tx.datagrams;
         loop {
             tokio::select! {
                 _ = connection.closed() => return,
                 _ = ticker.tick() => {
+                    // A heartbeat exists to hold the NAT mapping open and keep
+                    // the peer's idle timer from expiring. Traffic does both,
+                    // so a connection that has put a datagram on the wire since
+                    // the last check needs no extra one — and on a phone that
+                    // datagram is a radio wakeup bought for nothing. Measured
+                    // on the socket rather than on the relay, because that is
+                    // where the NAT mapping is actually refreshed.
+                    let sent = connection.stats().udp_tx.datagrams;
+                    if sent != last_sent {
+                        last_sent = sent;
+                        continue;
+                    }
                     if connection.send_datagram(Vec::from(codec::heartbeat()).into()).is_err() {
                         connection.close(VarInt::from_u32(1), b"TUIC heartbeat failed");
                         return;
                     }
+                    last_sent = connection.stats().udp_tx.datagrams;
                 }
             }
         }
@@ -149,10 +179,21 @@ fn spawn_heartbeat(connection: Connection, interval: Duration) {
 }
 
 fn build_client_config(config: &TuicConfig) -> io::Result<quinn::ClientConfig> {
-    let tls = Arc::unwrap_or_clone(rustls_client_config(&config.tls)?);
+    // A profile that names no ALPN used to fall through to the shared TLS
+    // default, which is `h2, http/1.1` — two *TCP* protocol identifiers, on a
+    // QUIC connection. No browser and no reference TUIC client can produce
+    // that hello: `h2` means HTTP/2 over TLS over TCP, and HTTP/3 over QUIC is
+    // `h3`. It is a one-line tell that survives every other disguise, and it
+    // put `h2` into this outbound's JA4 where `h3` belongs.
+    let mut tls_config = config.tls.clone();
+    if tls_config.alpn.is_empty() {
+        tls_config.alpn.push(quic::DEFAULT_ALPN.into());
+    }
+    let tls = Arc::unwrap_or_clone(rustls_client_config(&tls_config)?);
     let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
         .map_err(|error| other(format!("TUIC QUIC TLS: {error}")))?;
     let mut client = quinn::ClientConfig::new(Arc::new(quic_tls));
+    client.initial_dst_cid_provider(Arc::new(quic_shape::initial_destination_connection_id));
     let mut transport = quinn::TransportConfig::default();
     match config.congestion_control {
         TuicCongestionControl::Cubic => {
@@ -168,10 +209,38 @@ fn build_client_config(config: &TuicConfig) -> io::Result<quinn::ClientConfig> {
     transport.max_idle_timeout(Some(idle_timeout));
     transport.max_concurrent_bidi_streams(VarInt::from_u32(0));
     transport.max_concurrent_uni_streams(VarInt::from_u32(MAX_INCOMING_UNI_STREAMS));
-    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
-    transport.datagram_send_buffer_size(1024 * 1024);
+    transport.datagram_receive_buffer_size(Some(quic::DATAGRAM_RECEIVE_BUFFER_BYTES));
+    transport.datagram_send_buffer_size(quic::DATAGRAM_SEND_BUFFER_BYTES);
+    quic_shape::apply_flow_control(&mut transport);
     client.transport_config(Arc::new(transport));
     Ok(client)
+}
+
+/// The handshake-shaping knobs, applied the same way hysteria2 applies them.
+///
+/// Every *value* comes from [`foxcore_transport::quic`], so the two QUIC
+/// outbounds cannot drift into two fingerprints. Only this glue is per crate:
+/// `foxcore-transport` is a dependency of protocols that have no business
+/// linking quinn, so the crate that owns the numbers cannot own the calls.
+/// `quic_fingerprint.rs` in both crates measures the result off the wire, which
+/// is what would catch a copy that stopped matching.
+pub(crate) mod quic_shape {
+    use foxcore_transport::quic;
+    use quinn_proto::{ConnectionId, ConnectionIdGenerator, RandomConnectionIdGenerator};
+
+    pub(crate) fn initial_destination_connection_id() -> ConnectionId {
+        RandomConnectionIdGenerator::new(quic::INITIAL_DESTINATION_CONNECTION_ID_BYTES)
+            .generate_cid()
+    }
+
+    pub(crate) fn apply_flow_control(transport: &mut quinn::TransportConfig) {
+        transport.receive_window(quic::RECEIVE_WINDOW_BYTES.into());
+        transport.stream_receive_window(quic::STREAM_RECEIVE_WINDOW_BYTES.into());
+    }
+
+    pub(crate) fn apply_endpoint_shape(endpoint: &mut quinn::EndpointConfig) {
+        endpoint.grease_quic_bit(quic::GREASE_QUIC_BIT);
+    }
 }
 
 fn parse_uuid(value: &str) -> io::Result<[u8; 16]> {
@@ -237,5 +306,72 @@ mod tests {
         assert!(parse_uuid("abcd").is_err());
         assert!(parse_uuid("2dd61d9375d84da4ac0e6aece7eac36z").is_err());
         assert!(parse_uuid("2dd61d9375d84da4ac0e6aece7eac36500").is_err());
+    }
+
+    fn black_hole_config(port: u16) -> TuicConfig {
+        TuicConfig {
+            server: "127.0.0.1".into(),
+            port,
+            server_ip: None,
+            uuid: foxcore_api::SecretString::new("2dd61d93-75d8-4da4-ac0e-6aece7eac365"),
+            password: foxcore_api::SecretString::new("synthetic"),
+            congestion_control: TuicCongestionControl::Cubic,
+            udp_relay_mode: foxcore_api::TuicUdpRelayMode::Native,
+            tcp: true,
+            udp: true,
+            zero_rtt_handshake: false,
+            heartbeat_ms: 10_000,
+            idle_timeout_ms: 30_000,
+            tls: foxcore_api::TlsConfig {
+                enabled: true,
+                ..Default::default()
+            },
+        }
+    }
+
+    /// The handshake budget is the profile's, not a constant in this file.
+    ///
+    /// Dialled at a socket that is bound and never answers, so the QUIC
+    /// handshake can only end by expiring. The elapsed bound is the assertion
+    /// with teeth: with the old hardcoded 15 seconds this would still return
+    /// `TimedOut`, thirty times later.
+    #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+    #[tokio::test]
+    async fn the_quic_handshake_budget_comes_from_the_profile() {
+        let black_hole = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let config = black_hole_config(black_hole.local_addr().unwrap().port());
+        let dialer = ProtectedDialer::host().with_handshake_timeout(Duration::from_millis(300));
+
+        let started = std::time::Instant::now();
+        let Err(error) = TuicConnection::connect(&config, &dialer).await else {
+            panic!("a socket that never answers cannot complete a QUIC handshake");
+        };
+        let elapsed = started.elapsed();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the profile asked for 300ms and got {elapsed:?}"
+        );
+    }
+
+    /// And the default is exactly what was hardcoded, so a profile that says
+    /// nothing about it behaves as it always did.
+    #[test]
+    fn the_default_handshake_budget_is_the_fifteen_seconds_that_was_hardcoded() {
+        assert_eq!(
+            ProtectedDialer::host().handshake_timeout(),
+            Duration::from_secs(15)
+        );
+    }
+
+    /// The clamp is not merely computed — the connection runs on it.
+    #[test]
+    fn the_heartbeat_the_connection_runs_on_is_the_clamped_one() {
+        let mut config = black_hole_config(443);
+        config.heartbeat_ms = 120_000;
+        config.idle_timeout_ms = 5_000;
+        assert_eq!(config.effective_heartbeat_ms(), 2_500);
+        assert!(config.heartbeat_clamp().is_some());
     }
 }

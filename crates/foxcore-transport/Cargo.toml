@@ -7,12 +7,20 @@ license.workspace = true
 publish.workspace = true
 description = "Shared stream, datagram, and TLS boundaries for FoxCore protocols"
 
+[features]
+# JA3/JA4 computation for tests and harnesses. Off in shipped builds.
+fingerprinting = []
+
 [dependencies]
+aws-lc-rs.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 foxcore-api = { path = "../foxcore-api" }
 futures.workspace = true
+# `backoff.rs` only: the reconnect delay is drawn rather than counted, so a
+# client population that lost one server does not dial it again in lockstep.
+getrandom.workspace = true
 h2.workspace = true
 http.workspace = true
 # The `aws-lc-rs` feature is asked for here, and nowhere else, because this is
@@ -35,7 +43,27 @@ webpki-roots.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# Test-only: SHA-256 for the JA4 computation in `tests/ja_fingerprint.rs`.
+aws-lc-rs.workspace = true
 # Same pin proto-reality already uses, so the ECH tests add no crate to the
 # graph cargo-deny reasons about.
 rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+# The detector test needs the JA3/JA4 module, which is feature-gated so no
+# shipped build carries it. Declared here so `cargo test`/`clippy` without the
+# feature skip the target instead of failing to resolve the import.
+[[test]]
+name = "ja_fingerprint"
+required-features = ["fingerprinting"]
+
+# Same arrangement for the QUIC Initial parser: it is measurement tooling, so
+# it lives behind the same feature and its calibration test is skipped rather
+# than broken when the feature is off.
+[[test]]
+name = "quic_initial_vector"
+required-features = ["fingerprinting"]
+
+[[test]]
+name = "quic_initial_chromium"
+required-features = ["fingerprinting"]

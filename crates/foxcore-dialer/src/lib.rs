@@ -64,11 +64,28 @@ impl SocketCallbacks {
     }
 }
 
+/// The QUIC handshake budget a dialer carries when the profile said nothing.
+///
+/// Exactly what `proto-tuic` and `proto-hysteria2` used to hardcode, so a
+/// profile that does not set `runtime.handshake_timeout_ms` — and the host
+/// dialer used by tests and tools — behaves as it did before the field was
+/// threaded here. It is also `RuntimeConfig`'s own default for that field.
+const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub struct ProtectedDialer {
     callbacks: SocketCallbacks,
     network_handle: Arc<AtomicU64>,
     connect_timeout: Duration,
+    /// How long a protocol may spend on the cryptographic handshake *after* the
+    /// socket exists.
+    ///
+    /// Carried here rather than passed down, because the protocols that need it
+    /// are reached through `Outbound::from_config` — which has no runtime
+    /// config — and because their reconnect loops need it too, where no
+    /// start-time budget reaches at all. The dialer is already the thing every
+    /// one of them holds and already the thing carrying `connect_timeout`.
+    handshake_timeout: Duration,
 }
 
 impl fmt::Debug for ProtectedDialer {
@@ -77,6 +94,7 @@ impl fmt::Debug for ProtectedDialer {
             .field("callbacks", &self.callbacks)
             .field("network_handle", &self.network_handle())
             .field("connect_timeout", &self.connect_timeout)
+            .field("handshake_timeout", &self.handshake_timeout)
             .finish()
     }
 }
@@ -87,7 +105,24 @@ impl ProtectedDialer {
             callbacks,
             network_handle: Arc::new(AtomicU64::new(0)),
             connect_timeout,
+            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
         }
+    }
+
+    /// Set the handshake budget the profile asked for.
+    ///
+    /// A builder rather than a constructor argument so every existing caller
+    /// keeps the budget it already had, which is the 15 seconds the QUIC
+    /// protocols used to hardcode.
+    #[must_use]
+    pub fn with_handshake_timeout(mut self, handshake_timeout: Duration) -> Self {
+        self.handshake_timeout = handshake_timeout;
+        self
+    }
+
+    /// How long a protocol may spend on its handshake once connected.
+    pub fn handshake_timeout(&self) -> Duration {
+        self.handshake_timeout
     }
 
     pub fn host() -> Self {
@@ -290,6 +325,19 @@ impl ProtectedDialer {
             .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "server has no address")))
     }
 
+    /// `protect(fd)` then bind to the selected physical network, before connect.
+    ///
+    /// A host that installed a bind callback is a host whose sockets must be
+    /// pinned to one network, so a zero handle is refused rather than skipped.
+    /// The skip used to be reachable: `resolve` already fails closed without a
+    /// handle, which covers every dial made by hostname, but a server given as
+    /// a bare IP literal never reaches the resolver. Such a dial was protected
+    /// — so outside the tunnel — and then left to whatever the system's default
+    /// network happened to be, which is the one failure mode a VPN client must
+    /// not have. Tor guard relays, `server_ip` pins and any literal `server`
+    /// all took that path.
+    ///
+    /// Host and test builds install no bind callback and are unchanged.
     fn prepare(&self, fd: RawFd) -> io::Result<()> {
         if let Some(protect) = &self.callbacks.protect
             && !protect(fd)
@@ -299,15 +347,20 @@ impl ProtectedDialer {
                 "host refused to protect outbound socket",
             ));
         }
-        let network_handle = self.network_handle();
-        if network_handle != 0
-            && let Some(bind) = &self.callbacks.bind
-            && !bind(fd, network_handle)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "host refused to bind outbound socket to Android Network",
-            ));
+        if let Some(bind) = &self.callbacks.bind {
+            let network_handle = self.network_handle();
+            if network_handle == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Android Network handle is required before an outbound socket may be opened",
+                ));
+            }
+            if !bind(fd, network_handle) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "host refused to bind outbound socket to Android Network",
+                ));
+            }
         }
         Ok(())
     }
@@ -338,6 +391,67 @@ mod tests {
         dialer.set_network_handle(42);
         let _ = dialer.connect_tcp("127.0.0.1:9".parse().unwrap()).await;
         assert_eq!(*events.lock().unwrap(), ["protect", "bind:42"]);
+    }
+
+    /// A literal address never reaches the resolver, so the socket layer is the
+    /// only thing that can refuse an unbound dial. It must, or a server written
+    /// as a bare IP leaves protected — outside the tunnel — on whatever network
+    /// the system picked.
+    #[tokio::test]
+    async fn literal_address_is_refused_while_no_network_is_selected() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let protect_events = events.clone();
+        let bind_events = events.clone();
+        let callbacks = SocketCallbacks::new(
+            move |_| {
+                protect_events.lock().unwrap().push("protect".to_string());
+                true
+            },
+            move |_, network| {
+                bind_events.lock().unwrap().push(format!("bind:{network}"));
+                true
+            },
+        );
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_millis(50));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reachable = listener.local_addr().unwrap();
+        let error = dialer.connect_tcp(reachable).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| event.starts_with("bind"))
+        );
+
+        // UDP takes the same gate, and both open once a network is selected.
+        assert!(dialer.bind_udp_std(false).is_err());
+        dialer.set_network_handle(42);
+        dialer.connect_tcp(reachable).await.unwrap();
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| event == "bind:42")
+        );
+    }
+
+    /// A host that installs no bind callback — every non-Android build — keeps
+    /// dialling with no network selected.
+    #[tokio::test]
+    async fn a_host_without_a_bind_callback_still_dials_unbound() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reachable = listener.local_addr().unwrap();
+        let dialer = ProtectedDialer::new(
+            SocketCallbacks::protect_only(|_| true),
+            Duration::from_millis(500),
+        );
+
+        dialer.connect_tcp(reachable).await.unwrap();
     }
 
     #[tokio::test]

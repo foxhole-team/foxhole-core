@@ -9,6 +9,8 @@
 
 pub mod codec;
 mod connection;
+#[cfg(test)]
+mod quic_fingerprint;
 mod session;
 mod udp;
 

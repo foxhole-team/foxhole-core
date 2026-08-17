@@ -28,3 +28,9 @@ proptest = "1.11.0"
 [[bench]]
 name = "wireguard_datapath"
 harness = false
+
+# Measurement harness for device runs, not part of any build that ships.
+# `required-features` keeps it out of `--all-targets` unless asked for.
+[[example]]
+name = "wg_responder"
+required-features = ["test-support"]

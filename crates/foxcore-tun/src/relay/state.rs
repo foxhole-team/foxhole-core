@@ -65,9 +65,71 @@ impl PacketOut for ArenaPacket<'_> {
     }
 }
 
-/// Timer resolution. WireGuard's shortest interval is `REKEY_TIMEOUT` (5 s), so
-/// a one-second tick is fine-grained enough and costs nothing while idle.
+/// Floor on the relay's sleep between timer passes.
+///
+/// This used to be the whole timer: a fixed one-second `interval`, on the
+/// reasoning that it "costs nothing while idle". On a phone it costs the thing
+/// that matters most — 86 400 wakeups a day, each one pulling the CPU out of
+/// deep idle for a `tick` that almost always has nothing to do, against a
+/// tunnel whose shortest real deadline is the 25-second keepalive. WireGuard is
+/// silent by design when nothing is moving; the timer above it was not.
+///
+/// The relay now sleeps until [`proto_wireguard::tunnel::PeerTunnel::next_deadline_ms`]
+/// says there is work. This value survives as the *floor* on that sleep, which
+/// is what makes the change unable to regress: the relay can never wake more
+/// often than the old tick did, whatever the state machine reports.
 pub(crate) const TICK: Duration = Duration::from_secs(1);
+
+/// Ceiling on the relay's sleep when no deadline is pending at all.
+///
+/// Reached only with no session, no handshake and no keepalive — a tunnel that
+/// has never carried anything. `tick` is a no-op in that state and every event
+/// that could change it (a packet, a datagram, a network change, cancellation)
+/// is its own arm of the `select!`, so the sleep is a backstop rather than the
+/// mechanism. `REKEY_AFTER_TIME` is the protocol's own longest interval, which
+/// makes it the honest bound.
+pub(crate) const MAX_IDLE_TICK: Duration =
+    Duration::from_millis(proto_wireguard::tunnel::REKEY_AFTER_TIME_MS);
+
+/// First retry delay for a socket rebind, and the base it doubles from.
+///
+/// A rebind is a resolve, a bind, a `protect()` and a connect. Retrying that
+/// every second is what an offline phone used to do all night — 28 800 attempts
+/// between putting it down and picking it up, every one of them certain to fail
+/// while there is no route. Backing off is safe here precisely because the
+/// retry is not how the outage ends: connectivity coming back is a network
+/// signal, and that is its own arm of the `select!` which resets this to the
+/// base the moment it fires.
+pub(crate) const REBIND_BACKOFF_MIN: Duration = Duration::from_secs(1);
+
+/// Ceiling on the rebind backoff. Long enough to matter overnight, short enough
+/// that a network whose signal never arrives is still retried on its own.
+pub(crate) const REBIND_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+// This ladder doubles and is deliberately **not** jittered, unlike
+// `foxcore_transport::backoff::ReconnectBackoff`. The two look alike and are
+// not the same problem.
+//
+// A server reconnect is jittered for two reasons: a population that lost the
+// same server would otherwise dial back in the same instant, and a fixed ladder
+// is a timing fingerprint of the client. Neither applies here.
+//
+//   * This is a *local* socket rebind — resolve, `bind`, `protect`, `connect`.
+//     A failed attempt with no route produces no traffic at the server, so
+//     there is no herd to spread.
+//   * The outage does not end by retrying. It ends when the platform reports a
+//     network change, which is its own arm of the `select!` and resets this to
+//     `REBIND_BACKOFF_MIN` at once. That signal arrives when each device's
+//     radio reattaches, which is already unsynchronised across a population.
+//     The retry ladder is only the fallback for a signal that never comes.
+//
+// And jitter would actively cost here. Decorrelated jitter draws
+// `uniform(min, prev * 3)`, whose expected value sits well below the ceiling:
+// with `min = 1s` and `max = 60s` a phone with no route all night would average
+// roughly 30 s between attempts instead of the flat 60 s this ladder pins to —
+// about twice the wakeups, in exactly the overnight-idle case the backoff was
+// added to fix. Spreading a herd that does not exist, at the price of doubling
+// the battery cost of the scenario that motivated the code, is the wrong trade.
 
 /// How long the relay may send into silence before it says so.
 ///
@@ -76,8 +138,39 @@ pub(crate) const TICK: Duration = Duration::from_secs(1);
 /// peer is starting up" — it is a tunnel that is down. Shorter would report a
 /// slow handshake; longer would let a dead tunnel run a battery flat while every
 /// counter reads healthy, which is exactly what happened (D15).
+/// Measured on a Pixel 7 Pro: at 4 x REKEY_TIMEOUT (20 s) this fires once per keepalive cycle on a
+/// perfectly healthy tunnel — a `persistent_keepalive_s` of 25 is common and 25 > 20, so the app
+/// painted a working tunnel as unresponsive 25-29 times per 15 minutes.
+///
+/// This is now the *floor* and the margin, not the whole window: see
+/// [`peer_silence_window`], which adds the profile's own keepalive on top.
 pub(crate) const PEER_SILENCE: Duration =
-    Duration::from_millis(4 * proto_wireguard::tunnel::REKEY_TIMEOUT_MS);
+    Duration::from_millis(6 * proto_wireguard::tunnel::REKEY_TIMEOUT_MS);
+
+/// How long this peer may go unheard before the relay calls it unresponsive.
+///
+/// [`PEER_SILENCE`] alone was the whole window, on the reasoning that 30 s
+/// "clears the longest keepalive a profile can ask for". It does not — it clears
+/// exactly the 25 s that was measured, and nothing above it. `PersistentKeepalive`
+/// is a `u16` and providers do ship 45 and 60.
+///
+/// The arithmetic that matters: on an idle-but-healthy tunnel nothing crosses
+/// except keepalives. We send one every `K` seconds; the peer answers with its
+/// own about `KEEPALIVE_TIMEOUT` later (WireGuard §6.5), and in between the relay
+/// has heard nothing at all. So the gap since the last authenticated datagram
+/// reaches very nearly `K` once per cycle, with `sent_since_heard` set — which is
+/// the exact condition the report fires on. At `K = 60` a fixed 30 s window
+/// reports a working tunnel as unresponsive once a minute: the same D15 shape the
+/// widening was meant to remove, moved up one keepalive interval.
+///
+/// So the window is one keepalive plus the margin. The cost is that a genuinely
+/// dead tunnel on a 25 s profile is now named at 55 s rather than 30 s; the
+/// report is a diagnosis and not a fail-closed action, and four handshake
+/// attempts have still long since gone unanswered by then. A profile with no
+/// keepalive is unchanged, because there is no cycle to clear.
+pub(crate) fn peer_silence_window(keepalive_s: Option<u16>) -> Duration {
+    PEER_SILENCE.saturating_add(Duration::from_secs(u64::from(keepalive_s.unwrap_or(0))))
+}
 
 /// Receive errors in a row before the relay stops trusting the socket.
 ///

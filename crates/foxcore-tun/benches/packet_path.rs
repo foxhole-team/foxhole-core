@@ -23,7 +23,7 @@ use proto_wireguard::message::Initiation;
 use proto_wireguard::noise::test_support::Responder;
 use proto_wireguard::noise::{Key, TransportKeys, public_key};
 use proto_wireguard::session::TransportSession;
-use proto_wireguard::tunnel::{Entropy, PeerSettings, PeerTunnel};
+use proto_wireguard::tunnel::{Entropy, PeerSettings, PeerTimers, PeerTunnel};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::mpsc;
 
@@ -124,6 +124,7 @@ fn live_tunnel() -> (PeerTunnel, TransportSession) {
         persistent_keepalive_s: None,
         reserved: [0, 0, 0],
         init_packets: Vec::new(),
+        timers: PeerTimers::default(),
     };
     let mut tunnel = PeerTunnel::new(settings, Box::new(CountingEntropy(0))).unwrap();
     tunnel.send_packet(&ipv4_udp_packet(64), 0).unwrap();

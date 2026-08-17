@@ -5,6 +5,7 @@ use std::net::IpAddr;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD};
+use foxcore_api::parse_vless_encryption;
 use foxcore_api::{
     AnyTlsConfig, Hysteria2Config, Hysteria2ObfsConfig, Hysteria2PortRange, OutboundConfig,
     PacketEncoding, RealityConfig, RealityFingerprint, SecretString, ShadowsocksConfig,
@@ -23,6 +24,8 @@ const MAX_HYSTERIA2_OBFS_PASSWORD_BYTES: usize = 1024;
 const MAX_REPORTED_SCHEME_BYTES: usize = 64;
 /// Mirrors the core's own default so a link that says nothing keeps saying it.
 const DEFAULT_HYSTERIA2_HOP_INTERVAL_MS: u64 = 30_000;
+const DEFAULT_HYSTERIA2_KEEPALIVE_MS: u64 = 10_000;
+const DEFAULT_HYSTERIA2_IDLE_TIMEOUT_MS: u64 = 30_000;
 const MAX_REALITY_SPIDER_X_BYTES: usize = 2048;
 
 #[derive(Debug, Error)]
@@ -65,6 +68,13 @@ pub struct ImportedProfile {
 /// is not, so those stay fatal. A dropped resolver hint changes where queries go
 /// — which matters, and is exactly why it is reported — but the tunnel it
 /// describes is still the tunnel that gets built.
+///
+/// **One option is here despite changing bytes, and it is named rather than
+/// smuggled in:** a REALITY `fp=` this core has no ClientHello table for. The
+/// substitute is a verified parrot rather than an approximation of the
+/// requested one, and the REALITY server does not read the parrot at all, so
+/// the profile still describes a tunnel that connects. See
+/// [`reality_fingerprint`] for the full argument.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DroppedOption {
     /// The option name as it appeared in the link, e.g. `dns`. Never its value:
@@ -996,12 +1006,14 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
         &[
             "alpn",
             "allowinsecure",
+            "authority",
             "encryption",
             "flow",
             "fp",
             "headertype",
             "host",
             "insecure",
+            "mode",
             "mux",
             "peer",
             "pin",
@@ -1010,6 +1022,7 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
             "pbk",
             "security",
             "server_ip",
+            "servicename",
             "skip-cert-verify",
             "sni",
             "sid",
@@ -1018,6 +1031,7 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
             "type",
         ],
     )?;
+    let mut dropped = Vec::new();
     let transport = vless_transport(&query)?;
     require_disabled(&query, "mux")?;
     let flow = vless_flow(&query)?;
@@ -1054,18 +1068,23 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
         }
         (_, encoding) => encoding,
     };
-    if query
-        .get("encryption")
-        .is_some_and(|encryption| encryption != "none")
-    {
-        return Err(LinkError::Unsupported(
-            "VLESS encryption must be none".into(),
-        ));
-    }
+    // VLESS Encryption (XTLS/Xray-core#5067) is a layer inside VLESS, unrelated
+    // to `security`. Refusing every value but `none` here is what dropped a
+    // whole provider the day it was switched on — the same failure the gRPC and
+    // `fp` gates had. The grammar is parsed instead, so a variant this build
+    // cannot execute is refused by its own name and everything else imports.
+    let encryption = match query.get("encryption").map(String::as_str) {
+        None | Some("") | Some("none") => None,
+        Some(spec) => {
+            parse_vless_encryption(spec)
+                .map_err(|error| LinkError::Unsupported(error.to_string()))?;
+            Some(SecretString::new(spec.to_string()))
+        }
+    };
     let security = query.get("security").map(String::as_str).unwrap_or("none");
     let (tls, reality) = match security {
         "none" => {
-            require_noop(&query, "fp", &["", "chrome"])?;
+            accept_inert_fingerprint(&query, "VLESS", &mut dropped)?;
             require_noop(&query, "spx", &["", "/"])?;
             reject_options_requiring_security(&query, &["pbk", "sid"])?;
             for option in [
@@ -1088,19 +1107,15 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
         }
         "tls" => {
             reject_options_requiring_security(&query, &["pbk", "sid", "spx"])?;
-            if query.contains_key("fp") {
-                return Err(LinkError::Unsupported(
-                    "VLESS TLS client fingerprint emulation is not implemented".into(),
-                ));
-            }
+            accept_inert_fingerprint(&query, "VLESS", &mut dropped)?;
             (tls_config(&query, true)?, None)
         }
         "reality" => {
-            if !matches!(transport, StreamTransportConfig::Raw) {
-                return Err(LinkError::Unsupported(
-                    "VLESS Reality currently requires raw TCP transport".into(),
-                ));
-            }
+            // No transport gate here. REALITY replaces TLS, not the carrier:
+            // the handshake runs on the TCP socket and gRPC or WebSocket rides
+            // inside its record layer exactly as it rides inside TLS. The gate
+            // that used to stand here refused ten of a seventeen-node
+            // subscription for a limitation the wire does not have.
             for option in [
                 "alpn",
                 "allowinsecure",
@@ -1116,7 +1131,10 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
                     )));
                 }
             }
-            (TlsConfig::default(), Some(reality_config(&query)?))
+            (
+                TlsConfig::default(),
+                Some(reality_config(&query, &mut dropped)?),
+            )
         }
         _ => {
             return Err(LinkError::Unsupported(
@@ -1131,7 +1149,7 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
     }
     Ok(ImportedProfile {
         name: profile_name(&url)?,
-        dropped: Vec::new(),
+        dropped,
         outbound: OutboundConfig::Vless(VlessConfig {
             server,
             port,
@@ -1142,6 +1160,7 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
             packet_encoding,
             tls,
             reality,
+            encryption,
         }),
     })
 }
@@ -1159,7 +1178,10 @@ fn reject_options_requiring_security(
     }
 }
 
-fn reality_config(query: &HashMap<String, String>) -> Result<RealityConfig, LinkError> {
+fn reality_config(
+    query: &HashMap<String, String>,
+    dropped: &mut Vec<DroppedOption>,
+) -> Result<RealityConfig, LinkError> {
     let public_key = query
         .get("pbk")
         .filter(|value| !value.is_empty())
@@ -1186,19 +1208,7 @@ fn reality_config(query: &HashMap<String, String>) -> Result<RealityConfig, Link
             "VLESS Reality sid must contain an even number of 0..=16 hexadecimal characters".into(),
         ));
     }
-    // Xray's `fp=` names a uTLS parrot family, not a build. `fp=chrome` is the
-    // only value this core can honour, and it maps to the one Chrome profile
-    // that is the default; a link asking for `firefox` or `safari` is refused
-    // rather than quietly served a Chrome hello, because the whole point of the
-    // parameter is which bytes go on the wire.
-    let fingerprint = match query.get("fp").map(String::as_str).unwrap_or("chrome") {
-        "" | "chrome" => RealityFingerprint::default(),
-        other => {
-            return Err(LinkError::Unsupported(format!(
-                "VLESS Reality fp={other} is not implemented; this core sends fp=chrome only"
-            )));
-        }
-    };
+    let fingerprint = reality_fingerprint(query, dropped)?;
     let spider_x = query.get("spx").cloned().map(SecretString::new);
     if spider_x
         .as_ref()
@@ -1215,6 +1225,134 @@ fn reality_config(query: &HashMap<String, String>) -> Result<RealityConfig, Link
         fingerprint,
         handshake_timeout_ms: 15_000,
         spider_x,
+    })
+}
+
+/// uTLS parrot families a link may name: sing-box's documented set, plus the
+/// two Chrome build names this core's own config schema spells out.
+///
+/// The list is what makes `fp=` a recognised parameter rather than a free-text
+/// key. What a given protocol *does* with a name in it differs — see
+/// [`accept_inert_fingerprint`] for the rustls paths and [`reality_fingerprint`]
+/// for the one path where the name reaches the wire.
+/// Every `fp=` value that names a real uTLS parrot.
+///
+/// Public because the Android capabilities document has to report which of
+/// these are answered with a substitute hello, and a second copy of the list
+/// over there would be a copy that drifts.
+pub const UTLS_PARROT_NAMES: &[&str] = &[
+    "",
+    "chrome",
+    "chrome_131",
+    "chrome_133",
+    "firefox",
+    "safari",
+    "ios",
+    "android",
+    "edge",
+    "360",
+    "qq",
+    "random",
+    "randomized",
+];
+
+/// Resolve `fp=` for a REALITY link.
+///
+/// The parrot changes bytes: `proto-reality` writes the ClientHello itself,
+/// from tables transcribed from uTLS, so `fp=` is not inert here the way it is
+/// on a rustls link. Six of the names sing-box exposes now have a real table
+/// and are answered with it. The rest fall into three groups, and the
+/// difference between them matters:
+///
+/// * **Structurally impossible.** `360` and `android` are TLS 1.2 parrots:
+///   `Hello360_7_5` and `HelloAndroid_11_OkHttp` carry no `supported_versions`
+///   and no `key_share` extension at all. REALITY derives its authentication
+///   key from the client's X25519 key share, so a hello without one cannot
+///   carry a REALITY handshake by arithmetic, not by omission here. Refused,
+///   with the reason.
+/// * **A generator, and now ported as one.** `randomized` is not a table in
+///   uTLS, it is `generateRandomizedSpec` driven by a seed and a weight
+///   vector. It used to be refused here, because answering it with a fixed
+///   table would have been claiming a randomized fingerprint while sending a
+///   constant one. It is now answered with an actual per-connection draw; see
+///   `proto_reality`'s `randomized_hello` for what is drawn, and for the two
+///   uTLS outcomes REALITY cannot use (a TLS 1.2 cap and a P-256-only key
+///   share both leave the server no `x25519` share to authenticate against).
+///
+/// `random` is not a table either, but its semantics *are* reproducible:
+/// sing-box picks one modern parrot at process start and uses it for the whole
+/// process (`randomFingerprint = modernFingerprints[rand.Intn(...)]`, chosen in
+/// an `init()`). The same is done here, over the modern profiles this build
+/// implements. Picking per *connection* would be a different and much louder
+/// client — one that changes browser between requests.
+///
+/// A name that is not a uTLS parrot at all is refused as malformed input. Xray
+/// refuses those on a REALITY outbound too, rather than falling back the way
+/// its plain TLS path does.
+fn reality_fingerprint(
+    query: &HashMap<String, String>,
+    dropped: &mut Vec<DroppedOption>,
+) -> Result<RealityFingerprint, LinkError> {
+    let requested = query.get("fp").map(String::as_str).unwrap_or("chrome");
+    match requested {
+        "" | "chrome" | "chrome_151" => Ok(RealityFingerprint::Chrome151),
+        "chrome_133" => Ok(RealityFingerprint::Chrome133),
+        "chrome_131" => Ok(RealityFingerprint::Chrome131),
+        "edge" | "edge_85" => Ok(RealityFingerprint::Edge85),
+        "safari" | "safari_26_3" => Ok(RealityFingerprint::Safari263),
+        "ios" | "ios_14" => Ok(RealityFingerprint::Ios14),
+        "qq" | "qq_11_1" => Ok(RealityFingerprint::Qq111),
+        "firefox" | "firefox_153" => Ok(RealityFingerprint::Firefox153),
+        "firefox_148" => Ok(RealityFingerprint::Firefox148),
+        "random" => Ok(random_modern_fingerprint()),
+        "randomized" => Ok(RealityFingerprint::Randomized),
+        name @ ("360" | "android") => Err(LinkError::Unsupported(format!(
+            "VLESS Reality fp={name} names a TLS 1.2 parrot: it sends no key_share \
+             extension, and REALITY derives its authentication key from the client's \
+             x25519 key share, so no REALITY handshake is possible with that hello"
+        ))),
+        other if UTLS_PARROT_NAMES.contains(&other) => {
+            dropped.push(DroppedOption {
+                option: "fp".into(),
+                reason: "VLESS Reality has no ClientHello table for the parrot this link \
+                         named; this profile sends the Chromium 151 hello instead"
+                    .into(),
+            });
+            Ok(RealityFingerprint::Chrome151)
+        }
+        other => Err(LinkError::Unsupported(format!(
+            "VLESS Reality fp={other} is not a recognised uTLS profile"
+        ))),
+    }
+}
+
+/// The modern parrots `fp=random` draws from. Exactly sing-box's
+/// `modernFingerprints`: Chrome, Firefox, Edge, Safari, iOS.
+const RANDOM_MODERN_PROFILES: &[RealityFingerprint] = &[
+    RealityFingerprint::Chrome151,
+    RealityFingerprint::Firefox153,
+    RealityFingerprint::Edge85,
+    RealityFingerprint::Safari263,
+    RealityFingerprint::Ios14,
+];
+
+/// One draw, held for the life of the process.
+///
+/// sing-box makes this choice in an `init()`, so every connection a process
+/// makes carries the same parrot. Re-drawing per connection would produce a
+/// client that changes browser between requests, which is a far stronger
+/// signal than any single fingerprint.
+fn random_modern_fingerprint() -> RealityFingerprint {
+    static CHOICE: std::sync::OnceLock<RealityFingerprint> = std::sync::OnceLock::new();
+    *CHOICE.get_or_init(|| {
+        let mut seed = [0_u8; 8];
+        getrandom::fill(&mut seed).expect("OS RNG");
+        // `u64`, not `usize`: two of the four shipped ABIs are 32-bit, where
+        // `usize::from_le_bytes` takes `[u8; 4]` and this does not compile at
+        // all. The modulo is taken in `u64` as well, so the draw is over the
+        // whole seed on every target rather than over a truncated half.
+        let index = (u64::from_le_bytes(seed) % RANDOM_MODERN_PROFILES.len() as u64) as usize;
+        RANDOM_MODERN_PROFILES[index]
     })
 }
 
@@ -1251,10 +1389,31 @@ fn vless_packet_encoding(query: &HashMap<String, String>) -> Result<PacketEncodi
     }
 }
 
+/// Query options only the gRPC carrier reads.
+///
+/// They are refused on any other transport rather than ignored: a link that
+/// names a gRPC service and is imported as raw TCP would connect to a port that
+/// speaks a different protocol, which is a failure the user cannot see.
+const VLESS_GRPC_OPTIONS: &[&str] = &["authority", "mode", "servicename"];
+
+fn reject_grpc_options(query: &HashMap<String, String>, transport: &str) -> Result<(), LinkError> {
+    match VLESS_GRPC_OPTIONS
+        .iter()
+        .find(|option| query.contains_key(**option))
+    {
+        Some(option) => Err(LinkError::Unsupported(format!(
+            "VLESS {option} applies to gRPC only, not type={transport}"
+        ))),
+        None => Ok(()),
+    }
+}
+
 fn vless_transport(query: &HashMap<String, String>) -> Result<StreamTransportConfig, LinkError> {
-    match query.get("type").map(String::as_str).unwrap_or("tcp") {
+    let requested = query.get("type").map(String::as_str).unwrap_or("tcp");
+    match requested {
         "tcp" | "raw" => {
             require_noop(query, "headertype", &["", "none"])?;
+            reject_grpc_options(query, requested)?;
             if query.contains_key("path") || query.contains_key("host") {
                 return Err(LinkError::Unsupported(
                     "VLESS raw transport cannot use WebSocket path/host".into(),
@@ -1264,17 +1423,24 @@ fn vless_transport(query: &HashMap<String, String>) -> Result<StreamTransportCon
         }
         "ws" | "websocket" => {
             require_noop(query, "headertype", &["", "none"])?;
+            reject_grpc_options(query, requested)?;
             Ok(StreamTransportConfig::Websocket {
                 path: query.get("path").cloned().unwrap_or_else(|| "/".into()),
                 host: query.get("host").cloned().filter(|host| !host.is_empty()),
                 headers: Default::default(),
             })
         }
-        "httpupgrade" => Ok(StreamTransportConfig::HttpUpgrade {
-            path: query.get("path").cloned().unwrap_or_else(|| "/".into()),
-            host: query.get("host").cloned().filter(|host| !host.is_empty()),
-            headers: Default::default(),
-        }),
+        "httpupgrade" => {
+            reject_grpc_options(query, requested)?;
+            Ok(StreamTransportConfig::HttpUpgrade {
+                path: query.get("path").cloned().unwrap_or_else(|| "/".into()),
+                host: query.get("host").cloned().filter(|host| !host.is_empty()),
+                headers: Default::default(),
+            })
+        }
+        // `mode` selects the RPC method name: `gun` is the single-stream `Tun`
+        // carrier, `multi` is `TunMulti`. An unknown value is refused rather
+        // than folded into `gun`, because the method name is on the wire.
         "grpc" | "gun" => Ok(StreamTransportConfig::Grpc {
             service_name: query
                 .get("servicename")
@@ -1283,34 +1449,48 @@ fn vless_transport(query: &HashMap<String, String>) -> Result<StreamTransportCon
                 .ok_or_else(|| {
                     LinkError::Unsupported("gRPC transport without serviceName".into())
                 })?,
-            multi_mode: query.get("mode").map(String::as_str) == Some("multi"),
+            multi_mode: match query.get("mode").map(String::as_str).unwrap_or("gun") {
+                "" | "gun" => false,
+                "multi" => true,
+                other => {
+                    return Err(LinkError::Unsupported(format!(
+                        "VLESS gRPC mode={other} is not implemented"
+                    )));
+                }
+            },
             authority: query
                 .get("authority")
                 .cloned()
                 .filter(|authority| !authority.is_empty()),
         }),
-        "http" | "h2" => Ok(StreamTransportConfig::Http2 {
-            // Xray encodes several fronting hosts as a comma separated list.
-            host: query
-                .get("host")
-                .map(|host| {
-                    host.split(',')
-                        .map(str::trim)
-                        .filter(|host| !host.is_empty())
-                        .map(str::to_owned)
-                        .collect()
-                })
-                .unwrap_or_default(),
-            path: query.get("path").cloned().unwrap_or_else(|| "/".into()),
-            method: query
-                .get("method")
-                .cloned()
-                .filter(|method| !method.is_empty())
-                .unwrap_or_else(|| "PUT".into()),
-        }),
-        _ => Err(LinkError::Unsupported(
-            "requested transport type is not implemented".into(),
-        )),
+        "http" | "h2" => {
+            reject_grpc_options(query, requested)?;
+            Ok(StreamTransportConfig::Http2 {
+                // Xray encodes several fronting hosts as a comma separated list.
+                host: query
+                    .get("host")
+                    .map(|host| {
+                        host.split(',')
+                            .map(str::trim)
+                            .filter(|host| !host.is_empty())
+                            .map(str::to_owned)
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+                path: query.get("path").cloned().unwrap_or_else(|| "/".into()),
+                method: query
+                    .get("method")
+                    .cloned()
+                    .filter(|method| !method.is_empty())
+                    .unwrap_or_else(|| "PUT".into()),
+            })
+        }
+        // Name the transport. A subscription is imported line by line, so a
+        // single unsupported carrier must cost its own node and say which one,
+        // not read as "the subscription failed".
+        other => Err(LinkError::Unsupported(format!(
+            "VLESS transport type={other} is not implemented"
+        ))),
     }
 }
 
@@ -1323,6 +1503,7 @@ fn import_hysteria2(value: &str) -> Result<ImportedProfile, LinkError> {
             "alpn",
             "allowinsecure",
             "downmbps",
+            "fp",
             "hopinterval",
             "insecure",
             "mport",
@@ -1339,12 +1520,14 @@ fn import_hysteria2(value: &str) -> Result<ImportedProfile, LinkError> {
         ],
     )?;
     require_noop(&query, "security", &["", "tls"])?;
+    let mut dropped = Vec::new();
+    accept_inert_fingerprint(&query, "Hysteria2", &mut dropped)?;
     let (server, port) = endpoint(&url)?;
     let password = credential(&url)?;
     let obfs = hysteria2_obfs(&query)?;
     Ok(ImportedProfile {
         name: profile_name(&url)?,
-        dropped: Vec::new(),
+        dropped,
         outbound: OutboundConfig::Hysteria2(Hysteria2Config {
             server,
             port,
@@ -1358,6 +1541,8 @@ fn import_hysteria2(value: &str) -> Result<ImportedProfile, LinkError> {
                 .map(u64::from)
                 .map(|seconds| seconds.saturating_mul(1_000))
                 .unwrap_or(DEFAULT_HYSTERIA2_HOP_INTERVAL_MS),
+            keepalive_ms: DEFAULT_HYSTERIA2_KEEPALIVE_MS,
+            idle_timeout_ms: DEFAULT_HYSTERIA2_IDLE_TIMEOUT_MS,
             tls: tls_config(&query, true)?,
         }),
     })
@@ -1523,31 +1708,68 @@ fn wireguard_networks(field: &str, value: &str) -> Result<Vec<ipnet::IpNet>, Lin
 fn import_wireguard(value: &str) -> Result<ImportedProfile, LinkError> {
     let url = Url::parse(value)?;
     let query = query(&url)?;
-    reject_unknown_options(
-        &query,
-        &[
-            "address",
-            "addresses",
-            "allowed-ips",
-            "allowed_ips",
-            "allowedips",
-            "dns",
-            "keepalive",
-            "mtu",
-            "persistent_keepalive",
-            "persistentkeepalive",
-            "pre-shared-key",
-            "preshared_key",
-            "presharedkey",
-            "public-key",
-            "public_key",
-            "publickey",
-            "reserved",
-            "server_ip",
-        ],
-    )?;
+    let mut allowed = vec![
+        "address",
+        "addresses",
+        "advancedsecurity",
+        "allowed-ips",
+        "allowed_ips",
+        "allowedips",
+        "dns",
+        "keepalive",
+        "mtu",
+        "persistent_keepalive",
+        "persistentkeepalive",
+        "pre-shared-key",
+        "preshared_key",
+        "presharedkey",
+        "public-key",
+        "public_key",
+        "publickey",
+        "reserved",
+        "server_ip",
+    ];
+    // The obfuscation parameters, spelled exactly as the `.conf` spells them.
+    //
+    // They used to be refused here — `unknown query option jc` — which meant an
+    // AmneziaWG profile could be imported as a file and not as the link the same
+    // provider hands out, for no reason other than that this list was shorter
+    // than the other one. It is the same vocabulary and it is now parsed by the
+    // same code.
+    allowed.extend_from_slice(&AMNEZIA_URL_KEYS);
+    reject_unknown_options(&query, &allowed)?;
     // `dns=` is reported, not fatal. See `wireguard_dns_note`.
-    let dropped = wireguard_dns_note(query.contains_key("dns"));
+    let mut dropped = wireguard_dns_note(query.contains_key("dns"));
+    // A link has no sections, so the peer-level key is read out of the same
+    // query. Same rule as the file: `off` beside obfuscation is a contradiction.
+    if let Some(value) = query.get("advancedsecurity") {
+        if matches!(
+            value.to_ascii_lowercase().as_str(),
+            "on" | "true" | "1" | "yes"
+        ) {
+            dropped.push(DroppedOption {
+                option: "advancedsecurity".to_owned(),
+                reason: "the link's own obfuscation parameters already decide whether this \
+                         peer is spoken to in AmneziaWG"
+                    .to_owned(),
+            });
+        } else {
+            return Err(LinkError::Invalid(
+                "AmneziaWG AdvancedSecurity is off for this peer, which asks for plain \
+                 WireGuard while the link also configures obfuscation"
+                    .into(),
+            ));
+        }
+    }
+    let amnezia_entries: Vec<(String, String)> = AMNEZIA_URL_KEYS
+        .iter()
+        .filter_map(|key| {
+            query
+                .get(*key)
+                .map(|value| ((*key).to_owned(), value.clone()))
+        })
+        .collect();
+    let amnezia = amnezia_from_conf(&amnezia_entries, &mut dropped)?;
     let host = url
         .host_str()
         .filter(|host| !host.is_empty())
@@ -1604,10 +1826,42 @@ fn import_wireguard(value: &str) -> Result<ImportedProfile, LinkError> {
             mtu,
             persistent_keepalive_s,
             reserved,
-            amnezia: None,
+            amnezia,
         }),
     })
 }
+
+/// The AmneziaWG vocabulary a `wireguard://` link may carry, lower-cased.
+///
+/// Deliberately the same names as [`WIREGUARD_CONF_KEYS`] minus the wg-quick
+/// ones, so one parser serves both forms.
+const AMNEZIA_URL_KEYS: [&str; 25] = [
+    "contentpaddingaddition",
+    "disablecookies",
+    "h1",
+    "h2",
+    "h3",
+    "h4",
+    "headerprotectionkey",
+    "i1",
+    "i2",
+    "i3",
+    "i4",
+    "i5",
+    "jc",
+    "jmax",
+    "jmin",
+    "keepalivetimeout",
+    "maxhandshakeattempts",
+    "randomtrailers",
+    "rejectaftertime",
+    "rekeyaftertime",
+    "rekeytimeout",
+    "s1",
+    "s2",
+    "s3",
+    "s4",
+];
 
 /// Import a wg-quick / AmneziaWG `.conf` (INI) file.
 ///
@@ -1696,7 +1950,31 @@ pub fn import_wireguard_conf(value: &str) -> Result<ImportedProfile, LinkError> 
         }
     }
     // Same rule as the link form: reported, not fatal.
-    let dropped = wireguard_dns_note(find(&interface, "dns").is_some());
+    let mut dropped = wireguard_dns_note(find(&interface, "dns").is_some());
+    // `AdvancedSecurity` is the one AmneziaWG key that lives on the peer. `on`
+    // agrees with an obfuscation block and is a note; `off` beside one says the
+    // peer wants plain WireGuard, which is a different tunnel than the rest of
+    // the file describes, so it is refused rather than guessed at.
+    if let Some(value) = find(&peer, "advancedsecurity") {
+        let enabled = matches!(
+            value.to_ascii_lowercase().as_str(),
+            "on" | "true" | "1" | "yes"
+        );
+        if enabled {
+            dropped.push(DroppedOption {
+                option: "advancedsecurity".to_owned(),
+                reason: "the interface's own obfuscation block already decides whether this \
+                         peer is spoken to in AmneziaWG"
+                    .to_owned(),
+            });
+        } else {
+            return Err(LinkError::Invalid(
+                "AmneziaWG AdvancedSecurity is off for this peer, which asks for plain \
+                 WireGuard while the file also configures obfuscation"
+                    .into(),
+            ));
+        }
+    }
     for hook in [
         "preup",
         "postup",
@@ -1733,6 +2011,7 @@ pub fn import_wireguard_conf(value: &str) -> Result<ImportedProfile, LinkError> 
         None => None,
     };
 
+    let amnezia = amnezia_from_conf(&interface, &mut dropped)?;
     Ok(ImportedProfile {
         // The file format has no name field; the caller labels the profile.
         name: None,
@@ -1752,7 +2031,7 @@ pub fn import_wireguard_conf(value: &str) -> Result<ImportedProfile, LinkError> 
             mtu,
             persistent_keepalive_s,
             reserved: None,
-            amnezia: amnezia_from_conf(&interface)?,
+            amnezia,
         }),
     })
 }
@@ -1766,13 +2045,17 @@ enum ConfSection {
 /// Every key the importer understands. Lower-cased; anything else is refused.
 const WIREGUARD_CONF_KEYS: &[&str] = &[
     "address",
+    "advancedsecurity",
     "allowedips",
+    "contentpaddingaddition",
+    "disablecookies",
     "dns",
     "endpoint",
     "h1",
     "h2",
     "h3",
     "h4",
+    "headerprotectionkey",
     "i1",
     "i2",
     "i3",
@@ -1781,53 +2064,81 @@ const WIREGUARD_CONF_KEYS: &[&str] = &[
     "jc",
     "jmax",
     "jmin",
+    "keepalivetimeout",
     "listenport",
+    "maxhandshakeattempts",
     "mtu",
     "persistentkeepalive",
     "presharedkey",
     "privatekey",
     "publickey",
+    "randomtrailers",
+    "rejectaftertime",
+    "rekeyaftertime",
+    "rekeytimeout",
     "s1",
     "s2",
     "s3",
     "s4",
 ];
 
-/// AmneziaWG 1.5 block, or `None` when the file is plain WireGuard.
+/// AmneziaWG block, or `None` when the file is plain WireGuard.
 ///
-/// Partial blocks are refused instead of being filled in with defaults: a peer
-/// configured with `S1` but not the matching headers decodes nothing, and a
+/// Partial 1.5 blocks are refused instead of being filled in with defaults: a
+/// peer configured with `S1` but not the matching headers decodes nothing, and a
 /// half-obfuscated tunnel fails in a way that looks like a network problem.
+///
+/// `dropped` collects the 3.0 keys this core accepts without honouring. They are
+/// reported by name rather than making the profile fail, because none of them
+/// can stop the tunnel from coming up — see [`amnezia_reported_extras`] for the
+/// argument on each, and note that the one key which *can*
+/// (`HeaderProtectionKey`) is refused instead.
 fn amnezia_from_conf(
     interface: &[(String, String)],
+    dropped: &mut Vec<DroppedOption>,
 ) -> Result<Option<foxcore_api::AmneziaConfig>, LinkError> {
     const OBFUSCATION_KEYS: [&str; 9] = ["jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"];
-    /// 2.0 additions. Independently optional: upstream defaults S3/S4 to zero
-    /// and H1..H4 to 1..4, so a file that carries only an init packet is a
+    /// 2.0/3.0 additions. Independently optional: upstream defaults S3/S4 to
+    /// zero and H1..H4 to 1..4, so a file that carries only an init packet is a
     /// complete configuration and refusing it would reject a valid profile.
-    const EXTENSION_KEYS: [&str; 7] = ["s3", "s4", "i1", "i2", "i3", "i4", "i5"];
+    const EXTENSION_KEYS: [&str; 15] = [
+        "s3",
+        "s4",
+        "i1",
+        "i2",
+        "i3",
+        "i4",
+        "i5",
+        "rekeytimeout",
+        "rekeyaftertime",
+        "rejectaftertime",
+        "keepalivetimeout",
+        "maxhandshakeattempts",
+        "contentpaddingaddition",
+        "randomtrailers",
+        "disablecookies",
+    ];
+    let has = |key: &str| interface.iter().any(|(name, _)| name == key);
+    // Not implementable as a note: `HeaderProtectionKey` runs ChaCha20 over the
+    // four header bytes with a key both peers share. Without it this core cannot
+    // read a single datagram the peer sends and the peer cannot read one of
+    // ours, so there is no degraded tunnel to fall back to — only a silent one.
+    if has("headerprotectionkey") {
+        return Err(LinkError::Unsupported(
+            "AmneziaWG HeaderProtectionKey (3.0 header encryption) is not implemented; \
+             this core cannot decode a profile that uses it"
+                .into(),
+        ));
+    }
     let present: Vec<&str> = OBFUSCATION_KEYS
         .into_iter()
-        .filter(|key| interface.iter().any(|(name, _)| name == key))
+        .filter(|key| has(key))
         .collect();
-    let has_extensions = EXTENSION_KEYS
-        .into_iter()
-        .any(|key| interface.iter().any(|(name, _)| name == key));
-    if present.is_empty() {
-        if !has_extensions {
-            return Ok(None);
-        }
-        // 2.0 keys alone: everything 1.5 keeps its default, which is what the
-        // reference does. Dropping them because the older block is absent would
-        // silently import a plain WireGuard profile.
-        return Ok(Some(foxcore_api::AmneziaConfig {
-            cookie_junk_size: optional_small(interface, "s3")?,
-            transport_junk_size: optional_small(interface, "s4")?,
-            init_packets: amnezia_init_packets(interface)?,
-            ..foxcore_api::AmneziaConfig::default()
-        }));
+    let has_extensions = EXTENSION_KEYS.into_iter().any(has);
+    if present.is_empty() && !has_extensions {
+        return Ok(None);
     }
-    if present.len() != OBFUSCATION_KEYS.len() {
+    if !present.is_empty() && present.len() != OBFUSCATION_KEYS.len() {
         let missing: Vec<&str> = OBFUSCATION_KEYS
             .into_iter()
             .filter(|key| !present.contains(key))
@@ -1837,33 +2148,134 @@ fn amnezia_from_conf(
             missing.join(", ")
         )));
     }
-    let number = |key: &str| -> Result<u32, LinkError> {
+    amnezia_reported_extras(interface, dropped);
+    // 2.0/3.0 keys alone: everything 1.5 keeps its default, which is what the
+    // reference does. Dropping them because the older block is absent would
+    // silently import a plain WireGuard profile.
+    let base = foxcore_api::AmneziaConfig {
+        cookie_junk_size: optional_small(interface, "s3")?,
+        transport_junk_size: optional_small(interface, "s4")?,
+        init_packets: amnezia_init_packets(interface)?,
+        timers: amnezia_timers(interface)?,
+        ..foxcore_api::AmneziaConfig::default()
+    };
+    if present.is_empty() {
+        return Ok(Some(base));
+    }
+    let small = |key: &str| -> Result<u16, LinkError> {
         interface
             .iter()
             .find(|(name, _)| name == key)
             .map(|(_, value)| value.as_str())
             .unwrap_or_default()
-            .parse::<u32>()
-            .map_err(|_| LinkError::Invalid(format!("AmneziaWG {key} must be a number")))
-    };
-    let small = |key: &str| -> Result<u16, LinkError> {
-        u16::try_from(number(key)?)
+            .parse::<u16>()
             .map_err(|_| LinkError::Invalid(format!("AmneziaWG {key} must fit in 16 bits")))
     };
     Ok(Some(foxcore_api::AmneziaConfig {
-        cookie_junk_size: optional_small(interface, "s3")?,
-        transport_junk_size: optional_small(interface, "s4")?,
-        init_packets: amnezia_init_packets(interface)?,
         junk_packet_count: small("jc")?,
         junk_min_size: small("jmin")?,
         junk_max_size: small("jmax")?,
         init_junk_size: small("s1")?,
         response_junk_size: small("s2")?,
-        header_initiation: number("h1")?,
-        header_response: number("h2")?,
-        header_cookie: number("h3")?,
-        header_transport: number("h4")?,
+        header_initiation: amnezia_header(interface, "h1")?,
+        header_response: amnezia_header(interface, "h2")?,
+        header_cookie: amnezia_header(interface, "h3")?,
+        header_transport: amnezia_header(interface, "h4")?,
+        ..base
     }))
+}
+
+/// One `H1..H4` value, in either the 1.5 or the 2.0 spelling.
+///
+/// `H1 = 1` and `H1 = 234567-345678` are both here because upstream's own
+/// parser takes both — and because the second is what the AmneziaWG 2.0 server
+/// generator emits *by default*, which is why refusing it refused whole
+/// profiles. The range is carried as a range: the header is drawn afresh for
+/// every datagram, and collapsing it to one value would put a constant on the
+/// wire where the profile asked for a moving one.
+fn amnezia_header(
+    interface: &[(String, String)],
+    key: &str,
+) -> Result<foxcore_api::AmneziaHeaderRange, LinkError> {
+    let raw = interface
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+        .unwrap_or_default();
+    foxcore_api::parse_amnezia_header_range(raw).map_err(|reason| {
+        // The key is named so the user can find the line; the reason says which
+        // of the two forms was expected.
+        LinkError::Invalid(format!("AmneziaWG {key}: {reason}"))
+    })
+}
+
+/// The AmneziaWG 3.0 timer block (`RekeyTimeout`, …), each field a `u16` range.
+///
+/// All five are ranges on the *device* in the reference, not on the peer, and
+/// none of them puts a byte on the wire — they decide only when this side acts.
+/// Carrying them matters anyway: a server configured with a `RejectAfterTime`
+/// shorter than the spec's three minutes discards traffic a client still
+/// believes it may send, and a tunnel that stalls partway through a key's life
+/// is the hardest kind of fault to attribute.
+fn amnezia_timers(interface: &[(String, String)]) -> Result<foxcore_api::AmneziaTimers, LinkError> {
+    let timer = |key: &str| -> Result<Option<foxcore_api::AmneziaTimerRange>, LinkError> {
+        let Some((_, raw)) = interface.iter().find(|(name, _)| name == key) else {
+            return Ok(None);
+        };
+        foxcore_api::parse_amnezia_timer_range(raw)
+            .map(Some)
+            .map_err(|reason| LinkError::Invalid(format!("AmneziaWG {key}: {reason}")))
+    };
+    Ok(foxcore_api::AmneziaTimers {
+        rekey_timeout_s: timer("rekeytimeout")?,
+        rekey_after_time_s: timer("rekeyaftertime")?,
+        reject_after_time_s: timer("rejectaftertime")?,
+        keepalive_timeout_s: timer("keepalivetimeout")?,
+        max_handshake_attempts: timer("maxhandshakeattempts")?,
+    })
+}
+
+/// The AmneziaWG 3.0 keys this core accepts and does not act on.
+///
+/// Each is reported by name rather than refused, on the same test the rest of
+/// this module uses: none of them can stop the tunnel from working.
+///
+/// * `ContentPaddingAddition` and `RandomTrailers` decide how much padding *we*
+///   put after a data packet. The receive path reads a packet's length from its
+///   own IP header, so a peer that pads more is already understood; keeping the
+///   spec's 16-byte padding on what we send is a difference in shape, not in
+///   reachability.
+/// * `DisableCookies` tells a *responder* not to answer load with a cookie
+///   reply. This core initiates; it already handles a cookie reply arriving and
+///   handles one never arriving.
+/// * peer `AdvancedSecurity` marks a peer as speaking AmneziaWG. The obfuscation
+///   block in the same file already says so, and the reference itself stopped
+///   consulting the per-peer flag when 2.0 landed.
+fn amnezia_reported_extras(interface: &[(String, String)], dropped: &mut Vec<DroppedOption>) {
+    for (key, reason) in [
+        (
+            "contentpaddingaddition",
+            "outbound data packets keep WireGuard's 16-byte padding; \
+             a peer's own extra padding is still read correctly",
+        ),
+        (
+            "randomtrailers",
+            "outbound data packets keep WireGuard's 16-byte padding; \
+             a peer's own random trailer is still read correctly",
+        ),
+        (
+            "disablecookies",
+            "this side initiates handshakes and never issues cookie replies, \
+             so there is nothing here to disable",
+        ),
+    ] {
+        if interface.iter().any(|(name, _)| name == key) {
+            dropped.push(DroppedOption {
+                option: key.to_owned(),
+                reason: reason.to_owned(),
+            });
+        }
+    }
 }
 
 /// The note a WireGuard `dns=` produces, or nothing when there was none.
@@ -2562,6 +2974,42 @@ fn require_noop(
     }
 }
 
+/// Validate an inert `fp=` and record that it was not applied.
+///
+/// FoxCore has no uTLS surface outside REALITY: on a plain-TLS or QUIC link the
+/// ClientHello comes from rustls and `fp=` cannot move a byte this core writes,
+/// whichever name it carries. Refusing the whole profile over an inert hint costs
+/// the user a working server for nothing, so the name is validated against
+/// [`UTLS_PARROT_NAMES`] and reported through [`DroppedOption`] instead of being
+/// applied.
+///
+/// An unrecognised name is still refused: a value outside the set is more likely
+/// a malformed link than a parrot request, and failing there keeps the parser
+/// from accepting arbitrary query junk under a known key.
+fn accept_inert_fingerprint(
+    query: &HashMap<String, String>,
+    protocol: &str,
+    dropped: &mut Vec<DroppedOption>,
+) -> Result<(), LinkError> {
+    let Some(value) = query.get("fp") else {
+        return Ok(());
+    };
+    if !UTLS_PARROT_NAMES.contains(&value.as_str()) {
+        return Err(LinkError::Unsupported(format!(
+            "{protocol} fp={value} is not a recognised uTLS profile"
+        )));
+    }
+    if !value.is_empty() {
+        dropped.push(DroppedOption {
+            option: "fp".into(),
+            reason: format!(
+                "{protocol} sends this core's own TLS ClientHello; uTLS emulation exists for REALITY only"
+            ),
+        });
+    }
+    Ok(())
+}
+
 fn require_disabled(query: &HashMap<String, String>, option: &str) -> Result<(), LinkError> {
     if query
         .get(option)
@@ -2978,7 +3426,7 @@ mod tests {
         assert!(!vless.tls.enabled);
         let reality = vless.reality.as_ref().expect("Reality must be present");
         assert_eq!(reality.server_name, "www.example.com");
-        assert_eq!(reality.fingerprint, RealityFingerprint::Chrome133);
+        assert_eq!(reality.fingerprint, RealityFingerprint::Chrome151);
         assert_eq!(reality.short_id.expose(), "0123456789abcdef");
         assert_eq!(
             inspect_link_shape(link).unwrap(),
@@ -3004,16 +3452,12 @@ mod tests {
         );
         assert!(import_link(&format!("{base}&sid=abc")).is_err());
         assert!(matches!(
-            import_link(&format!("{base}&fp=firefox")),
+            import_link(&format!("{base}&fp=netscape")),
             Err(LinkError::Unsupported(_))
         ));
         assert!(matches!(
             import_link(&base.replace("&pbk=", "&missing=")),
             Err(LinkError::Unsupported(_)) | Err(LinkError::Invalid(_))
-        ));
-        assert!(matches!(
-            import_link(&base.replace("type=tcp", "type=ws")),
-            Err(LinkError::Unsupported(_))
         ));
     }
 
@@ -3283,6 +3727,384 @@ mod tests {
         assert!(config.tls.enabled);
     }
 
+    /// A gRPC node used to die on `reject_unknown_options` before
+    /// [`vless_transport`] — which has always built a gRPC carrier — was ever
+    /// consulted, because `serviceName`/`mode`/`authority` were missing from the
+    /// VLESS allow-list. Every gRPC server in a subscription was lost that way.
+    #[test]
+    fn imports_vless_grpc_transport_with_its_own_options() {
+        let link = concat!(
+            "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.7:443",
+            "?encryption=none&security=tls&sni=grpc.example.net&fp=chrome",
+            "&type=grpc&serviceName=foxtunnel&mode=gun&authority=front.example.net"
+        );
+        let OutboundConfig::Vless(config) = import_link(link).unwrap().outbound else {
+            panic!("profile must be VLESS");
+        };
+        assert!(matches!(
+            config.transport,
+            StreamTransportConfig::Grpc {
+                ref service_name,
+                multi_mode: false,
+                authority: Some(ref authority),
+            } if service_name == "foxtunnel" && authority == "front.example.net"
+        ));
+        assert!(config.tls.enabled);
+
+        let multi = link.replace("mode=gun", "mode=multi");
+        let OutboundConfig::Vless(config) = import_link(&multi).unwrap().outbound else {
+            panic!("profile must be VLESS");
+        };
+        assert!(matches!(
+            config.transport,
+            StreamTransportConfig::Grpc {
+                multi_mode: true,
+                ..
+            }
+        ));
+    }
+
+    /// gRPC parameters name a wire shape the other carriers do not have, so they
+    /// are refused there rather than silently ignored, and the refusal names the
+    /// transport that was actually asked for.
+    #[test]
+    fn vless_grpc_options_and_unknown_transports_fail_by_name() {
+        let base = "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.8:443?encryption=none";
+        for link in [
+            format!("{base}&type=tcp&serviceName=foxtunnel"),
+            format!("{base}&type=ws&path=%2Fw&mode=multi"),
+        ] {
+            let Err(LinkError::Unsupported(message)) = import_link(&link) else {
+                panic!("gRPC-only options must not import on another transport: {link}");
+            };
+            assert!(message.contains("gRPC only"), "{message}");
+        }
+
+        let Err(LinkError::Unsupported(message)) =
+            import_link(&format!("{base}&type=kcp&serviceName=foxtunnel"))
+        else {
+            panic!("an unimplemented transport must be refused");
+        };
+        assert!(message.contains("type=kcp"), "{message}");
+
+        let Err(LinkError::Unsupported(message)) = import_link(&format!(
+            "{base}&type=grpc&serviceName=foxtunnel&mode=stream"
+        )) else {
+            panic!("an unimplemented gRPC mode must be refused");
+        };
+        assert!(message.contains("mode=stream"), "{message}");
+    }
+
+    /// `fp` selects a uTLS parrot. FoxCore emulates one only under REALITY, so on
+    /// an ordinary-TLS or QUIC link the name cannot change a byte it writes:
+    /// refusing the profile over it used to cost the user servers that work.
+    #[test]
+    fn inert_tls_fingerprints_import_and_are_reported_rather_than_refused() {
+        let vless = "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.9:443\
+            ?encryption=none&security=tls&sni=tls.example.net&type=tcp";
+        let hysteria2 = "hysteria2://import-secret@198.51.100.10:443?sni=hy.example.net";
+        for base in [vless, hysteria2] {
+            // The same set REALITY accepts. `fp` is inert on these paths, so a
+            // name that is good enough to substitute for on a REALITY link
+            // cannot be a refusal here.
+            for name in ["chrome", "firefox", "qq", "safari", "ios", "random"] {
+                let imported = import_link(&format!("{base}&fp={name}")).unwrap();
+                assert_eq!(
+                    imported
+                        .dropped
+                        .iter()
+                        .map(|dropped| dropped.option.as_str())
+                        .collect::<Vec<_>>(),
+                    ["fp"],
+                    "{base}&fp={name}"
+                );
+                // The report is safe to log: it names the option, never a value
+                // the subscription chose.
+                assert!(!imported.dropped[0].reason.contains(name));
+            }
+            assert!(import_link(base).unwrap().dropped.is_empty());
+            assert!(matches!(
+                import_link(&format!("{base}&fp=%20nonsense")),
+                Err(LinkError::Unsupported(_))
+            ));
+        }
+    }
+
+    /// REALITY is the one place `fp` is load-bearing: the named build's
+    /// ClientHello is reproduced byte for byte. A parrot with a table is
+    /// honoured silently; a parrot without one is answered with the Chrome
+    /// hello and *said out loud*, because REALITY authentication never reads
+    /// the parrot and refusing would cost the node for nothing.
+    #[test]
+    fn reality_fingerprints_are_honoured_or_reported_never_faked() {
+        let base = concat!(
+            "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.11:443",
+            "?encryption=none&security=reality&type=tcp&sni=reality.example.net",
+            "&pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb"
+        );
+        let fingerprint_of = |link: &str| -> RealityFingerprint {
+            let imported = import_link(link).unwrap();
+            let OutboundConfig::Vless(vless) = &imported.outbound else {
+                panic!("profile must be VLESS");
+            };
+            vless.reality.as_ref().unwrap().fingerprint
+        };
+
+        // A bare `fp=chrome`, and no `fp=` at all, mean the current Chrome
+        // table — not a pinned build. `fp=chrome_133` still reaches the older
+        // uTLS-faithful table for a caller who wants exactly that.
+        for exact in ["", "&fp=chrome", "&fp=chrome_151"] {
+            let link = format!("{base}{exact}");
+            assert!(import_link(&link).unwrap().dropped.is_empty());
+            assert_eq!(fingerprint_of(&link), RealityFingerprint::Chrome151);
+        }
+        assert_eq!(
+            fingerprint_of(&format!("{base}&fp=chrome_133")),
+            RealityFingerprint::Chrome133
+        );
+        assert!(
+            import_link(&format!("{base}&fp=chrome_131"))
+                .unwrap()
+                .dropped
+                .is_empty()
+        );
+        assert_eq!(
+            fingerprint_of(&format!("{base}&fp=chrome_131")),
+            RealityFingerprint::Chrome131
+        );
+
+        // Every one of these names has a real table, and a link asking for one
+        // gets it. No dropped option: nothing was substituted.
+        for (name, expected) in [
+            ("edge", RealityFingerprint::Edge85),
+            ("edge_85", RealityFingerprint::Edge85),
+            ("safari", RealityFingerprint::Safari263),
+            ("safari_26_3", RealityFingerprint::Safari263),
+            ("ios", RealityFingerprint::Ios14),
+            ("ios_14", RealityFingerprint::Ios14),
+            ("qq", RealityFingerprint::Qq111),
+            ("qq_11_1", RealityFingerprint::Qq111),
+            ("firefox", RealityFingerprint::Firefox153),
+            ("firefox_153", RealityFingerprint::Firefox153),
+            ("firefox_148", RealityFingerprint::Firefox148),
+        ] {
+            let link = format!("{base}&fp={name}");
+            assert!(
+                import_link(&link).unwrap().dropped.is_empty(),
+                "fp={name} is implemented and must not be reported as dropped"
+            );
+            assert_eq!(fingerprint_of(&link), expected, "fp={name}");
+        }
+
+        // `random` picks one modern profile for the life of the process, the
+        // way sing-box does in its `init()`. Honoured, never reported, and
+        // stable within a run -- a client that changed browser between
+        // connections would be louder than any single fingerprint.
+        let random_link = format!("{base}&fp=random");
+        assert!(import_link(&random_link).unwrap().dropped.is_empty());
+        let drawn = fingerprint_of(&random_link);
+        assert!(RANDOM_MODERN_PROFILES.contains(&drawn));
+        for _ in 0..8 {
+            assert_eq!(
+                fingerprint_of(&random_link),
+                drawn,
+                "fp=random must not redraw per connection"
+            );
+        }
+
+        // A TLS 1.2 parrot cannot carry REALITY at all: no key_share means no
+        // x25519 share for the server to derive against. Refused rather than
+        // silently answered with a hello the user did not ask for.
+        for impossible in ["360", "android"] {
+            let error = import_link(&format!("{base}&fp={impossible}"))
+                .expect_err("a TLS 1.2 parrot cannot carry REALITY");
+            assert!(
+                format!("{error}").contains("key_share"),
+                "fp={impossible} must be refused for the reason it is impossible: {error}"
+            );
+        }
+
+        // A generator is not a table. It used to be refused for that reason;
+        // it is now answered with the ported generator, which draws a fresh
+        // hello per connection. Honoured, and never reported as a
+        // substitution -- there is no substitution.
+        let randomized_link = format!("{base}&fp=randomized");
+        assert!(import_link(&randomized_link).unwrap().dropped.is_empty());
+        assert_eq!(
+            fingerprint_of(&randomized_link),
+            RealityFingerprint::Randomized
+        );
+
+        // A name that is not a uTLS parrot at all is still malformed input.
+        assert!(matches!(
+            import_link(&format!("{base}&fp=netscape")),
+            Err(LinkError::Unsupported(_))
+        ));
+    }
+
+    /// The transport gate was the other half of the loss: REALITY replaces
+    /// TLS, so every stream carrier that works under TLS works under it.
+    #[test]
+    fn reality_imports_over_every_stream_transport() {
+        let base = concat!(
+            "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.11:443",
+            "?encryption=none&security=reality&sni=reality.example.net",
+            "&pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb"
+        );
+        let expected: [(&str, StreamTransportConfig); 4] = [
+            (
+                "&type=grpc&serviceName=fox&mode=gun",
+                StreamTransportConfig::Grpc {
+                    service_name: "fox".into(),
+                    multi_mode: false,
+                    authority: None,
+                },
+            ),
+            (
+                "&type=ws&path=%2Fws",
+                StreamTransportConfig::Websocket {
+                    path: "/ws".into(),
+                    host: None,
+                    headers: Default::default(),
+                },
+            ),
+            (
+                "&type=httpupgrade&path=%2Fup",
+                StreamTransportConfig::HttpUpgrade {
+                    path: "/up".into(),
+                    host: None,
+                    headers: Default::default(),
+                },
+            ),
+            ("&type=tcp", StreamTransportConfig::Raw),
+        ];
+        for (query, transport) in expected {
+            let imported = import_link(&format!("{base}{query}")).unwrap();
+            let OutboundConfig::Vless(vless) = &imported.outbound else {
+                panic!("profile must be VLESS");
+            };
+            assert_eq!(vless.transport, transport, "transport for {query}");
+            assert!(vless.reality.is_some(), "reality for {query}");
+            assert!(!vless.tls.enabled, "reality must not also enable TLS");
+        }
+    }
+
+    /// The whole point of the two fixes above: a subscription mixing gRPC nodes
+    /// and `fp`-carrying Hysteria2 nodes imports completely instead of losing
+    /// every line that is not raw TCP.
+    #[test]
+    fn a_mixed_grpc_and_fingerprint_subscription_imports_every_node() {
+        let mut body = String::new();
+        for index in 1..=10 {
+            body.push_str(&format!(
+                "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.{index}:443\
+                 ?encryption=none&security=tls&sni=n{index}.example.net&fp=chrome\
+                 &type=grpc&serviceName=fox{index}&mode=gun#grpc-{index}\n"
+            ));
+        }
+        for index in 1..=2 {
+            body.push_str(&format!(
+                "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.2{index}:443\
+                 ?encryption=none&security=tls&sni=t{index}.example.net&type=tcp#tcp-{index}\n"
+            ));
+        }
+        for index in 1..=3 {
+            body.push_str(&format!(
+                "hysteria2://import-secret@198.51.100.3{index}:443\
+                 ?sni=h{index}.example.net&fp=chrome#hy2-fp-{index}\n"
+            ));
+        }
+        for index in 1..=2 {
+            body.push_str(&format!(
+                "hysteria2://import-secret@198.51.100.4{index}:443\
+                 ?sni=p{index}.example.net#hy2-{index}\n"
+            ));
+        }
+
+        let partial = import_subscription_partial(&body).unwrap();
+        assert_eq!(partial.rejected, Vec::new());
+        assert_eq!(partial.profiles.len(), 17);
+        assert_eq!(import_subscription(&body).unwrap().len(), 17);
+    }
+
+    /// The measured case, reproduced with synthetic credentials: a seventeen
+    /// node subscription whose ten VLESS nodes are REALITY over gRPC with
+    /// `fp=qq`. Before the two gates were lifted this imported seven; before
+    /// the QQ table existed all ten reported a substituted fingerprint.
+    #[test]
+    fn a_reality_grpc_subscription_of_the_measured_shape_imports_every_node() {
+        let mut body = String::new();
+        for index in 1..=10 {
+            body.push_str(&format!(
+                "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.{index}:443\
+                 ?encryption=none&security=reality&type=grpc&serviceName=fox{index}&mode=gun\
+                 &sni=r{index}.example.net&fp=qq\
+                 &pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb#reality-grpc-{index}\n"
+            ));
+        }
+        for index in 1..=4 {
+            body.push_str(&format!(
+                "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.2{index}:443\
+                 ?encryption=none&security=reality&type=tcp&sni=t{index}.example.net&fp=chrome\
+                 &pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb#reality-tcp-{index}\n"
+            ));
+        }
+        for index in 1..=3 {
+            body.push_str(&format!(
+                "hysteria2://import-secret@198.51.100.3{index}:443\
+                 ?sni=h{index}.example.net&fp=chrome#hy2-{index}\n"
+            ));
+        }
+
+        let partial = import_subscription_partial(&body).unwrap();
+        assert_eq!(partial.rejected, Vec::new());
+        assert_eq!(partial.profiles.len(), 17);
+
+        // Ten REALITY/gRPC nodes, each reporting the one thing it could not do
+        // literally, and each still carrying a REALITY layer over gRPC.
+        let reality_grpc = partial
+            .profiles
+            .iter()
+            .filter(|profile| match &profile.outbound {
+                OutboundConfig::Vless(vless) => {
+                    vless.reality.is_some()
+                        && matches!(vless.transport, StreamTransportConfig::Grpc { .. })
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(reality_grpc.len(), 10);
+        // These ten used to lose their `fp=qq` to a Chrome substitution and
+        // report it. QQ Browser 11.1 is now a real table, so they carry the
+        // hello the link asked for and there is nothing left to report.
+        for profile in reality_grpc {
+            assert!(
+                profile.dropped.is_empty(),
+                "fp=qq is implemented; nothing should be dropped"
+            );
+            let OutboundConfig::Vless(vless) = &profile.outbound else {
+                panic!("profile must be VLESS");
+            };
+            assert_eq!(
+                vless.reality.as_ref().unwrap().fingerprint,
+                RealityFingerprint::Qq111
+            );
+        }
+        // Fourteen of the seventeen now import with nothing dropped at all:
+        // the four raw-TCP `fp=chrome` nodes and the ten `fp=qq` gRPC nodes,
+        // both of which have real tables. Before the QQ table existed this was
+        // four. (The three Hysteria2 lines still report their own inert `fp`,
+        // which is a rustls path and unchanged.)
+        assert_eq!(
+            partial
+                .profiles
+                .iter()
+                .filter(|profile| profile.dropped.is_empty())
+                .count(),
+            14
+        );
+    }
+
     #[test]
     fn imports_vless_xudp_packet_encoding() {
         let link = concat!(
@@ -3466,7 +4288,10 @@ PersistentKeepalive = 25
         };
         let amnezia = config.amnezia.expect("the block must be carried through");
         assert_eq!(amnezia.junk_packet_count, 4);
-        assert_eq!(amnezia.header_initiation, 1_234_567);
+        assert_eq!(
+            amnezia.header_initiation,
+            foxcore_api::AmneziaHeaderRange::single(1_234_567)
+        );
 
         // Half a block is refused: a peer told S1 but not the headers decodes
         // nothing, and the failure looks like a broken network instead.
@@ -3475,6 +4300,170 @@ PersistentKeepalive = 25
             import_wireguard_conf(&partial),
             Err(LinkError::Invalid(_))
         ));
+    }
+
+    /// The AmneziaWG 2.0 server generator writes `H1 = 234567-345678` — a
+    /// *range* — by default, and this importer refused the whole profile with
+    /// "AmneziaWG h1 must be a number". Nothing was wrong with the profile.
+    #[test]
+    fn an_amneziawg_2_0_conf_imports_its_ranged_headers() {
+        let conf = WG_CONF.replace(
+            "MTU = 1280",
+            "MTU = 1280\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 15\nS2 = 20\n\
+             H1 = 234567-345678\nH2 = 400000-500000\nH3 = 600000-700000\n\
+             H4 = 800000-900000",
+        );
+        let OutboundConfig::Wireguard(config) = import_wireguard_conf(&conf).unwrap().outbound
+        else {
+            panic!("profile must be WireGuard");
+        };
+        let amnezia = config.amnezia.expect("a ranged block is still a block");
+        assert_eq!(
+            amnezia.header_initiation,
+            foxcore_api::AmneziaHeaderRange::new(234_567, 345_678).unwrap(),
+            "the range is carried as a range; collapsing it to one value would \
+             put a constant on the wire where the profile asked for a moving one"
+        );
+        assert_eq!(
+            amnezia.header_transport,
+            foxcore_api::AmneziaHeaderRange::new(800_000, 900_000).unwrap()
+        );
+        // The 1.5 spelling still means what it always did.
+        assert!(!amnezia.header_initiation.is_single());
+        assert!(
+            foxcore_api::parse_amnezia_header_range("7")
+                .unwrap()
+                .is_single()
+        );
+    }
+
+    /// Ranges that share a header make the message types ambiguous for exactly
+    /// the datagrams that draw it — an intermittent fault, so it is refused at
+    /// import instead.
+    #[test]
+    fn overlapping_header_ranges_are_refused_at_import() {
+        let conf = WG_CONF.replace(
+            "MTU = 1280",
+            "MTU = 1280\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 15\nS2 = 20\n\
+             H1 = 100-200\nH2 = 200-300\nH3 = 400-500\nH4 = 600-700",
+        );
+        let config = import_wireguard_conf(&conf).expect("the link itself parses");
+        let OutboundConfig::Wireguard(wireguard) = config.outbound else {
+            panic!("profile must be WireGuard");
+        };
+        let amnezia = wireguard.amnezia.expect("a block is present");
+        assert!(
+            amnezia.header_initiation.overlaps(&amnezia.header_response),
+            "H1 and H2 share 200, which the engine's own validation refuses"
+        );
+
+        // And an inverted range has no meaning at all.
+        let inverted = WG_CONF.replace(
+            "MTU = 1280",
+            "MTU = 1280\nJc = 4\nJmin = 40\nJmax = 70\nS1 = 15\nS2 = 20\n\
+             H1 = 345678-234567\nH2 = 2\nH3 = 3\nH4 = 4",
+        );
+        assert!(matches!(
+            import_wireguard_conf(&inverted),
+            Err(LinkError::Invalid(_))
+        ));
+    }
+
+    /// The AmneziaWG 3.0 keys, each answered by name rather than by refusing the
+    /// profile — except the one that genuinely cannot be degraded.
+    #[test]
+    fn amneziawg_3_0_keys_are_answered_individually() {
+        // Timers are carried, because a server that rejects a key after sixty
+        // seconds discards traffic a client holding the spec's 180 still sends.
+        let timers = WG_CONF.replace(
+            "MTU = 1280",
+            "MTU = 1280\nS3 = 4\nRekeyTimeout = 4-6\nRejectAfterTime = 60\n\
+             KeepaliveTimeout = 7\nMaxHandshakeAttempts = 5-9\nRekeyAfterTime = 45",
+        );
+        let OutboundConfig::Wireguard(config) = import_wireguard_conf(&timers).unwrap().outbound
+        else {
+            panic!("profile must be WireGuard");
+        };
+        let amnezia = config.amnezia.expect("3.0 keys alone are a block");
+        assert_eq!(
+            amnezia.timers.reject_after_time_s,
+            Some(foxcore_api::AmneziaTimerRange::single(60))
+        );
+        assert_eq!(
+            amnezia.timers.rekey_timeout_s,
+            Some(foxcore_api::AmneziaTimerRange::new(4, 6).unwrap())
+        );
+        assert_eq!(
+            amnezia.timers.max_handshake_attempts,
+            Some(foxcore_api::AmneziaTimerRange::new(5, 9).unwrap())
+        );
+
+        // Padding and cookie policy: accepted, reported by name, tunnel unharmed.
+        let noted = WG_CONF.replace(
+            "MTU = 1280",
+            "MTU = 1280\nS3 = 4\nContentPaddingAddition = 1-16\n\
+             RandomTrailers = true\nDisableCookies = true",
+        );
+        let imported = import_wireguard_conf(&noted).unwrap();
+        let reported: Vec<&str> = imported
+            .dropped
+            .iter()
+            .map(|option| option.option.as_str())
+            .collect();
+        for key in ["contentpaddingaddition", "randomtrailers", "disablecookies"] {
+            assert!(
+                reported.contains(&key),
+                "{key} must be reported by name, not silently ignored: {reported:?}"
+            );
+        }
+        assert!(
+            matches!(imported.outbound, OutboundConfig::Wireguard(_)),
+            "and the profile still imports"
+        );
+
+        // Header protection is the one that cannot be degraded: without the key
+        // we cannot read a datagram the peer sends. Refused, and by name.
+        let protected = WG_CONF.replace(
+            "MTU = 1280",
+            "MTU = 1280\nS3 = 4\nHeaderProtectionKey = 0000000000000000000000000000000000000000000000000000000000000000",
+        );
+        let error = import_wireguard_conf(&protected).unwrap_err().to_string();
+        assert!(
+            error.contains("HeaderProtectionKey"),
+            "the refusal has to name the key it is refusing: {error}"
+        );
+    }
+
+    /// The `wireguard://` form carried none of this and answered `unknown query
+    /// option jc`, so the same provider's link and `.conf` disagreed about
+    /// whether a profile existed.
+    #[test]
+    fn a_wireguard_url_carries_the_same_obfuscation_vocabulary_as_the_conf() {
+        let link = format!(
+            "wireguard://{WG_PRIVATE}@example.net:51820\
+             ?publickey={WG_PUBLIC}&address=192.0.2.2%2F32\
+             &jc=4&jmin=40&jmax=70&s1=15&s2=20&s3=12&s4=20\
+             &h1=234567-345678&h2=400000-500000&h3=600000-700000&h4=800000-900000\
+             &i1=%3Cb%200xc0ffee%3E%3Cr%205%3E&rejectaftertime=60#amnezia"
+        );
+        let OutboundConfig::Wireguard(config) = import_link(&link).unwrap().outbound else {
+            panic!("profile must be WireGuard");
+        };
+        let amnezia = config
+            .amnezia
+            .expect("a link carrying Jc/S/H is an AmneziaWG profile");
+        assert_eq!(amnezia.junk_packet_count, 4);
+        assert_eq!(amnezia.init_junk_size, 15);
+        assert_eq!(amnezia.transport_junk_size, 20);
+        assert_eq!(
+            amnezia.header_initiation,
+            foxcore_api::AmneziaHeaderRange::new(234_567, 345_678).unwrap()
+        );
+        assert_eq!(amnezia.init_packets.len(), 1, "I1 travels in a link too");
+        assert_eq!(
+            amnezia.timers.reject_after_time_s,
+            Some(foxcore_api::AmneziaTimerRange::single(60))
+        );
     }
 
     #[test]
@@ -3513,7 +4502,10 @@ PersistentKeepalive = 25
         );
         // Everything 1.5 keeps its default rather than being invented.
         assert_eq!(amnezia.junk_packet_count, 0);
-        assert_eq!(amnezia.header_initiation, 1);
+        assert_eq!(
+            amnezia.header_initiation,
+            foxcore_api::AmneziaHeaderRange::single(1)
+        );
     }
 
     #[test]
@@ -3710,12 +4702,29 @@ PersistentKeepalive = 25
         );
         assert!(matches!(import_link(mux), Err(LinkError::Unsupported(_))));
 
+        // `fp` on an ordinary-TLS link is inert here — the ClientHello comes
+        // from rustls either way — so it is reported, not fatal. A name outside
+        // the set sing-box takes is still refused.
         let fingerprint = concat!(
             "vless://d0cf0001-0000-4000-8000-000000000000@example.com:443",
             "?type=tcp&security=tls&fp=chrome"
         );
+        let imported = import_link(fingerprint).unwrap();
+        assert_eq!(
+            imported
+                .dropped
+                .iter()
+                .map(|dropped| dropped.option.as_str())
+                .collect::<Vec<_>>(),
+            ["fp"]
+        );
+
+        let unknown = concat!(
+            "vless://d0cf0001-0000-4000-8000-000000000000@example.com:443",
+            "?type=tcp&security=tls&fp=not-a-browser"
+        );
         assert!(matches!(
-            import_link(fingerprint),
+            import_link(unknown),
             Err(LinkError::Unsupported(_))
         ));
     }

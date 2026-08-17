@@ -1,7 +1,7 @@
 use base64::engine::{Engine as _, general_purpose::URL_SAFE_NO_PAD};
 
 use super::reality_key_exchange::{
-    ML_KEM_768_CIPHERTEXT_LEN, NamedGroup, ServerKeyShare, X25519_LEN,
+    ML_KEM_768_CIPHERTEXT_LEN, NamedGroup, P256_PUBLIC_LEN, ServerKeyShare, X25519_LEN,
     X25519MLKEM768_SERVER_SHARE_LEN,
 };
 use crate::buf_reader::BufReader;
@@ -209,6 +209,17 @@ fn parse_server_keyshare_extension(data: &[u8]) -> Result<ServerKeyShare, std::i
             let mut key = [0_u8; X25519_LEN];
             key.copy_from_slice(reader.read_slice(X25519_LEN)?);
             Ok(ServerKeyShare::X25519(key))
+        }
+        Some(NamedGroup::Secp256r1) => {
+            if key_len != P256_PUBLIC_LEN {
+                return Err(invalid(format!(
+                    "REALITY ServerHello secp256r1 key share is {key_len} bytes, expected \
+                     {P256_PUBLIC_LEN}"
+                )));
+            }
+            let mut key = Box::new([0_u8; P256_PUBLIC_LEN]);
+            key.copy_from_slice(reader.read_slice(P256_PUBLIC_LEN)?);
+            Ok(ServerKeyShare::Secp256r1(key))
         }
         Some(NamedGroup::X25519MlKem768) => {
             // draft-ietf-tls-ecdhe-mlkem §3.1: ciphertext first, X25519 second.

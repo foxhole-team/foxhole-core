@@ -317,6 +317,10 @@ fn build_client_config(
         .with_no_client_auth();
     config.alpn_protocols = match alpn_override {
         Some(protocols) => protocols.iter().map(|p| p.as_bytes().to_vec()).collect(),
+        None if tls.alpn.is_empty() => DEFAULT_ALPN
+            .iter()
+            .map(|protocol| protocol.as_bytes().to_vec())
+            .collect(),
         None => tls
             .alpn
             .iter()
@@ -460,15 +464,36 @@ fn protocol_versions(tls: &TlsConfig) -> Vec<&'static rustls::SupportedProtocolV
 /// rather than one outbound at a time.
 fn crypto_provider(tls: &TlsConfig) -> io::Result<Arc<rustls::crypto::CryptoProvider>> {
     let base = rustls::crypto::aws_lc_rs::default_provider();
-    if tls.curve_preferences.is_empty() {
-        return Ok(Arc::new(base));
+
+    // The order the profile asked for, or the default. Either way the hybrid
+    // ends up first unless the profile explicitly allowed it not to be.
+    let mut wanted: Vec<CurveGroup> = tls.curve_preferences.clone();
+    if wanted.is_empty() {
+        // Chrome offers X25519MLKEM768 first; the aws-lc-rs default offers it
+        // last. Measured consequence of leading with it (see
+        // `crates/foxcore-transport/tests/rustls_hello_shape.rs`): rustls sends
+        // key shares for *both* the hybrid and x25519, so a server that cannot
+        // do ML-KEM still completes in one round trip. There is no
+        // HelloRetryRequest to trade against.
+        wanted = vec![
+            CurveGroup::X25519MlKem768,
+            CurveGroup::X25519,
+            CurveGroup::Secp256r1,
+            CurveGroup::Secp384r1,
+        ];
+    } else if !wanted.contains(&CurveGroup::X25519MlKem768)
+        && !tls.allow_classical_only_key_exchange
+    {
+        wanted.insert(0, CurveGroup::X25519MlKem768);
     }
-    let mut kx_groups = Vec::with_capacity(tls.curve_preferences.len());
-    for curve in &tls.curve_preferences {
+
+    let mut kx_groups = Vec::with_capacity(wanted.len());
+    for curve in &wanted {
         let named = match curve {
             CurveGroup::X25519 => rustls::NamedGroup::X25519,
             CurveGroup::Secp256r1 => rustls::NamedGroup::secp256r1,
             CurveGroup::Secp384r1 => rustls::NamedGroup::secp384r1,
+            CurveGroup::X25519MlKem768 => rustls::NamedGroup::X25519MLKEM768,
         };
         let group = base
             .kx_groups
@@ -487,6 +512,14 @@ fn crypto_provider(tls: &TlsConfig) -> io::Result<Arc<rustls::crypto::CryptoProv
         ..base
     }))
 }
+
+/// ALPN for a profile that named none.
+///
+/// `h2, http/1.1` is what a browser sends and what Xray's TLS defaults to, so a
+/// hello without it is a hello no browser produces. Only used when the profile
+/// set no ALPN *and* the transport did not override it — gRPC and H2 pin `h2`,
+/// WebSocket pins `http/1.1`, and those keep winning.
+const DEFAULT_ALPN: [&str; 2] = ["h2", "http/1.1"];
 
 fn decode_pin(encoded: &str) -> io::Result<[u8; 32]> {
     let bytes = STANDARD
@@ -689,6 +722,8 @@ mod tests {
     fn pinned_curves_reach_the_client_hello_in_the_order_asked_for() {
         // The order is the point: a profile pins curves to shape its
         // ClientHello, and reordering them changes the fingerprint it produces.
+        // The hybrid leads, because a list that omits it gets it prepended —
+        // see `a_curve_preference_cannot_silently_drop_the_post_quantum_group`.
         let config = tls(|config| {
             config.curve_preferences = vec![CurveGroup::Secp256r1, CurveGroup::X25519];
         });
@@ -699,7 +734,11 @@ mod tests {
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
-            vec![rustls::NamedGroup::secp256r1, rustls::NamedGroup::X25519]
+            vec![
+                rustls::NamedGroup::X25519MLKEM768,
+                rustls::NamedGroup::secp256r1,
+                rustls::NamedGroup::X25519
+            ]
         );
 
         let untouched = crypto_provider(&tls(|_| {})).unwrap();
@@ -832,7 +871,11 @@ mod tests {
         let tls = TlsConfig::default();
         let forced = rustls_client_config_alpn(&tls, Some(&["h2"])).unwrap();
         assert_eq!(forced.alpn_protocols, vec![b"h2".to_vec()]);
+        // With no override and no profile ALPN, the browser default applies.
         let normal = rustls_client_config_alpn(&tls, None).unwrap();
-        assert!(normal.alpn_protocols.is_empty());
+        assert_eq!(
+            normal.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
     }
 }

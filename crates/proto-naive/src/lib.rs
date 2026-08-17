@@ -35,7 +35,7 @@ use bytes::BytesMut;
 use foxcore_api::Destination;
 use foxcore_dialer::ProtectedDialer;
 use foxcore_transport::{BoxDatagramSession, BoxStream, wrap_tls};
-use rand::rngs::SmallRng;
+use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 #[cfg(test)]
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -279,7 +279,12 @@ async fn open_stream(
     require_padding: bool,
     padding_sizes: Option<PaddingSizes>,
 ) -> Result<BoxStream, NaiveError> {
-    let mut rng = SmallRng::from_os_rng();
+    // A CSPRNG, not the fast non-cryptographic generator this used before: it feeds padding
+    // lengths *and* the padding bytes themselves. xoshiro state is recoverable from a modest
+    // run of its own output, so a predictable generator would let an observer predict the whole
+    // padding sequence — the one thing padding exists to prevent. One small draw per packet, so
+    // the cost is nothing.
+    let mut rng = StdRng::from_os_rng();
     let request = build_request(destination, credentials, &mut rng)?;
 
     // `ready` is the peer's stream limit expressed as backpressure. The pool
@@ -430,8 +435,8 @@ mod tests {
         }
     }
 
-    fn seeded() -> SmallRng {
-        SmallRng::seed_from_u64(0x5eed_1234_u64)
+    fn seeded() -> rand::rngs::SmallRng {
+        rand::rngs::SmallRng::seed_from_u64(0x5eed_1234_u64)
     }
 
     #[test]

@@ -52,6 +52,7 @@ fn runtime_start_stop_is_owned_and_idempotent() {
             packet_encoding: foxcore_api::PacketEncoding::None,
             tls: TlsConfig::default(),
             reality: None,
+            encryption: None,
         }),
         outbounds: Vec::new(),
         tun: TunConfig {
@@ -219,6 +220,7 @@ fn an_outbound_that_cannot_be_built_leaves_the_engine_and_the_other_lanes_runnin
             packet_encoding: foxcore_api::PacketEncoding::None,
             tls: TlsConfig::default(),
             reality: None,
+            encryption: None,
         }),
         outbounds: vec![NamedOutboundConfig {
             id: OutboundId("tor".into()),
@@ -293,6 +295,101 @@ fn an_outbound_that_cannot_be_built_leaves_the_engine_and_the_other_lanes_runnin
     assert_eq!(runtime.retry_unavailable_outbounds(), expected_retries);
     runtime.network_changed_with_handle(7);
     assert_eq!(runtime.unavailable_outbounds().len(), 1);
+
+    assert_eq!(runtime.stop(), StopResult::Stopped);
+}
+
+/// Tor switched off means Tor is never built — not built and then not routed
+/// to.
+///
+/// The registry used to be created before the overlay gates were resolved, and
+/// the gates were consulted only at routing time. A profile carrying
+/// `traffic.tor_enabled: false` therefore still ran a full Arti bootstrap at
+/// every start: a directory fetch and guard connections for a lane the user had
+/// switched off, holding the start for up to `bootstrap_timeout_s`.
+///
+/// `attempts == 0` is the assertion that proves it, and the only one that can:
+/// every path that builds an outbound files at least one attempt, so a zero
+/// here cannot have been produced by a bootstrap that ran and failed. The
+/// profile below points Arti at `/nonexistent/state`, so a build that *did*
+/// happen would report `internal` (or `unsupported` without the feature) with
+/// one attempt, exactly as the test above asserts it does when the lane is on.
+#[test]
+fn a_switched_off_tor_lane_is_never_bootstrapped() {
+    let (tun, _peer) = UnixStream::pair().unwrap();
+    let config = EngineConfig {
+        schema_version: foxcore_api::SCHEMA_VERSION,
+        outbound: OutboundConfig::Vless(VlessConfig {
+            server: "bootstrap.invalid".into(),
+            port: 443,
+            server_ip: Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))),
+            uuid: SecretString::new("d0cf0001-0000-4000-8000-000000000000"),
+            flow: None,
+            transport: StreamTransportConfig::Raw,
+            packet_encoding: foxcore_api::PacketEncoding::None,
+            tls: TlsConfig::default(),
+            reality: None,
+            encryption: None,
+        }),
+        outbounds: vec![NamedOutboundConfig {
+            id: OutboundId("tor".into()),
+            outbound: tor_profile(),
+        }],
+        tun: TunConfig {
+            mtu: 1400,
+            ipv4: "10.77.0.4".into(),
+            ipv6: None,
+        },
+        dns: DnsConfig::default(),
+        runtime: RuntimeConfig::default(),
+        routes: Vec::new(),
+        traffic: TrafficPolicyConfig {
+            tor_enabled: Some(false),
+            ..Default::default()
+        },
+    };
+
+    let runtime =
+        CoreRuntime::start(62, config, OwnedFd::from(tun), SocketCallbacks::none()).unwrap();
+
+    let unavailable = runtime.unavailable_outbounds();
+    assert_eq!(unavailable.len(), 1);
+    assert_eq!(unavailable[0].id, "tor");
+    assert_eq!(
+        unavailable[0].kind, "tor",
+        "the entry stays, or .onion would refuse as 'no Tor outbound' instead of 'the overlay is off'"
+    );
+    assert_eq!(
+        unavailable[0].reason,
+        foxcore_api::UnavailableReason::Disabled,
+        "and it is reported as switched off rather than as any kind of failure"
+    );
+    assert_eq!(unavailable[0].attempts, 0, "nothing was ever attempted");
+    assert!(
+        runtime.outbounds.tor().is_some(),
+        "the .onion gate reads this: Some() is what makes the refusal say 'disabled by the \
+         active traffic policy' rather than 'requires a registered Tor outbound'"
+    );
+
+    // The user never had a failure, so no failure is reported. Reusing the
+    // `unavailable_outbound` path would have published one here.
+    let events = runtime.drain_events_json(16);
+    assert!(!events.contains("outbound_unavailable"), "{events}");
+    let snapshot = runtime.snapshot_json();
+    assert!(snapshot.contains(r#""reason":"disabled""#), "{snapshot}");
+
+    // And the trap the retry pass sets: `is_retryable` is what a network change
+    // consults, so a gated-off entry built the ordinary way would start the
+    // forbidden bootstrap on the next Wi-Fi/mobile flip.
+    assert_eq!(runtime.retry_unavailable_outbounds(), 0);
+    runtime.network_changed_with_handle(7);
+    let after = runtime.unavailable_outbounds();
+    assert_eq!(after.len(), 1);
+    assert_eq!(
+        after[0].attempts, 0,
+        "a network change must not resurrect a lane the user switched off"
+    );
+    assert_eq!(after[0].reason, foxcore_api::UnavailableReason::Disabled);
 
     assert_eq!(runtime.stop(), StopResult::Stopped);
 }

@@ -33,6 +33,17 @@ pub enum UnavailableReason {
     Config,
     /// The protocol is not compiled into this build of the core.
     Unsupported,
+    /// The overlay this lane carries is switched off in the traffic policy, so
+    /// the lane was never built.
+    ///
+    /// The one reason here that is not a failure. Nothing was attempted and
+    /// nothing went wrong: the user turned Tor (or I2P) off, and building it
+    /// anyway would mean an Arti bootstrap — a directory fetch and guard
+    /// connections — for a lane whose whole purpose is to be off. It is a
+    /// distinct class rather than a `Config` refusal because a screen must be
+    /// able to render "off" differently from "broken", and because it must
+    /// never be retried: see [`Self::is_retryable`].
+    Disabled,
     /// Anything else. Read `message`.
     Internal,
 }
@@ -71,6 +82,7 @@ impl UnavailableReason {
             Self::Network => "network",
             Self::Config => "config",
             Self::Unsupported => "unsupported",
+            Self::Disabled => "disabled",
             Self::Internal => "internal",
         }
     }
@@ -81,6 +93,11 @@ impl UnavailableReason {
     /// Advisory. The retry pass runs on events the app reports — a network
     /// change, a reload, an explicit call — so this only decides whether an
     /// attempt is worth making, never how often one happens.
+    ///
+    /// [`Self::Disabled`] is false for a different reason than the rest: not
+    /// "trying again cannot help" but "trying at all is the thing the user
+    /// switched off". A retryable gated-off lane would start the bootstrap it
+    /// exists to prevent on the next network change.
     pub fn is_retryable(self) -> bool {
         matches!(self, Self::Timeout | Self::Network | Self::Internal)
     }
@@ -139,6 +156,22 @@ mod tests {
         let error = io::Error::new(io::ErrorKind::TimedOut, "Arti bootstrap timed out");
         assert_eq!(UnavailableReason::of(&error), UnavailableReason::Timeout);
         assert!(UnavailableReason::of(&error).is_retryable());
+    }
+
+    /// A switched-off overlay is never dialled by the retry pass. This is the
+    /// whole reason it is its own class: every other non-retryable reason is a
+    /// failure, and a screen that grouped them would report an outage the user
+    /// caused on purpose.
+    #[test]
+    fn a_switched_off_overlay_is_not_a_failure_and_is_never_retried() {
+        assert_eq!(UnavailableReason::Disabled.name(), "disabled");
+        assert!(!UnavailableReason::Disabled.is_retryable());
+        let error = io::Error::new(io::ErrorKind::TimedOut, "Arti bootstrap timed out");
+        assert_ne!(
+            UnavailableReason::of(&error),
+            UnavailableReason::Disabled,
+            "nothing that classifies a build failure may produce it"
+        );
     }
 
     #[test]

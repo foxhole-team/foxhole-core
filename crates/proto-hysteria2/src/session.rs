@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use foxcore_api::{ContinuityPermit, Hysteria2Config};
 use foxcore_dialer::ProtectedDialer;
+use foxcore_transport::backoff::ReconnectBackoff;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -13,6 +14,9 @@ use tokio_util::sync::CancellationToken;
 use crate::connection::Hysteria2Conn;
 use crate::udp::Hysteria2UdpRelay;
 
+/// Floor and ceiling of the reconnect window. The delay between them is drawn,
+/// not counted: see [`ReconnectBackoff`] for why a deterministic ladder is both
+/// a thundering herd on the server and a timing fingerprint of this client.
 const BACKOFF_MIN: Duration = Duration::from_millis(500);
 const BACKOFF_MAX: Duration = Duration::from_secs(8);
 const WAIT_READY_TIMEOUT: Duration = Duration::from_secs(6);
@@ -153,7 +157,7 @@ async fn reconnect(
             }
         }
         let reconnect_epoch = session.reconnect_epoch.load(Ordering::Acquire);
-        let mut backoff = BACKOFF_MIN;
+        let mut backoff = ReconnectBackoff::new(BACKOFF_MIN, BACKOFF_MAX);
         loop {
             if cancel.is_cancelled() {
                 return false;
@@ -195,9 +199,8 @@ async fn reconnect(
                     tokio::select! {
                         _ = cancel.cancelled() => return false,
                         _ = reconnect_now => continue 'permission,
-                        _ = tokio::time::sleep(backoff) => {}
+                        _ = tokio::time::sleep(backoff.next_delay()) => {}
                     }
-                    backoff = (backoff * 2).min(BACKOFF_MAX);
                 }
             }
         }
@@ -221,4 +224,24 @@ async fn connect_server(
     Err(last_error.unwrap_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "Hysteria2 server has no address")
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The jittered window is the ladder's own bounds, not new ones.
+    ///
+    /// Asserted on the range rather than on a value: the delay is drawn from
+    /// the OS RNG here, and the property under test is the one that holds for
+    /// every draw. A reconnect that could wait longer than the old ceiling
+    /// would read to the user as a lane that died.
+    #[test]
+    fn the_reconnect_window_keeps_the_bounds_the_ladder_had() {
+        let mut backoff = ReconnectBackoff::new(BACKOFF_MIN, BACKOFF_MAX);
+        for _ in 0..64 {
+            let delay = backoff.next_delay();
+            assert!((BACKOFF_MIN..=BACKOFF_MAX).contains(&delay), "{delay:?}");
+        }
+    }
 }

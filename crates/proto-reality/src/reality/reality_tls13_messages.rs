@@ -2,17 +2,18 @@
 //
 // Construct TLS 1.3 handshake messages for REALITY protocol
 
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 use super::common::{
     HANDSHAKE_TYPE_CERTIFICATE, HANDSHAKE_TYPE_ENCRYPTED_EXTENSIONS, HANDSHAKE_TYPE_SERVER_HELLO,
+    VERSION_TLS_1_2_MAJOR, VERSION_TLS_1_2_MINOR,
 };
 use super::common::{
-    HANDSHAKE_TYPE_FINISHED, HELLO_SESSION_ID_LEN, HELLO_SESSION_ID_OFFSET, VERSION_TLS_1_2_MAJOR,
-    VERSION_TLS_1_2_MINOR,
+    HANDSHAKE_TYPE_FINISHED, HELLO_SESSION_ID_LEN, HELLO_SESSION_ID_OFFSET, VERSION_TLS_1_0_MAJOR,
+    VERSION_TLS_1_0_MINOR,
 };
 use super::hello_profile::{
-    COMPRESSION_METHODS, CipherSuiteSlot, GreaseSlot, HelloProfile, HelloSession, LEGACY_VERSION,
-    extension_order, write_padding,
+    COMPRESSION_METHODS, CipherSuiteSlot, GreaseSlot, HelloProfileData, HelloSession,
+    LEGACY_VERSION, extension_order, write_padding,
 };
 use std::io::Result;
 
@@ -23,7 +24,7 @@ use std::io::Result;
 /// * `session_id` - Session ID from ClientHello (for compatibility)
 /// * `cipher_suite` - Selected cipher suite (e.g., 0x1301)
 /// * `key_share_data` - Server's X25519 public key (32 bytes)
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 pub fn construct_server_hello(
     server_random: &[u8; 32],
     session_id: &[u8],
@@ -98,7 +99,7 @@ pub fn construct_server_hello(
 }
 
 /// Construct EncryptedExtensions message
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 pub fn construct_encrypted_extensions() -> Result<Vec<u8>> {
     let mut encrypted_extensions = Vec::new();
 
@@ -127,7 +128,7 @@ pub fn construct_encrypted_extensions() -> Result<Vec<u8>> {
 ///
 /// # Arguments
 /// * `cert` - Certificate from rcgen (takes ownership to avoid allocation)
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 pub fn construct_certificate(cert: rcgen::Certificate) -> Result<Vec<u8>> {
     let cert_der = cert.der();
 
@@ -232,7 +233,7 @@ pub fn construct_finished(verify_data: &[u8]) -> Result<Vec<u8>> {
 /// would surface as "authentication rejected" and send everyone looking at
 /// short ids.
 pub fn construct_client_hello(
-    profile: &HelloProfile,
+    profile: &HelloProfileData<'_>,
     session: &HelloSession<'_>,
 ) -> Result<Vec<u8>> {
     profile.validate()?;
@@ -325,18 +326,30 @@ fn assert_session_id_window(hello: &[u8], session_id: &[u8; HELLO_SESSION_ID_LEN
     Ok(())
 }
 
-/// Write TLS record header
+/// Write a TLS record header.
 ///
 /// # Arguments
 /// * `record_type` - TLS record type (0x16 for Handshake, 0x17 for ApplicationData)
+/// * `version` - `legacy_record_version`; see [`INITIAL_RECORD_VERSION`]
 /// * `length` - Length of record payload
-pub fn write_record_header(record_type: u8, length: u16) -> Vec<u8> {
+pub fn write_record_header(record_type: u8, version: [u8; 2], length: u16) -> Vec<u8> {
     let mut header = Vec::new();
     header.push(record_type);
-    header.extend_from_slice(&[VERSION_TLS_1_2_MAJOR, VERSION_TLS_1_2_MINOR]); // Version: TLS 1.2
+    header.extend_from_slice(&version);
     header.extend_from_slice(&length.to_be_bytes());
     header
 }
+
+/// `legacy_record_version` for the first record a connection writes — the one
+/// carrying the initial ClientHello.
+///
+/// 0x0301, because that is what BoringSSL and uTLS put there while no version
+/// has been negotiated. See [`VERSION_TLS_1_0_MAJOR`] for the sources. This
+/// byte is outside both the transcript hash and the REALITY AAD, so it changes
+/// what a DPI sees and nothing else.
+/// Every record after this one carries 0x0303, frozen there by RFC 8446 §5.1;
+/// those are written by the record encryptor, which builds its own header.
+pub const INITIAL_RECORD_VERSION: [u8; 2] = [VERSION_TLS_1_0_MAJOR, VERSION_TLS_1_0_MINOR];
 
 #[cfg(test)]
 mod tests {
@@ -392,12 +405,26 @@ mod tests {
 
     #[test]
     fn test_write_record_header() {
-        let header = write_record_header(CONTENT_TYPE_HANDSHAKE, 100);
+        let header = write_record_header(CONTENT_TYPE_HANDSHAKE, INITIAL_RECORD_VERSION, 100);
         assert_eq!(header.len(), 5);
         assert_eq!(header[0], 0x16); // Handshake
-        assert_eq!(header[1], 0x03); // TLS 1.2
-        assert_eq!(header[2], 0x03);
+        assert_eq!(header[1], 0x03);
+        assert_eq!(header[2], 0x01);
         assert_eq!(u16::from_be_bytes([header[3], header[4]]), 100);
+    }
+
+    /// The parrot's first five bytes.
+    ///
+    /// BoringSSL's `tls_record_version` returns TLS1_VERSION while
+    /// `ssl->s3->version == 0`, and Go's `writeRecordLocked` — which uTLS
+    /// inherits, and which is therefore what Xray and sing-box put on the wire
+    /// — does the same. 0x0303 here was legal TLS and a one-byte tell that no
+    /// Chrome emits.
+    #[test]
+    fn the_initial_record_version_is_the_one_boringssl_and_utls_send() {
+        assert_eq!(INITIAL_RECORD_VERSION, [0x03, 0x01]);
+        let header = write_record_header(CONTENT_TYPE_HANDSHAKE, INITIAL_RECORD_VERSION, 512);
+        assert_eq!(&header[..3], &[0x16, 0x03, 0x01]);
     }
 
     /// A ClientHello, parsed back out of the bytes the builder produced.
@@ -470,7 +497,7 @@ mod tests {
 
     const TEST_SEED: [u8; 5] = [0x00, 0x1f, 0x2c, 0x30, 0x4d];
 
-    fn test_hello(profile: &HelloProfile, seed: u64) -> (Vec<u8>, [u8; 32], GreaseValues) {
+    fn test_hello(profile: &HelloProfileData<'_>, seed: u64) -> (Vec<u8>, [u8; 32], GreaseValues) {
         let session_id = [0x5c_u8; 32];
         let grease = GreaseValues::from_seed(TEST_SEED);
         let exchange =

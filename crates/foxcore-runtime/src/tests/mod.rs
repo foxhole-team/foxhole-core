@@ -77,7 +77,14 @@ async fn a_lane_that_was_not_there_at_start_comes_up_in_place() {
     assert_eq!(routing.unavailable().len(), 1);
 
     let events = Arc::new(EventQueue::new(DEFAULT_EVENT_CAPACITY));
-    let restored = retry_deferred_outbounds(outbounds, dialer, 100, events.sink()).await;
+    let restored = retry_deferred_outbounds(
+        outbounds,
+        dialer,
+        100,
+        OverlayGates::new(true, true),
+        events.sink(),
+    )
+    .await;
 
     assert_eq!(restored, vec!["proxy".to_owned()]);
     assert!(
@@ -91,6 +98,41 @@ async fn a_lane_that_was_not_there_at_start_comes_up_in_place() {
     let drained = serde_json::to_string(&events.drain(16)).unwrap();
     assert!(drained.contains("outbound_restored"), "{drained}");
     assert!(drained.contains(r#""attempts":2"#), "{drained}");
+}
+
+/// The gate decides whether a skipped overlay is ever built, and nothing else
+/// does.
+///
+/// Both halves matter. A gated-off lane must survive every network change
+/// without a bootstrap — that is the defect — and it must still come up the
+/// moment a reload turns the overlay back on, or switching Tor off once would
+/// leave the lane permanently dead for the life of the generation.
+#[test]
+fn a_switched_off_lane_is_built_only_when_the_switch_comes_back_on() {
+    let gated = foxcore_outbound::DeferredOutbound::gated_off(
+        "tor",
+        foxcore_outbound::OutboundKind::Tor,
+        tor_profile(),
+    );
+    assert!(
+        !OverlayGates::new(false, true).may_build(&gated),
+        "a network change with Tor still off starts nothing"
+    );
+    assert!(
+        OverlayGates::new(true, true).may_build(&gated),
+        "and a reload that turns it on makes the lane buildable again"
+    );
+
+    let failed = foxcore_outbound::DeferredOutbound::new(
+        "proxy",
+        foxcore_outbound::OutboundKind::Socks,
+        socks_profile(),
+        &io::Error::new(io::ErrorKind::TimedOut, "handshake timed out"),
+    );
+    assert!(
+        OverlayGates::new(false, false).may_build(&failed),
+        "the overlay gates say nothing about a lane that is not an overlay"
+    );
 }
 
 /// A profile that cannot work is not retried, and a retry pass in flight is
@@ -116,9 +158,15 @@ async fn the_retry_pass_neither_hammers_nor_loops() {
     );
     let events = Arc::new(EventQueue::new(DEFAULT_EVENT_CAPACITY));
     assert!(
-        retry_deferred_outbounds(outbounds.clone(), dialer.clone(), 100, events.sink())
-            .await
-            .is_empty()
+        retry_deferred_outbounds(
+            outbounds.clone(),
+            dialer.clone(),
+            100,
+            OverlayGates::new(true, true),
+            events.sink()
+        )
+        .await
+        .is_empty()
     );
     assert_eq!(
         unusable.attempts(),
@@ -144,9 +192,15 @@ async fn the_retry_pass_neither_hammers_nor_loops() {
         .unwrap(),
     );
     assert!(
-        retry_deferred_outbounds(outbounds, dialer, 100, events.sink())
-            .await
-            .is_empty(),
+        retry_deferred_outbounds(
+            outbounds,
+            dialer,
+            100,
+            OverlayGates::new(true, true),
+            events.sink()
+        )
+        .await
+        .is_empty(),
         "a second trigger while one attempt is in flight starts nothing"
     );
 }
@@ -207,6 +261,7 @@ fn vless_member(id: &str, server_ip: [u8; 4]) -> NamedOutboundConfig {
             packet_encoding: foxcore_api::PacketEncoding::None,
             tls: TlsConfig::default(),
             reality: None,
+            encryption: None,
         }),
     }
 }
@@ -224,6 +279,7 @@ fn vless_engine_config() -> EngineConfig {
             packet_encoding: foxcore_api::PacketEncoding::None,
             tls: TlsConfig::default(),
             reality: None,
+            encryption: None,
         }),
         outbounds: Vec::new(),
         tun: TunConfig {

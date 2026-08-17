@@ -125,7 +125,11 @@ impl IpStackUdpStream {
                     payload: Some(payload),
                 })
             }
-            _ => unreachable!(),
+            // A session whose two ends are in different address families. The
+            // parser builds both from one IP header so this does not happen —
+            // but "does not happen" is not a reason to answer a packet with a
+            // panic on the path every packet from the tun takes.
+            _ => Err(IpStackError::InvalidPacket.into()),
         }
     }
 
