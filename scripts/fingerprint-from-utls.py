@@ -59,16 +59,10 @@ import urllib.request
 
 UTLS_BASE = "https://raw.githubusercontent.com/refraction-networking/utls/master"
 UTLS_RAW = f"{UTLS_BASE}/u_parrots.go"
-# Files whose `const` blocks name the code points the parrot tables use. Read
-# rather than transcribed: a hand-kept copy of 60 cipher ids is a copy that
-# drifts, and getting one wrong is a silently wrong hello.
 UTLS_CONSTANT_FILES = ("u_common.go", "common.go", "cipher_suites.go")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 
-# uTLS spells code points as Go constants. Only the ones the Chrome specs use
-# are listed; an unknown name is an error rather than a guess, because a silent
-# fallback here would be a silently wrong parrot.
 CIPHERS = {
     "GREASE_PLACEHOLDER": "GREASE",
     "TLS_AES_128_GCM_SHA256": 0x1301,
@@ -86,9 +80,6 @@ CIPHERS = {
     "TLS_RSA_WITH_AES_256_GCM_SHA384": 0x009D,
     "TLS_RSA_WITH_AES_128_CBC_SHA": 0x002F,
     "TLS_RSA_WITH_AES_256_CBC_SHA": 0x0035,
-    # Older suites the non-Chrome parrots carry. Every value verified against
-    # uTLS `cipher_suites.go`; none of them is implemented here, so all of them
-    # are decorative and a server selecting one is refused.
     "TLS_RSA_WITH_3DES_EDE_CBC_SHA": 0x000A,
     "TLS_RSA_WITH_AES_128_CBC_SHA256": 0x003C,
     "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA": 0xC009,
@@ -96,8 +87,6 @@ CIPHERS = {
     "TLS_ECDHE_RSA_WITH_3DES_EDE_CBC_SHA": 0xC012,
     "TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256": 0xC023,
     "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256": 0xC027,
-    # uTLS' `DISABLED_`/`OLD_` prefixes mean "uTLS will not negotiate this",
-    # not "absent from the hello". They are on the wire and so they are here.
     "DISABLED_TLS_ECDHE_ECDSA_WITH_AES_256_CBC_SHA384": 0xC024,
     "DISABLED_TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA384": 0xC028,
     "DISABLED_TLS_RSA_WITH_AES_256_CBC_SHA256": 0x003D,
@@ -137,7 +126,6 @@ SIGALGS = {
     "PSSWithSHA512": 0x0806,
 }
 
-# uTLS extension struct name -> the code point it writes.
 EXTENSIONS = {
     "UtlsGREASEExtension": "GREASE",
     "SNIExtension": 0x0000,
@@ -148,10 +136,6 @@ EXTENSIONS = {
     "ALPNExtension": 0x0010,
     "SCTExtension": 0x0012,
     "UtlsPaddingExtension": 0x0015,
-    # uTLS' `Fake*` prefix means "uTLS does not implement the feature", not
-    # "the extension is absent". Both are on the wire in a Firefox hello.
-    # Verified against uTLS: `fakeRecordSizeLimit = 0x001c` and
-    # `fakeExtensionDelegatedCredentials = 34` in `u_common.go`.
     "FakeRecordSizeLimitExtension": 0x001C,
     "FakeDelegatedCredentialsExtension": 0x0022,
     "ExtendedMasterSecretExtension": 0x0017,
@@ -167,19 +151,6 @@ EXTENSIONS = {
     "RenegotiationInfoExtension": 0xFF01,
 }
 
-# The eight named uTLS parrots this core can carry, and the uTLS symbol each
-# resolves to. sing-box maps its `fp=` names to `Hello*_Auto` aliases; those
-# aliases are resolved here to the concrete symbol so the table cannot drift
-# when upstream repoints an alias.
-#
-#   chrome  -> HelloChrome_Auto  = HelloChrome_133
-#   firefox -> HelloFirefox_Auto = HelloFirefox_148
-#   edge    -> HelloEdge_Auto    = HelloEdge_85     (not _106; uTLS says _106 is broken)
-#   safari  -> HelloSafari_Auto  = HelloSafari_26_3
-#   ios     -> HelloIOS_Auto     = HelloIOS_14
-#   qq      -> HelloQQ_Auto      = HelloQQ_11_1
-#
-# `360` and `android` are absent on purpose: see REFUSED below.
 PROFILES = {
     "chrome_131": "HelloChrome_131",
     "chrome_133": "HelloChrome_133",
@@ -190,14 +161,6 @@ PROFILES = {
     "firefox_148": "HelloFirefox_148",
 }
 
-# Profiles uTLS carries no table for, transcribed from a first-party capture
-# instead. Each entry records what the exemption is claiming, and `main` checks
-# every part of that claim against the uTLS source on each run -- an exemption
-# nobody re-checks is how a table quietly stops being justified.
-#
-#   absent_symbols: uTLS symbols whose *appearance* ends the exemption.
-#   alias:          the uTLS alias this build's name has overtaken, and the
-#                   symbol it resolved to when the exemption was written.
 CAPTURE_DERIVED = {
     "chrome_151": {
         "browser": "Chromium 151 (captured from Brave 151.1.93.136)",
@@ -217,9 +180,6 @@ CAPTURE_DERIVED = {
     },
 }
 
-# Names sing-box exposes that cannot be a REALITY hello here, with the reason.
-# Checked by `the_refused_parrots_really_cannot_carry_reality` in
-# `proto-reality`, which re-reads these from the uTLS source.
 REFUSED = {
     "360": (
         "Hello360_7_5",
@@ -409,9 +369,6 @@ def parse_spec(body: str) -> dict:
         resolve(CIPHERS, name, "cipher suite") for name in tokens(cipher_block)
     ]
 
-    # Extension order: the struct name of each entry, in source order. Taken
-    # from the `Extensions:` block only, so unrelated identifiers elsewhere in
-    # the case body cannot be mistaken for extensions.
     ext_block = re.search(r"Extensions: (?:ShuffleChromeTLSExtensions\()?\[\]TLSExtension\{(.*)", body, re.S)
     if not ext_block:
         raise SystemExit("could not find the Extensions block in the uTLS case body")
@@ -468,9 +425,6 @@ def parse_spec(body: str) -> dict:
 
 
 def resolve(mapping: dict, name: str, kind: str):
-    # uTLS sometimes writes a bare hex literal where it has no Go constant for
-    # a suite. That *is* the code point, so it needs no lookup -- and reading
-    # it is not the same as guessing one.
     if re.fullmatch(r"0x[0-9a-fA-F]{4}", name):
         return int(name, 16)
     if name == "GREASE_PLACEHOLDER":
@@ -534,10 +488,6 @@ def compare(name: str, symbol: str, spec: dict, failures: list) -> None:
         for entry in committed["extension_order"]
     ]
     theirs = list(spec["extensions"])
-    # uTLS dropped UtlsPaddingExtension from the Chrome 131/133 tables; this
-    # core keeps a padding slot, but BoringSSL's rule emits nothing for a hello
-    # carrying an ML-KEM key share, so the bytes agree either way. Tolerate the
-    # slot only in that direction, and only in last position.
     if ours and ours[-1] == 0x0015 and (not theirs or theirs[-1] != 0x0015):
         ours = ours[:-1]
     check("extension_order", ours, theirs)
@@ -577,9 +527,6 @@ def main() -> int:
 
     exempt = check_capture_derived(text, fetch_companion(args.source, "u_common.go"), failures)
 
-    # Every committed vector is either checked against uTLS or listed as
-    # capture-derived. A file that is in neither group has no reference at all,
-    # which is the state this script exists to make impossible.
     committed_files = {path.stem for path in (REPO / "fingerprints").glob("*.json")}
     unaccounted = committed_files - set(PROFILES) - set(CAPTURE_DERIVED)
     for name in sorted(unaccounted):

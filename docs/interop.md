@@ -56,7 +56,7 @@ the only honest thing to write.
 | **HTTP CONNECT** | yes | no | yes | `verified` (host-side) |
 | **Tor / Arti** | yes | no | yes | `verified` — live `.onion`, fail-closed gate open→closed→open on one tunnel |
 | Tor pluggable transports | yes | no | yes | `untested-datapath` — config and loopback bridge built, no run recorded |
-| Tor onion service (publishing) | yes | no | yes | `untested-datapath` — absent from the artifact that was device-tested |
+| Tor onion service (publishing) | yes | no | yes | `untested-datapath` — compiled for ABI v1, but Guard has no product call site and no publication run is recorded |
 | **I2P** (external i2pd over loopback SOCKS5) | yes | no | n/a | `verified` — live i2pd, fail-closed gate, three-runtime independence |
 | **Selector / urltest** | yes | yes | yes | `harness-verified` |
 
@@ -76,7 +76,7 @@ the only honest thing to write.
 | LAN proxy | `verified` |
 | ECH, ECH GREASE | `harness-verified` |
 | ECH from HTTPS resource records | `not-implemented` |
-| Share vault and onion publication | `not-implemented` in the shipped build — compiled out |
+| Share vault and onion publication | `untested-datapath` — shipped for ABI v1 compatibility, with no Guard product call site |
 
 ---
 

@@ -27,8 +27,6 @@ pub struct Hysteria2Config {
     /// How long to stay on one port. Only meaningful with `server_ports`.
     #[serde(default = "default_hysteria2_hop_interval_ms")]
     pub hop_interval_ms: u64,
-    /// QUIC PING spacing. Defaults to the reference client's 10s; raising it
-    /// trades NAT-binding margin for radio wakeups on a metered handset.
     #[serde(default = "default_hysteria2_keepalive_ms")]
     pub keepalive_ms: u64,
     #[serde(default = "default_hysteria2_idle_timeout_ms")]
@@ -129,7 +127,6 @@ pub(super) fn validate_hysteria2_timing(config: &Hysteria2Config) -> Result<(), 
             "hysteria2 idle_timeout_ms must be in {MIN_HYSTERIA2_IDLE_TIMEOUT_MS}..={MAX_HYSTERIA2_IDLE_TIMEOUT_MS}"
         )));
     }
-    // One PING may be lost without the peer declaring the path dead.
     if config.keepalive_ms.saturating_mul(2) >= config.idle_timeout_ms {
         return Err(ConfigError::Invalid(
             "hysteria2 keepalive_ms must be less than half of idle_timeout_ms".into(),
@@ -188,45 +185,13 @@ pub enum TuicUdpRelayMode {
 }
 
 impl TuicConfig {
-    /// The heartbeat spacing this connection will actually run at.
-    ///
-    /// `heartbeat_ms` and `idle_timeout_ms` are validated independently, so a
-    /// profile can hold a pair that cannot work: with `heartbeat_ms` at or
-    /// above `idle_timeout_ms` the peer's idle timer expires before the first
-    /// heartbeat is ever sent, and the connection dies once per idle period
-    /// with every counter reading healthy.
-    ///
-    /// This is **clamped rather than rejected**, which is where it parts
-    /// company with hysteria2's `validate_hysteria2_timing`. Two reasons, and
-    /// only the second is about this function.
-    ///
-    /// The hysteria2 rule is `keepalive * 2 < idle_timeout` — a margin, so one
-    /// lost PING does not kill the path — and applying that as a *refusal*
-    /// here would reject pairs that work: `heartbeat_ms: 10000` with
-    /// `idle_timeout_ms: 15000` has a thin margin but its heartbeat does fire,
-    /// and these are long-standing TUIC fields that saved profiles already
-    /// carry. A refusal is a failed start, so it would take a user's whole
-    /// tunnel over a timing field. Nothing in the thin-margin band is touched
-    /// here for the same reason in reverse: shortening a working heartbeat
-    /// would buy a sleeping handset extra radio wakeups it never asked for.
-    ///
-    /// When the pair genuinely cannot work the value is moved, and it is moved
-    /// to half the idle timeout rather than to the largest value that merely
-    /// fires — if the profile is being overridden at all, the number it is
-    /// overridden with should be the correct one, which is hysteria2's margin.
-    /// [`Self::heartbeat_clamp`] says so out loud.
     pub fn effective_heartbeat_ms(&self) -> u64 {
         if self.heartbeat_ms < self.idle_timeout_ms {
             return self.heartbeat_ms;
         }
-        // Never zero: `tokio::time::interval` panics on a zero period, and this
-        // may be read from a config that has not been validated.
         (self.idle_timeout_ms / 2).max(1)
     }
 
-    /// The diagnostic to record when the profile's heartbeat is not the one in
-    /// use. `None` in the ordinary case, so nothing is logged for a profile
-    /// that is being honoured exactly.
     pub fn heartbeat_clamp(&self) -> Option<String> {
         let effective = self.effective_heartbeat_ms();
         (effective != self.heartbeat_ms).then(|| {
@@ -278,8 +243,6 @@ mod tuic_timing_tests {
         .expect("a TUIC profile carrying only the timing fields")
     }
 
-    /// The hole this closes: both fields validate on their own, and the pair
-    /// then idles the connection out before the first heartbeat is ever sent.
     #[test]
     fn a_heartbeat_that_could_never_fire_is_moved_to_one_that_can() {
         let config = config(120_000, 5_000);
@@ -306,10 +269,6 @@ mod tuic_timing_tests {
         assert_eq!(config.heartbeat_clamp(), None);
     }
 
-    /// A thin margin is not a broken profile. This pair has one heartbeat
-    /// inside the idle window and no room for a second, which works — and
-    /// shortening it would cost a sleeping handset extra radio wakeups for a
-    /// profile that was already carrying traffic.
     #[test]
     fn a_working_profile_with_a_thin_margin_is_left_exactly_as_written() {
         let config = config(10_000, 15_000);
@@ -322,9 +281,6 @@ mod tuic_timing_tests {
         assert_eq!(config.heartbeat_clamp(), None);
     }
 
-    /// Equal is the boundary, and it is on the broken side: a heartbeat due at
-    /// the same instant the idle timer expires is a race the connection loses
-    /// about half the time.
     #[test]
     fn an_equal_pair_is_treated_as_the_broken_case() {
         let config = config(30_000, 30_000);
@@ -332,8 +288,6 @@ mod tuic_timing_tests {
         assert!(config.heartbeat_clamp().is_some());
     }
 
-    /// Never a zero period: `tokio::time::interval` panics on one, and this is
-    /// readable from a config that has not been through `validate`.
     #[test]
     fn an_unvalidated_profile_cannot_produce_a_zero_interval() {
         assert_eq!(config(1, 1).effective_heartbeat_ms(), 1);

@@ -78,27 +78,10 @@ pub struct RealityClientConfig {
     pub hello: RealityHello,
 }
 
-/// Where a connection's ClientHello comes from.
-///
-/// Two kinds, and the difference is not cosmetic. A parrot is a *table*: a
-/// fixed transcription of one browser build, identical on every connection
-/// apart from the per-connection values the table asks for (GREASE, key
-/// shares, the extension permutation). The generator is not a table at all —
-/// it draws a fresh shape per connection, so there is nothing to transcribe,
-/// nothing to download, and no golden vector to compare against.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RealityHello {
-    /// One of the transcribed browser tables.
     Parrot(RealityHelloProfile),
-    /// uTLS' `HelloRandomized`, drawn afresh for every connection from the OS
-    /// RNG. See [`super::randomized_hello`] for what is drawn and what this
-    /// port forces because REALITY cannot use it otherwise.
     Randomized,
-    /// The generator with a pinned seed, so a draw can be reproduced.
-    ///
-    /// Compiled only into test builds. A pinned seed in a shipped build would
-    /// be a constant fingerprint wearing a randomized name, which is the exact
-    /// thing this profile exists not to be.
     #[cfg(any(test, feature = "testkit"))]
     RandomizedSeeded(u64),
 }
@@ -115,7 +98,6 @@ impl From<RealityHelloProfile> for RealityHello {
     }
 }
 
-/// The resolved hello a live connection writes: a table name, or one draw.
 enum HelloSource {
     Parrot(RealityHelloProfile),
     Randomized(RandomizedHello),
@@ -192,9 +174,6 @@ pub struct RealityClientConnection {
     // Configuration
     config: RealityClientConfig,
 
-    /// Resolved once, in `new`. A randomized connection draws here and keeps
-    /// the draw: the ServerHello is checked against the hello that actually
-    /// went out, and a second draw would be a different client.
     hello: HelloSource,
 
     // Handshake state
@@ -245,8 +224,6 @@ impl RealityClientConnection {
         // that every later match has to unwrap. It is replaced before `new`
         // returns.
         let placeholder = ClientKeyExchange::generate(&[NamedGroup::X25519])?;
-        // Drawn before the connection exists, so `with_hello_profile` is total
-        // and no code path can observe a randomized connection without a draw.
         let hello = match config.hello {
             RealityHello::Parrot(profile) => HelloSource::Parrot(profile),
             RealityHello::Randomized => {
@@ -286,21 +263,10 @@ impl RealityClientConnection {
         Ok(conn)
     }
 
-    /// The table or the draw this connection writes, whichever it is.
-    ///
-    /// A closure rather than a returned reference because a generated profile
-    /// borrows a slot list built on the stack from the draw. Total by
-    /// construction: the draw happens in [`Self::new`], so there is no state in
-    /// which a randomized connection has no hello to answer with — and
-    /// answering with a substitute would send one hello and check the
-    /// ServerHello against another.
     fn with_hello_profile<R>(&self, body: impl FnOnce(&HelloProfileData<'_>) -> R) -> R {
         match &self.hello {
             // Not `profile.table()`: a verified downloaded document, when one
             // is installed, supplies this profile's values. It never supplies
-            // the *choice* — that is the config's — and it never supplies
-            // behaviour, which is compiled in either way. A generated hello is
-            // outside the feed entirely: there is no table to download for it.
             HelloSource::Parrot(profile) => body(runtime_tables::table_for(*profile)),
             HelloSource::Randomized(drawn) => drawn.with_profile(body),
         }
@@ -317,9 +283,6 @@ impl RealityClientConnection {
                 "REALITY ClientHello does not fit in one TLS record",
             )
         })?;
-        // 0x0301, not 0x0303: this is the connection's first record and no
-        // version has been negotiated yet, which is exactly the case BoringSSL
-        // and uTLS write TLS 1.0 for. See `INITIAL_RECORD_VERSION`.
         let mut record =
             write_record_header(CONTENT_TYPE_HANDSHAKE, INITIAL_RECORD_VERSION, hello_len);
         record.extend_from_slice(&client_hello);
@@ -337,11 +300,6 @@ impl RealityClientConnection {
     }
 }
 
-/// Build the ClientHello bytes `profile` describes.
-///
-/// Free rather than a method so that it can be handed to
-/// [`RealityClientConnection::with_hello_profile`] while the connection itself
-/// is still borrowed.
 fn build_client_hello(
     config: &RealityClientConfig,
     profile: &HelloProfileData<'_>,
@@ -369,17 +327,12 @@ fn build_client_hello(
     rng.fill_bytes(&mut client_random);
 
     // REALITY's own ECDH: the client's plain x25519 share against the
-    // server's REALITY public key. Independent of whichever group TLS ends
-    // up negotiating — the server reads this share straight out of the
-    // ClientHello, before any of that is decided.
     let shared_secret = perform_ecdh(key_exchange.reality_private_key(), &config.public_key)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-    // Use slice directly from client_random to avoid copying
     let auth_key = derive_auth_key(&shared_secret, &client_random[0..20], b"REALITY")
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-    // Create session ID with REALITY metadata
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|_| io::Error::other("System time error"))?
@@ -390,12 +343,9 @@ fn build_client_hello(
     session_id_plaintext[1] = 8; // Protocol version minor
     session_id_plaintext[2] = 0; // Protocol version patch
     session_id_plaintext[3] = 0; // Padding byte
-    // Timestamp (4 bytes as uint32, in seconds)
     session_id_plaintext[4..8].copy_from_slice(&(timestamp as u32).to_be_bytes());
-    // Short ID (8 bytes)
     session_id_plaintext[8..16].copy_from_slice(&config.short_id);
 
-    // Create a 32-byte SessionId (16 bytes plaintext + 16 bytes zeros for padding)
     let mut session_id_for_hello = [0u8; HELLO_SESSION_ID_LEN];
     session_id_for_hello[0..16].copy_from_slice(&session_id_plaintext);
 
@@ -415,14 +365,8 @@ fn build_client_hello(
     };
     let mut client_hello = construct_client_hello(profile, &session)?;
 
-    // Now encrypt the SessionId using the ClientHello with zeroed SessionId as AAD
-    // Use slice directly from client_random to avoid copying
     let nonce = &client_random[20..32];
 
-    // Zero the SessionId to form the AAD, which is the same window the
-    // server zeroes. `construct_client_hello` has already asserted the
-    // constant against the bytes it produced, so this cannot address the
-    // wrong 32 bytes without that assertion firing first.
     let session_id_window = HELLO_SESSION_ID_OFFSET..HELLO_SESSION_ID_OFFSET + HELLO_SESSION_ID_LEN;
     client_hello[session_id_window.clone()].fill(0);
 
@@ -430,8 +374,6 @@ fn build_client_hello(
         encrypt_session_id(&session_id_plaintext, &auth_key, nonce, &client_hello)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
-    // Restore the encrypted SessionId before writing or storing ClientHello.
-    // REALITY transcripts use the wire ClientHello, not the zeroed AAD form.
     client_hello[session_id_window].copy_from_slice(&encrypted_session_id);
 
     Ok((client_hello, key_exchange, auth_key))
@@ -553,10 +495,6 @@ impl RealityClientConnection {
         self.ciphertext_read_buf.consume(total_record_len);
         let server_hello = &record[TLS_RECORD_HEADER_SIZE..]; // Skip TLS record header (includes handshake header)
 
-        // Read off the hello that actually went out, whether that was a table
-        // or a draw. Three answers are needed and all three come from it: the
-        // groups a key share may come back for, the suites this build agreed to
-        // negotiate, and the name a refusal quotes.
         let (key_share_groups, negotiable, profile_name) = self.with_hello_profile(|profile| {
             (
                 profile.key_share_groups(),
@@ -1243,14 +1181,6 @@ fn validate_server_hello(
         }
     }
 
-    // Lock 3 — the selected group. Checked against the shares *this hello
-    // actually sent*, not against what the build can execute in principle.
-    //
-    // Those were the same set until the Firefox table arrived: it sends a P-256
-    // share, so P-256 became executable, and a global check would then have
-    // accepted a server picking P-256 on a *Chrome* connection — which names
-    // secp256r1 in `supported_groups` but sends no share for it. That would
-    // have failed later, in the key schedule, with no hint as to why.
     let group = extract_server_selected_group(server_hello)?;
     match NamedGroup::from_id(group) {
         Some(named) if offered_shares.contains(&named) => Ok(()),
@@ -1418,8 +1348,6 @@ mod tests {
         hello
     }
 
-    /// The key shares a Chrome hello sends, which is what most of these
-    /// assertions are measured against.
     const CHROME_SHARES: &[NamedGroup] = &[NamedGroup::X25519MlKem768, NamedGroup::X25519];
 
     /// Three refusals, three messages. One "invalid ServerHello" for all of
@@ -1485,10 +1413,6 @@ mod tests {
         ));
         assert!(no_version.contains("supported_versions"), "{no_version}");
 
-        // secp256r1 *is* executable now, because the Firefox profile sends a
-        // share for it. On a Chrome hello, which names the group but sends no
-        // share, it must still be refused — and for that reason, not for
-        // "unimplemented".
         let named_group = message(server_hello(
             good_random,
             &session_id,
@@ -1498,7 +1422,6 @@ mod tests {
         assert!(named_group.contains("secp256r1"), "{named_group}");
         assert!(named_group.contains("sent no key share"), "{named_group}");
 
-        // And the same group is accepted on a hello that did send the share.
         const FIREFOX_SHARES: &[NamedGroup] = &[
             NamedGroup::X25519MlKem768,
             NamedGroup::X25519,

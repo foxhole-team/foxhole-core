@@ -376,8 +376,6 @@ async fn a_peer_that_answers_nothing_while_we_send_is_reported_not_drawn_as_heal
 
     // One packet is enough to start the handshake; the peer never answers.
     to_relay.send(ip_packet(TUN_V4, REMOTE_V4)).await.unwrap();
-    // Derived from the constant rather than hardcoded: PEER_SILENCE has to clear the longest
-    // keepalive a profile can ask for, so pinning a literal here made the window untunable.
     tokio::time::sleep(crate::relay::state::PEER_SILENCE + Duration::from_secs(5)).await;
 
     assert_eq!(
@@ -406,20 +404,10 @@ async fn a_peer_that_answers_nothing_while_we_send_is_reported_not_drawn_as_heal
     let _ = task.await;
 }
 
-/// The window the report above measures against has to clear the profile's own
-/// keepalive, because an idle-but-healthy tunnel is unheard for exactly one
-/// keepalive interval at a time.
-///
-/// The fixed 30 s constant cleared the 25 s that was measured on device and
-/// nothing above it. `PersistentKeepalive` is a `u16`; providers ship 45 and 60,
-/// and at 60 the relay reported a working tunnel as unresponsive once a minute —
-/// the same shape the constant was widened to remove, one keepalive up.
 #[test]
 fn the_silence_window_clears_the_profiles_own_keepalive() {
     use crate::relay::state::{PEER_SILENCE, peer_silence_window};
 
-    // No keepalive is no cycle to clear, so the floor stands unchanged. This is
-    // the shape every test above runs with.
     assert_eq!(peer_silence_window(None), PEER_SILENCE);
     assert_eq!(peer_silence_window(Some(0)), PEER_SILENCE);
 

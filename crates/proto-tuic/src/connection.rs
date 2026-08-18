@@ -39,10 +39,6 @@ impl TuicConnection {
         }))
     }
 
-    /// Crate-visible rather than private so the fingerprint measurement in
-    /// `quic_fingerprint.rs` can dial one address it owns. `connect` resolves a
-    /// name first, and a measurement that had to go through DNS would be
-    /// measuring the resolver as well as the QUIC client.
     pub(crate) async fn connect_address(
         config: &TuicConfig,
         dialer: &ProtectedDialer,
@@ -59,9 +55,6 @@ impl TuicConnection {
         let connecting = endpoint
             .connect(server_address, sni)
             .map_err(|error| other(format!("TUIC QUIC connect config: {error}")))?;
-        // The profile's budget, not a constant in this file. Its default is the
-        // 15 seconds that used to be hardcoded here, so a profile that says
-        // nothing behaves exactly as it did.
         let connection = tokio::time::timeout(dialer.handshake_timeout(), connecting)
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TUIC QUIC handshake timed out"))?
@@ -69,9 +62,6 @@ impl TuicConnection {
 
         authenticate(&connection, config).await?;
         if let Some(diagnostic) = config.heartbeat_clamp() {
-            // Recorded rather than silent: the profile asked for a spacing this
-            // connection is not using, and `logcat.rs` forwards `warn` and
-            // above from every crate, including in a release build.
             log::warn!("{diagnostic}");
         }
         spawn_heartbeat(
@@ -141,11 +131,6 @@ async fn authenticate(connection: &Connection, config: &TuicConfig) -> io::Resul
 fn spawn_heartbeat(connection: Connection, interval: Duration) {
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(interval);
-        // Never a catch-up burst. The default `Burst` behaviour counts the
-        // ticks a sleeping phone missed and fires all of them the moment it
-        // wakes: ten minutes of doze at the default interval is sixty
-        // heartbeats back to back, which is a radio wakeup and sixty datagrams
-        // to say the same thing once.
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         // The authentication command itself is activity; the first heartbeat
         // belongs one full interval later, not immediately at task creation.
@@ -155,13 +140,6 @@ fn spawn_heartbeat(connection: Connection, interval: Duration) {
             tokio::select! {
                 _ = connection.closed() => return,
                 _ = ticker.tick() => {
-                    // A heartbeat exists to hold the NAT mapping open and keep
-                    // the peer's idle timer from expiring. Traffic does both,
-                    // so a connection that has put a datagram on the wire since
-                    // the last check needs no extra one — and on a phone that
-                    // datagram is a radio wakeup bought for nothing. Measured
-                    // on the socket rather than on the relay, because that is
-                    // where the NAT mapping is actually refreshed.
                     let sent = connection.stats().udp_tx.datagrams;
                     if sent != last_sent {
                         last_sent = sent;
@@ -179,12 +157,6 @@ fn spawn_heartbeat(connection: Connection, interval: Duration) {
 }
 
 fn build_client_config(config: &TuicConfig) -> io::Result<quinn::ClientConfig> {
-    // A profile that names no ALPN used to fall through to the shared TLS
-    // default, which is `h2, http/1.1` — two *TCP* protocol identifiers, on a
-    // QUIC connection. No browser and no reference TUIC client can produce
-    // that hello: `h2` means HTTP/2 over TLS over TCP, and HTTP/3 over QUIC is
-    // `h3`. It is a one-line tell that survives every other disguise, and it
-    // put `h2` into this outbound's JA4 where `h3` belongs.
     let mut tls_config = config.tls.clone();
     if tls_config.alpn.is_empty() {
         tls_config.alpn.push(quic::DEFAULT_ALPN.into());
@@ -216,14 +188,6 @@ fn build_client_config(config: &TuicConfig) -> io::Result<quinn::ClientConfig> {
     Ok(client)
 }
 
-/// The handshake-shaping knobs, applied the same way hysteria2 applies them.
-///
-/// Every *value* comes from [`foxcore_transport::quic`], so the two QUIC
-/// outbounds cannot drift into two fingerprints. Only this glue is per crate:
-/// `foxcore-transport` is a dependency of protocols that have no business
-/// linking quinn, so the crate that owns the numbers cannot own the calls.
-/// `quic_fingerprint.rs` in both crates measures the result off the wire, which
-/// is what would catch a copy that stopped matching.
 pub(crate) mod quic_shape {
     use foxcore_transport::quic;
     use quinn_proto::{ConnectionId, ConnectionIdGenerator, RandomConnectionIdGenerator};
@@ -329,12 +293,6 @@ mod tests {
         }
     }
 
-    /// The handshake budget is the profile's, not a constant in this file.
-    ///
-    /// Dialled at a socket that is bound and never answers, so the QUIC
-    /// handshake can only end by expiring. The elapsed bound is the assertion
-    /// with teeth: with the old hardcoded 15 seconds this would still return
-    /// `TimedOut`, thirty times later.
     #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
     #[tokio::test]
     async fn the_quic_handshake_budget_comes_from_the_profile() {
@@ -355,8 +313,6 @@ mod tests {
         );
     }
 
-    /// And the default is exactly what was hardcoded, so a profile that says
-    /// nothing about it behaves as it always did.
     #[test]
     fn the_default_handshake_budget_is_the_fifteen_seconds_that_was_hardcoded() {
         assert_eq!(
@@ -365,7 +321,6 @@ mod tests {
         );
     }
 
-    /// The clamp is not merely computed — the connection runs on it.
     #[test]
     fn the_heartbeat_the_connection_runs_on_is_the_clamped_one() {
         let mut config = black_hole_config(443);

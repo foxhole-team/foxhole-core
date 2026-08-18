@@ -25,11 +25,12 @@ flowchart TD
 | Fact | Value |
 |---|---|
 | Library | `libfoxhole_native.so` — `crate-type = ["cdylib"]`, lib name `foxhole_native` |
-| Load site | `core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java:50-52` — the only one |
-| Declarations | **Java, not Kotlin**: `FoxholeNativeEngine.java:54-233` (28) and `FoxholeNativeShares.java:5-35` (9) |
-| Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` — `core/runtime/.../FoxCoreNativeSeam.kt:58-327` |
+| Load site | `core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java:51-53` — the only one |
+| Shipped Engine seam | **33 Rust exports / 32 Java declarations** (`FoxholeNativeEngine.java:55-243`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
+| Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` expose the product-reachable subset; link import and continuity stop at Java compatibility declarations |
+| Cross-repository gate | The app compares every shipped Engine export with Java declarations and production Kotlin references (`scripts/verify-foxcore-jni-seam.sh`), then executes product-reachable calls against the packaged `.so` on Android (`FoxCoreNativeSeamAndroidTest.kt`). |
 | ABI version | `1`, frozen; class and package name are part of the ABI |
-| Serialization | **JSON everywhere**. No protobuf on the boundary. |
+| Structured documents | JSON, with no protobuf. TUN/network handles and signed DNS/fingerprint payloads use their native scalar/byte-array forms. |
 
 ---
 
@@ -174,7 +175,7 @@ flowchart LR
         P2["nativeStart/Stop/StatusLanProxy"]
         P3["nativeStart/Stop/ListLoopbackInbound"]
     end
-    subgraph imp["Link import — UNWIRED"]
+    subgraph imp["Link import — compatibility-only declarations"]
         K1["nativeImportLink"]
         K2["nativeImportSubscription"]
     end
@@ -185,16 +186,22 @@ Key signatures:
 | Function | Java signature | Returns |
 |---|---|---|
 | `nativeStartWithNetwork` | `(ILjava/lang/String;JLjava/lang/Object;)J` | handle > 0, or `0` + `IllegalStateException` |
+| `nativeStartWithNetworkAndDnsRuleSet` | `(ILjava/lang/String;JLjava/lang/String;[B[B[BLjava/lang/Object;)J` | atomic signed bootstrap: handle > 0, or no engine + throw |
 | `nativeStartWithNetworkAndTrustedDnsRuleSet` | `(ILjava/lang/String;JLjava/lang/String;[BLjava/lang/Object;)J` | APK-trusted artifact, no signature check |
 | `nativeInstallDnsRuleSet` | `(JLjava/lang/String;[B[B[B)J` | revision, or `0` + throw |
+| `nativeTrafficMap` | `(J)Ljava/lang/String;` | canonical bounded traffic-map document |
+| `nativeConfirmContinuity` | `(JJ)I` | typed `0..3` result, or `-1` panic |
 | `nativeInstallTlsFingerprintTables` | `([B)I` | profiles replaced, or `-1` unreadable / `-2` refused / `-3` panic |
 | `nativeStop` / `nativeForceKill` | `(J)I` | `0` stopped, `1` already, `2` timed out, `3` unknown handle, `-1` panic |
 | `nativeReloadPolicy` | `(JLjava/lang/String;)J` | > 0 revision, `0` not running, `-1..-9` refusal |
 | `nativeRevokeFlows` | `(JLjava/lang/String;)I` | count ≥ 0, or `-1` panic / `-2` no engine / `-3` bad target. Target JSON tagged on `kind`: `all\|lane\|uid\|package\|outbound\|flow` |
 | `nativeLastStopDiagnostics` | `()Ljava/lang/String;` | **no handle** — the caller has just been told its stop timed out. `{phase, engine_ms, shutdown_ms, generation}` |
 
-Two further JNI classes: `FoxholeNativeShares` (10 Rust exports, file sharing — in development) and
-`FoxholeNativeComponents` (9 Rust exports, web apps and leases). See [4.7](#47-abi-gaps).
+Release libraries also retain 19 component/share exports: ten `FoxholeNativeShares_*` and nine
+`FoxholeNativeComponents_*`. v0.0.1 shipped them, and the frozen ABI-v1 fixture requires them
+(`fixtures/abi/v1/exports.txt:1-19`; `scripts/abi-gate.sh:1-17`). The app has a nine-method Shares
+facade but no production call site, and no Components facade. These symbols are outside the 33/32
+Engine seam and remain solely for ABI compatibility.
 
 ---
 
@@ -224,9 +231,15 @@ sequenceDiagram
     R->>O: establish TUN
     O->>O: hasVpnPermission -> setSession/setMtu -> setUnderlyingNetworks -><br/>setMetered -> addAddress -> addRoute* -> app split -> addDnsServer* -> establish()
     R->>R: dup(tun.fileDescriptor).detachFd()
-    R->>N: nativeStartWithNetwork(dupFd, engineConfigJson, networkHandle, host)
-    N-->>R: handle
-    R->>N: installDnsRuleSet(manifest, signature, artifact) if a signed update exists
+    alt no DNS bootstrap
+        R->>N: nativeStartWithNetwork(dupFd, engineConfigJson, networkHandle, host)
+    else APK-trusted bundled artifact
+        R->>N: nativeStartWithNetworkAndTrustedDnsRuleSet(...)
+    else persisted signed update
+        R->>N: nativeStartWithNetworkAndDnsRuleSet(..., manifest, signature, artifact, ...)
+    end
+    Note over N: signed bytes are verified before the resolver can answer its first query
+    N-->>R: handle, or no engine + exception
     R-->>S: started
     S->>N: nativeNetworkChangedWithHandle — post-handoff network reset
     S->>S: validation probes: runtime proxy, early UDP literal,<br/>pre-DNS, endpoint pre-IP, VPN-bound DNS, IP refresh, grace retry
@@ -291,41 +304,42 @@ process (`crates/foxcore-runtime/src/start.rs:115-116`).
 
 ---
 
-## 4.7 ABI gaps
+## 4.7 Reachability and remaining gaps
 
-Rust exports with no counterpart in this client — verified by grep across `foxhole_guard_dev`:
+The release surface and the product call graph are different questions:
 
-| Export | Status |
-|---|---|
-| `nativeStart` | no Java declaration (the app always passes a network handle) |
-| `nativeTrafficMap` | no Java declaration; the app uses the `nativeConnections` alias, which returns the **same document** |
-| `nativeImportLink`, `nativeImportSubscription` | no Java declaration, **zero call sites**. The whole `foxcore-link` crate is unreachable from the app |
-| all nine `FoxholeNativeComponents_*` | **no `FoxholeNativeComponents` class exists.** Web-app / lease / component-event ABI is unusable from this client |
-| `nativeExportFile` | not declared in `FoxholeNativeShares.java` |
-| `nativeStartWithNetworkAndDnsRuleSet` | declared at `FoxholeNativeEngine.java:84` but never wired — `FoxCoreNativeApi` has no such method; signed updates go through `installDnsRuleSet` after start |
+| Surface | Boundary status | Product reachability |
+|---|---|---|
+| Engine lifecycle | 33 Rust exports, 32 Java declarations | Complete by design: only legacy `nativeStart` is omitted; every production start passes an Android `Network` handle. |
+| Signed DNS bootstrap | Java declaration, `FoxCoreNativeApi` method and starter dispatch are present (`FoxCoreNativeSeam.kt:73-82,224-243`; `FoxCoreNativeSessionStarter.kt:235-266`) | A persisted signed update is verified as part of `nativeStartWithNetworkAndDnsRuleSet`, before the engine is published. |
+| Traffic map | `nativeTrafficMap` is declared and called by `JniFoxCoreNativeApi` (`FoxCoreNativeSeam.kt:291-293`) | `FoxCoreRuntime.runtimeTrafficMapJson` uses the canonical call (`FoxCoreRuntime.kt:655-658`); `nativeConnections` remains a compatibility alias. |
+| Link import | The two Rust exports and Java declarations are retained as compatibility-only ABI and classified by `verify-foxcore-jni-seam.sh` | **No Kotlin product wrapper or importer/data-layer call site.** `ProfileImportParser` remains the app's parser. The native DTO is not a drop-in replacement for the app's normalized profile contract. |
+| Continuity | The Rust export and Java declaration are retained as compatibility-only ABI | Audit events are parsed and journalled, but the translator keeps automatic continuity defaults and no service/UI action exposes a confirmation token. |
+| Live DNS install | `nativeInstallDnsRuleSet` is called through a generation-fenced runtime method after the exact verified bytes are persisted | A stable engine with the same trust adopts the update live and commits the returned revision. Enable or trust rotation changes the immutable fingerprint and uses signed replacement start; no active engine defers to the next start. |
+| Component/share JNI | 19 exports are frozen in ABI v1 and remain in release ELF files | Guard has no product call site. They do not count toward the separate 33/32 Engine seam. |
 
 ### Two link parsers, two answers
 
 ```mermaid
 flowchart LR
-    subgraph R["foxcore-link (Rust) — unreachable"]
+    subgraph R["foxcore-link (Rust) — compatibility-only JNI"]
         R1["vless vmess hysteria2 hy2 trojan ss<br/>wg wireguard socks socks4 socks5<br/>http https naive naive+https anytls"]
     end
-    subgraph K["core/importer (Kotlin) — the one actually used"]
+    subgraph K["core/importer (Kotlin) — production path"]
         K1["vless trojan naive naive+https ss outline<br/>vmess hy2 hysteria2 tuic anytls wireguard wg"]
     end
-    R1 -.->|Rust only| D1["socks* , http(s)"]
+    R1 -.->|compatibility-only JNI, no repository call| D1["socks* , http(s)"]
     K1 -.->|Kotlin only| D2["tuic , outline"]
 ```
 
-`foxcore-link/src/lib.rs:3-7` states the crate exists so the app does not have to carry a second
-parser. The app carries one anyway, and the two disagree on four schemes.
+`foxcore-link/src/lib.rs:636-650` exposes the partial subscription import intended for applications.
+The JNI exports remain frozen, but the repository calls the Kotlin parser and the two disagree on
+four schemes. A product switch requires a shared DTO and policy/secret-handling corpus first.
 
 ### Other drift
 
 | Finding | Detail |
 |---|---|
-| **Reload code `-9` is unhandled** | `PolicyRefusal::PacketTunnelRejectsPrimaryDns = 9` (`crates/foxcore-runtime/src/state.rs:333`) means `nativeReloadPolicy` can return `-9`. `FoxholeNativeEngine.java` defines constants only to `-8` and `reloadCode()` falls through to `"unknown_code=-9"`. The Rust doc comment at `lib.rs:703-714` is itself stale — it lists `-1..-7` and says "eight codes". `docs/abi.md:189` has it right. |
-| `docs/abi.md:48` overstated | "string-returning calls return `null` only for a panic path" is contradicted by `link.rs:39-46` (null **and** a thrown exception on any `Err`) and by the `new_string` allocation-failure arms in `lib.rs` |
-| `FoxholeNativeShares.java` has no loader | no `System.loadLibrary` block; it relies on `FoxholeNativeEngine` being class-initialized first. In practice `FoxCoreShareRuntime.attach` runs after a native start, so the order holds — but it is an implicit dependency, not an enforced one |
-| Stale `libTor.so` comment | `core/runtime/.../I2pdRuntimeInstaller.kt:19` says i2pd ships "as a jniLib exactly like `libTor.so`". No such library exists; `TorRuntimeInstallerDeviceTest.kt:36` asserts it does **not**, and `TorRuntimeInstaller.kt:12-17` says there is no Tor executable at all |
+| Link parser ownership | Native exports are compatibility-only; Kotlin remains the production parser. Wiring requires a shared DTO, data-layer migration and tests for secret handling and partial subscription rejection. |
+| Continuity user action | The app decodes and journals `confirmation_required`, but has no typed product call or user action; current translated settings do not request manual confirmation. |
+| DNS activation timing | Live install now handles updates under unchanged trust. Enable and trust rotation intentionally replace the engine; inactive or superseded generations consume the persisted bundle on start. |

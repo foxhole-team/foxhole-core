@@ -1,34 +1,4 @@
 #!/system/bin/sh
-# The unplugged battery window, run entirely ON the device.
-#
-#   ab-unplugged-window.sh <dir> <seconds-per-arm> <node> [node...]
-#
-# WHY THIS RUNS ON THE PHONE AND NOT FROM THE HOST
-#
-# adb on this device is USB-only (`adb_wifi_enabled=0`, no `service.adb.tcp.port`).
-# The moment the owner pulls the cable the host loses the transport, so a
-# host-driven unplugged regime cannot start an arm, cannot sample it and cannot
-# read a battery counter. Enabling network adb would be a change to the device's
-# debugging posture, which is not ours to make. So the whole window is handed to
-# the device before the unplug: this script waits for the cable to go, runs both
-# arms itself, writes everything to disk, and the host collects after replug.
-#
-# WHY EACH ARM GETS ITS OWN SUB-WINDOW
-#
-# Battery draw cannot be attributed per-arm inside one window. Both arms run as
-# uid 2000 (shell), so `dumpsys batterystats` reports one aggregate for the uid
-# that also contains the sampler and the load generator. Asking it which of the
-# two proxies spent the charge is asking a question the data cannot answer.
-# Instead each arm gets its own equal-length sub-window with the other stopped,
-# and the charge counter is read across each. Equal length is enforced below and
-# recorded; if the two differ, the comparison is void and the reader must see it.
-#
-# WHY charge_counter AND NOT ONLY `Discharge:`
-#
-# `/sys/class/power_supply/battery/charge_counter` is the fuel gauge's own µAh
-# accumulator - fine-grained and read directly. `dumpsys batterystats` Discharge
-# is reported in coarse mAh and is derived. Both are recorded; the counter is the
-# primary and batterystats is the corroboration.
 set -u
 
 DIR="${1:?usage: ab-unplugged-window.sh <dir> <seconds-per-arm> <node...>}"
@@ -85,7 +55,6 @@ wait_listener() {
     return 1
 }
 
-# One arm, one node, one equal-length sub-window.
 run_arm() {
     _arm="$1"; _node="$2"; _sel="$3"
     _pre="$OUT/${_node}__${_arm}"
@@ -117,9 +86,6 @@ run_arm() {
 
     ( setsid sh ./ab-proc-sampler.sh "$_pid" 2 "$_pre.proc.jsonl" >/dev/null 2>&1 & )
 
-    # The window is a wall-clock duration, identical for both arms. The
-    # generator is given the same duration; a protocol that stalls burns its
-    # window rather than being handed a longer one.
     ./foxcore-bench-client --proxy "127.0.0.1:$_port" --target "$TARGET" --path "$PATH_ARG" \
         --concurrency "$CONC" --duration-s "$WINDOW" --timeout-s 25 \
         --label "unplugged/$_arm/$_node" --out "$_pre.bench.jsonl" > "$_pre.bench.txt" 2>&1
@@ -176,7 +142,5 @@ dumpsys deviceidle > "$OUT/deviceidle.txt" 2>&1
 say "window complete"
 echo complete > "$OUT/DONE"
 
-# The owner is told by the device itself, because the host may still be
-# disconnected at this point and cannot post anything.
 cmd notification post -S bigtext -t 'FoxCore A/B: window done' ab_unplug_done \
     'The unplugged measurement window has finished. You can reconnect the cable.' >/dev/null 2>&1

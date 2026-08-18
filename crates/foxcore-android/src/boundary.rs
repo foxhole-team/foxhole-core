@@ -1,17 +1,3 @@
-//! The part of the JNI boundary that is in every build.
-//!
-//! This module exists because of the `mini-platform` feature. The component and
-//! share entry points move in and out of the artifact with that feature, but
-//! three things they use do not: the result-code table, the two error mappings,
-//! and the panic guard. `lib.rs` resolves all four for the LAN proxy and the
-//! loopback inbounds, which ship unconditionally.
-//!
-//! Keeping them here rather than in `ecosystem.rs` is what makes the feature a
-//! one-line `cfg` on a module declaration instead of forty attributes on
-//! individual items — and it keeps the tests that pin the ABI numbering running
-//! in the shipped configuration, where the numbering actually matters. A test
-//! that only runs in a build nobody installs is not a check on the shipment.
-
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Mutex, MutexGuard};
 
@@ -20,13 +6,6 @@ use jni::JNIEnv;
 use jni::objects::JString;
 use jni::sys::jint;
 
-/// Result codes shared by every call that returns a verdict rather than a
-/// value. Negative is "the boundary itself failed"; zero is success.
-///
-/// Reused by the LAN proxy entry points in `lib.rs` rather than copied: those
-/// answer with the same `ComponentError`s the component entry points do, and a
-/// second numbering for the same refusals is how an app ends up reading
-/// "denied" as "ok".
 pub(crate) const RESULT_OK: jint = 0;
 pub(crate) const RESULT_INVALID_ARGUMENT: jint = 1;
 pub(crate) const RESULT_NO_ENGINE: jint = 2;
@@ -41,8 +20,6 @@ pub(crate) const RESULT_NETWORK_UNCONFIRMED: jint = 10;
 pub(crate) const RESULT_BIND_FAILED: jint = 11;
 pub(crate) const RESULT_PANICKED: jint = -1;
 
-/// A poisoned table is recovered rather than propagated: one panicked call must
-/// not make every component permanently unusable.
 pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
@@ -70,13 +47,6 @@ pub(crate) fn component_result(error: ComponentError) -> jint {
     }
 }
 
-/// Kept beside `component_result` even though only the gated share entry points
-/// call it: both map a runtime error onto the one numbering above, and a mapping
-/// that lives away from the numbering is a mapping that drifts from it.
-///
-/// `not(test)` in the condition because the test below is the remaining caller in
-/// a build without the feature — which is the point of keeping it here.
-#[cfg_attr(all(not(feature = "mini-platform"), not(test)), expect(dead_code))]
 pub(crate) fn share_result(error: &ShareError) -> jint {
     match error {
         ShareError::InvalidConfig | ShareError::InvalidMetadata => RESULT_INVALID_ARGUMENT,
@@ -97,18 +67,9 @@ pub(crate) fn guarded(action: impl FnOnce() -> jint) -> jint {
     catch_unwind(AssertUnwindSafe(action)).unwrap_or(RESULT_PANICKED)
 }
 
-/// Drop every mini-platform handle owned by an engine generation.
-///
-/// A shim rather than a direct call so `nativeStop` and `nativeForceKill` read
-/// the same in both configurations. Without the feature there are no leases,
-/// shares or publications to release, so there is nothing to do — and saying
-/// that here is better than two `cfg` attributes buried in the teardown path,
-/// where a reader is trying to work out whether teardown is complete.
+/// Drop every component/share handle owned by this engine generation.
 pub(crate) fn release_engine_handles(engine: u64, runtime: &CoreRuntime) {
-    #[cfg(feature = "mini-platform")]
     crate::ecosystem::release_engine_handles(engine, runtime);
-    #[cfg(not(feature = "mini-platform"))]
-    let _ = (engine, runtime);
 }
 
 #[cfg(test)]
@@ -117,8 +78,6 @@ mod tests {
 
     #[test]
     fn every_code_this_abi_hands_out_is_distinct() {
-        // A collision here is a caller that reads "denied" as "ok", which is the
-        // one direction this boundary must never fail in.
         let codes = [
             RESULT_OK,
             RESULT_INVALID_ARGUMENT,

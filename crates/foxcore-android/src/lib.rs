@@ -3,9 +3,6 @@
 
 mod boundary;
 mod capabilities;
-/// The component and share entry points. Off in the shipped build; see the
-/// module's own documentation and `mini-platform` in `Cargo.toml`.
-#[cfg(feature = "mini-platform")]
 mod ecosystem;
 mod link;
 #[cfg(target_os = "android")]
@@ -240,11 +237,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeS
     finish_native_start(&mut env, result)
 }
 
-/// Starts with one FST artifact whose trust comes from the signed APK.
-///
-/// There is intentionally no corresponding unsigned update entry point:
-/// downloaded bytes must use `nativeInstallDnsRuleSet` and pass the pinned
-/// signature, freshness and rollback policy.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeStartWithNetworkAndTrustedDnsRuleSet(
     mut env: JNIEnv<'_>,
@@ -371,18 +363,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeI
 ///
 /// The app has already checked the signature, the manifest, the artifact hash
 /// and each profile's own digest before these bytes exist on disk; the core
-/// re-establishes everything it can check for itself — schema, digests, the
-/// slot vocabulary, and whether each table can actually produce a hello — and
-/// refuses the document whole if any of it fails.
-///
-/// **Never throws.** A failure here is not an error the app has to handle: the
-/// tables compiled into this library are always a complete set, so the honest
-/// response to a bad document is to keep using them. The return value is
-/// diagnostic only, and a caller that ignores it entirely is still correct.
-///
-/// Returns the number of profiles the document replaced, or a negative code:
-/// `-1` the byte array could not be read, `-2` the core refused the document,
-/// `-3` a panic was contained at this boundary.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeInstallTlsFingerprintTables(
     env: JNIEnv<'_>,
@@ -427,7 +407,6 @@ const TLS_FINGERPRINT_TABLES_REFUSED: jint = -2;
 const TLS_FINGERPRINT_TABLES_PANICKED: jint = -3;
 
 /// The same ceiling the app's downloader enforces on the artifact. The
-/// committed set is under 100 KiB.
 const MAX_TLS_FINGERPRINT_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 
 #[unsafe(no_mangle)]
@@ -530,15 +509,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeF
     }
 }
 
-/// Release the lanes a continuity hold suspended, at the cost of a reconnect.
-///
-/// `token` is the one carried by the `confirmation_required` event. An older
-/// token is refused rather than accepted, so a dialog the user answers late
-/// cannot resume a lane that has since failed again for a different reason —
-/// the app must read the newer event and ask again.
-///
-/// Returns `0` confirmed, `1` nothing pending, `2` stale token, `3` unknown
-/// handle, `-1` panic.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeConfirmContinuity(
     mut env: JNIEnv<'_>,
@@ -551,7 +521,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeC
             return NATIVE_CONTINUITY_UNKNOWN_HANDLE;
         };
         let Ok(token) = u64::try_from(token) else {
-            // A negative token is not a token this core ever minted.
             return NATIVE_CONTINUITY_STALE_TOKEN;
         };
         match runtime.confirm_continuity(token) {
@@ -593,16 +562,6 @@ const EMPTY_TRAFFIC_MAP: &str = concat!(
     r#""dropped_events":0,"dns":{"queries":0,"blocked":0,"allowed":0}}"#
 );
 
-/// The traffic map as JSON: live flows with the route each one took, per-app
-/// and per-lane totals, DNS verdict counts and the active selector members.
-///
-/// Separate from `nativeStats` because it is proportional to the number of open
-/// flows: a UI polling the cheap counters every second must not pay for this,
-/// and a screen that wants the map asks for it explicitly.
-///
-/// This is the only source of per-app numbers while the VPN is up — Android's
-/// own `NetworkStats` attributes every tunnelled byte to the tun interface
-/// rather than to the app behind it.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeTrafficMap(
     env: JNIEnv<'_>,
@@ -612,9 +571,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeT
     traffic_map(env, handle)
 }
 
-/// The name this call had while the document was only a connection list. Same
-/// document, and the old fields are unchanged; kept so the existing app ABI
-/// keeps working.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeConnections(
     env: JNIEnv<'_>,
@@ -636,13 +592,8 @@ fn traffic_map(env: JNIEnv<'_>, handle: jlong) -> jstring {
     .unwrap_or(std::ptr::null_mut())
 }
 
-/// Take the map updates produced since the previous call.
-///
-/// A map that is only polled cannot show a flow that opened and closed between
-/// two polls; this stream can. It is bounded and drops on overflow, so a screen
-/// that stopped reading loses updates rather than holding up traffic —
-/// `dropped` says how many, and a non-zero value means the caller must
-/// reconcile against `nativeTrafficMap` instead of trusting the deltas.
+/// Drain bounded map deltas. A non-zero `dropped` count requires reconciliation
+/// with `nativeTrafficMap`; readers never back-pressure traffic.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeDrainTrafficEvents(
     env: JNIEnv<'_>,
@@ -690,31 +641,10 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeD
 }
 
 /// Atomically replace route and DNS policy without restarting the TUN or
-/// outbound sessions.
-///
-/// Returns the installed revision, which is always positive, or a **negative**
-/// refusal code: `-1` invalid policy, `-2` unknown outbound, `-3` Tor
-/// unavailable in this build or profile, `-4` I2P unavailable, `-5` an overlay
-/// route without fake-IP DNS, `-6` per-app routing with no platform
-/// attribution, `-7` revision conflict, `-8` fake-IP DNS asked of a packet-tunnel
-/// primary, `-9` `dns.route = "primary"` asked of a packet-tunnel primary. Zero
-/// means the handle is not running. The list is the negation of
-/// [`PolicyRefusal`], which `docs/abi.md` also tabulates; the numbers are ABI
-/// and must not be reordered.
-///
-/// Codes rather than an exception because the app has to act differently on
-/// each: "this build has no Tor" is permanent and should retire the switch,
-/// "the policy is malformed" is an app bug, and a revision conflict is a
-/// retry. All three used to arrive as the same `IllegalStateException` with
-/// prose inside it, so the app could only ever show the same shrug (D11). The
-/// live tunnel is unaffected either way — a refused reload changes nothing.
-///
-/// Every code but `-1` names the thing that was wrong and can be acted on
-/// alone. `-1` cannot: it covers a truncated write, a missing comma, a field
-/// spelled wrong and a field this schema removed, and the app is expected to
-/// respond differently to at least the first and the last. The words are kept
-/// where [`Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeLastPolicyError`]
-/// can read them, which is the remainder D11 left behind.
+/// outbounds. Success returns a positive revision; zero means no running handle.
+/// Refusals are the stable negated [`PolicyRefusal`] codes `-1..=-9` documented
+/// in `docs/abi.md` and leave the live tunnel unchanged. Invalid-policy detail is
+/// available through `nativeLastPolicyError`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeReloadPolicy(
     mut env: JNIEnv<'_>,
@@ -754,21 +684,8 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeR
     }
 }
 
-/// Stop the live flows a target names, without touching policy.
-///
-/// The second half of blocking an app. `nativeReloadPolicy` decides what the
-/// *next* flow is allowed to do and deliberately leaves open connections alone
-/// — a reordered routing rule must not kill a download. That is wrong for a
-/// `Block`, where the user's intent is that the app stops talking and the old
-/// behaviour let it keep talking over the connections it already had. The two
-/// are separate calls because the difference is not in the policy document: the
-/// same edited rule list arrives either way, and only the caller knows which it
-/// meant.
-///
-/// Call **after** the reload, so the new policy is already refusing new flows
-/// by the time the old ones are cut and the app cannot open one in between.
-///
-/// `target_json` names the target. One required field per kind:
+/// Stop matching live flows without changing policy; reload first to block new
+/// flows before cutting old ones.
 ///
 /// ```json
 /// {"kind": "all"}
@@ -779,26 +696,8 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeR
 /// {"kind": "flow",     "flow": 42}
 /// ```
 ///
-/// `lane` is one of `vpn`, `tor`, `i2p`, `direct`. `flow` is the `id` of a row
-/// from `nativeTrafficMap`. Unknown kinds, missing fields and extra fields are
-/// all refused rather than interpreted: the two ways to misread a malformed
-/// target are to cut nothing and to cut everything, and neither is a guess
-/// worth making for the user.
-///
-/// Returns **the number of live flows revoked**, which is zero or more, or a
-/// negative refusal: `-1` a panic crossed the boundary, `-2` the handle is not
-/// running, `-3` the target is missing, unreadable or does not parse.
-///
-/// Zero is a success, not an error — the app was not talking, and the state the
-/// caller asked for already holds. Idempotent and safe to call while traffic is
-/// moving; calling it twice reports the flows that have not finished tearing
-/// down yet and does nothing further to them.
-///
-/// A revoked TCP flow is reset towards the application, so its `connect`ed
-/// socket fails at once rather than hanging until the app's own timeout; a
-/// revoked UDP flow stops and releases its session. Both appear in
-/// `nativeStats` as `flows_revoked` and in `nativeDrainEvents` as a
-/// `flows_revoked` event carrying the target and the count.
+/// `lane` is `vpn|tor|i2p|direct`; `flow` comes from `nativeTrafficMap`.
+/// Returns a revoked count, or `-1` panic, `-2` no engine, `-3` invalid target.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeRevokeFlows(
     mut env: JNIEnv<'_>,

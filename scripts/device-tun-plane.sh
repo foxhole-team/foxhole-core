@@ -1,31 +1,4 @@
 #!/bin/bash
-# TUN plane: each core inside its own Android app.
-#
-#   scripts/device-tun-plane.sh <serial> foxcore|singbox <seconds>
-#
-# **Read this before quoting anything it prints.** The throughput half of this
-# measurement does not work on a stock device and cannot be made to work from
-# the shell: Android deliberately keeps the `shell` uid outside VPN capture so
-# adb survives a tunnel, so a shell-side load generator never reaches either
-# core's TUN. Verified directly — sing-box logged no connection attempts at all
-# while the load ran, and the identical outbound carried traffic fine through
-# its SOCKS inbound moments earlier.
-#
-# That asymmetry is not fixable by trying harder. FoxCore has an in-app harness
-# (`com.foxhole.coretest`) whose uid the VPN does capture; the sing-box app has
-# no equivalent. Any throughput comparison here would be measuring one arm and
-# guessing the other.
-#
-# What this script can honestly report, and what it is kept for:
-#   * that each core establishes and holds a TUN on the device;
-#   * the app process footprint while it does — RSS, threads;
-#   * how long from start to the interface appearing.
-#
-# Measured 2026-08-04 on a Pixel 7 Pro with the same live VLESS/REALITY server,
-# TUN up on both: sing-box (SFA 1.13.16) RSS 341 MB / 47 threads; FoxCore
-# (coretest harness) RSS 216 MB / 39 threads. The two apps are not equivalent —
-# SFA is a full product UI and coretest is a bare harness — so that gap bounds
-# the difference rather than isolating the core's share of it.
 
 set -uo pipefail
 

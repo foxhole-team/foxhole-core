@@ -1,18 +1,3 @@
-//! What happens when the downloaded document is bad, which is the case that has
-//! to work on someone's phone at three in the morning.
-//!
-//! The rule is one sentence: an unverified, malformed, stale or missing
-//! document falls back to the tables built into this binary — never to "no
-//! fingerprint", and never to a half-parsed set. This test states each of the
-//! ways a stored document goes wrong and then reads the socket to check that a
-//! complete, correct hello still went out.
-//!
-//! Its own binary: nothing here may install anything, and the registry is
-//! process-global.
-//!
-//! Everything is synthetic: `example.com`, a public key of repeated bytes, and
-//! a local listener that answers nothing.
-
 mod fingerprint_table_support;
 
 use fingerprint_table_support as support;
@@ -25,16 +10,11 @@ async fn every_way_a_document_goes_bad_falls_back_to_the_built_in_tables() {
     let committed = support::committed_document();
     let serialised = committed.to_string();
 
-    // Rewritten after signing: the bytes changed, the declared digest did not.
-    // This is the one an attacker with publishing access but no signing key
-    // would try, and the one a half-finished edit produces by accident.
     let rewritten = support::with_marked_renegotiation_info(committed.clone(), "0000");
 
-    // Right shape, wrong schema: a feed that changed format under us.
     let mut future_schema = support::rehash(rewritten.clone());
     future_schema["schema"] = serde_json::json!(2);
 
-    // A table that cannot produce a hello at all.
     let mut no_key_share = committed.clone();
     for entry in no_key_share["profiles"].as_array_mut().expect("profiles") {
         let slots = entry["fingerprint"]["extension_order"]

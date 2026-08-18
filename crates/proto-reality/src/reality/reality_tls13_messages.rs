@@ -326,7 +326,7 @@ fn assert_session_id_window(hello: &[u8], session_id: &[u8; HELLO_SESSION_ID_LEN
     Ok(())
 }
 
-/// Write a TLS record header.
+/// Write a TLS record header with the pinned legacy record version.
 ///
 /// # Arguments
 /// * `record_type` - TLS record type (0x16 for Handshake, 0x17 for ApplicationData)
@@ -340,15 +340,6 @@ pub fn write_record_header(record_type: u8, version: [u8; 2], length: u16) -> Ve
     header
 }
 
-/// `legacy_record_version` for the first record a connection writes — the one
-/// carrying the initial ClientHello.
-///
-/// 0x0301, because that is what BoringSSL and uTLS put there while no version
-/// has been negotiated. See [`VERSION_TLS_1_0_MAJOR`] for the sources. This
-/// byte is outside both the transcript hash and the REALITY AAD, so it changes
-/// what a DPI sees and nothing else.
-/// Every record after this one carries 0x0303, frozen there by RFC 8446 §5.1;
-/// those are written by the record encryptor, which builds its own header.
 pub const INITIAL_RECORD_VERSION: [u8; 2] = [VERSION_TLS_1_0_MAJOR, VERSION_TLS_1_0_MINOR];
 
 #[cfg(test)]
@@ -413,13 +404,6 @@ mod tests {
         assert_eq!(u16::from_be_bytes([header[3], header[4]]), 100);
     }
 
-    /// The parrot's first five bytes.
-    ///
-    /// BoringSSL's `tls_record_version` returns TLS1_VERSION while
-    /// `ssl->s3->version == 0`, and Go's `writeRecordLocked` — which uTLS
-    /// inherits, and which is therefore what Xray and sing-box put on the wire
-    /// — does the same. 0x0303 here was legal TLS and a one-byte tell that no
-    /// Chrome emits.
     #[test]
     fn the_initial_record_version_is_the_one_boringssl_and_utls_send() {
         assert_eq!(INITIAL_RECORD_VERSION, [0x03, 0x01]);

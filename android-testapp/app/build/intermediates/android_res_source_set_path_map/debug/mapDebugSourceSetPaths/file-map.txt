@@ -1,8 +1,0 @@
-com.foxhole.coretest.app-pngs-0 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/build/generated/res/pngs/debug
-com.foxhole.coretest.app-updated_navigation_xml-1 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/build/generated/updated_navigation_xml/debug
-com.foxhole.coretest.app-packageDebugResources-2 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/build/intermediates/incremental/debug/packageDebugResources/merged.dir
-com.foxhole.coretest.app-packageDebugResources-3 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/build/intermediates/incremental/debug/packageDebugResources/stripped.dir
-com.foxhole.coretest.app-debug-4 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/build/intermediates/merged_res/debug/mergeDebugResources
-com.foxhole.coretest.app-debug-5 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/src/debug/res
-com.foxhole.coretest.app-main-6 /Users/adam/vault/mount/data/foxhole_team/foxhole-core/android-testapp/app/src/main/res
-gradleHome-0 /private/tmp/foxhole-codex-gradle-home

@@ -1,21 +1,6 @@
-//! The breakage this feature was opened for.
-//!
-//! `foxcore-link` used to refuse any `encryption=` value other than `none`, so
-//! the day a provider switched VLESS Encryption on, every one of its nodes
-//! stopped importing — the same shape of failure as the gRPC and `fp` gates
-//! before it. These tests hold the import path to the two properties that
-//! matter: a variant this build implements must import, and a variant it does
-//! not must cost that one node and nothing else.
-//!
-//! They live in this crate rather than in `foxcore-link`'s own test module
-//! because that file is being edited concurrently; `foxcore-link` is a
-//! dev-dependency here, so the public import API is reachable without touching
-//! it.
-
 use foxcore_api::{OutboundConfig, VlessEncryptionMode, parse_vless_encryption};
 use foxcore_link::{LinkError, import_link, import_subscription_partial};
 
-/// Synthetic X25519 server key: 32 bytes of a fixed pattern, base64url.
 const X25519_KEY: &str = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8";
 
 fn vless_link(encryption: Option<&str>) -> String {
@@ -53,8 +38,6 @@ fn a_profile_with_encryption_imports_and_keeps_the_parameter() {
                 .unwrap_or_else(|| panic!("{spec} was dropped from the profile"));
             assert_eq!(stored.expose(), spec);
 
-            // The stored value has to be the thing the outbound will parse, not
-            // a normalisation of it.
             let params = parse_vless_encryption(stored.expose()).expect("stored value re-parses");
             assert_eq!(params.xor_mode, expected);
             assert_eq!(params.zero_rtt, rtt == "0rtt");
@@ -82,7 +65,6 @@ fn none_and_absent_both_mean_no_encryption_layer() {
     assert!(vless_config(&vless_link(Some("none"))).encryption.is_none());
 }
 
-/// The regression itself. If this fails, the gate is back.
 #[test]
 fn a_supported_variant_is_no_longer_refused_outright() {
     let spec = format!("mlkem768x25519plus.native.0rtt.{X25519_KEY}");
@@ -94,9 +76,6 @@ fn a_supported_variant_is_no_longer_refused_outright() {
     );
 }
 
-/// Negative control for the test above: the importer has not simply stopped
-/// looking at the parameter. A variant this build cannot execute must still be
-/// refused, and the message must name it.
 #[test]
 fn an_unsupported_variant_is_still_refused_and_named() {
     let spec = format!("mlkem768x25519plus.chameleon.1rtt.{X25519_KEY}");
@@ -111,8 +90,6 @@ fn an_unsupported_variant_is_still_refused_and_named() {
     );
 }
 
-/// And the property the whole exercise is about: one node this build cannot
-/// execute must not cost the user the rest of the subscription.
 #[test]
 fn an_unsupported_variant_costs_one_node_not_the_subscription() {
     let good = vless_link(Some(&format!(
@@ -135,11 +112,6 @@ fn an_unsupported_variant_costs_one_node_not_the_subscription() {
     assert_eq!(rejected.index, 2, "the wrong line was rejected");
     assert_eq!(rejected.scheme.as_deref(), Some("vless"));
 
-    // The variant is deliberately *not* named here. `RejectedLine::reason` is a
-    // closed category so the report can be persisted or pasted into a bug
-    // report without carrying any of the link with it; the detailed message
-    // goes to the strict importer's direct caller, which is what
-    // `an_unsupported_variant_is_still_refused_and_named` covers.
     assert!(
         !rejected.reason.contains("mlkem1024x448plus"),
         "the persistable rejection reason leaked the link's contents: {rejected:?}"

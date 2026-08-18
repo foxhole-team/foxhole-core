@@ -80,7 +80,7 @@ flowchart TD
 ```
 
 Config surface: `CurveGroup::X25519MlKem768`, serde name `x25519mlkem768`, alias `X25519MLKEM768`
-(`config/tls.rs:144-152`). Hysteria2 and TUIC inherit the group order through
+(`config/tls.rs:124-130`). Hysteria2 and TUIC inherit the group order through
 `rustls_client_config`.
 
 ### Which REALITY profiles offer the hybrid
@@ -95,12 +95,12 @@ Config surface: `CurveGroup::X25519MlKem768`, serde name `x25519mlkem768`, alias
 
 Firefox reuses one classical scalar across the standalone and hybrid shares
 (`reuse_classical_key_share`); Chrome uses two independent ones
-(`reality_key_exchange.rs:181-226`).
+(`reality_key_exchange.rs:171-209`).
 
 **ML-DSA is a shape, not a capability.** The three FIPS 204 code points are prepended to Chrome's
 eight classical schemes and the list length grows `0x0010 → 0x0016`
-(`hello_profile.rs:856-886`). None is implemented: `validate_server_hello` refuses a certificate
-whose scheme it cannot verify (`:865-870`), and `reality_mldsa65` is declared unsupported in the
+(`hello_profile.rs:788-815`). None is implemented: the certificate verifier accepts only Ed25519
+(`reality_client_verify.rs:217-225`), and `reality_mldsa65` is declared unsupported in the
 capability document. There is **no Kyber, Dilithium or ML-DSA verification code anywhere in either
 repository** — every hit is a table entry or a comment.
 
@@ -144,7 +144,7 @@ sequenceDiagram
 
 `short_id` is hex, ≤16 chars, even length, **right-padded with zeros** to 8 bytes
 (`reality_util.rs:34-54`). `auth_key`, `public_key`, `short_id` and `server_name` are zeroized on
-drop (`reality_client_connection.rs:162-183`).
+drop (`reality_client_connection.rs:138-169`).
 
 `server_name` is the SNI written into the parroted hello and must be an ASCII DNS name — IP literals
 are rejected. There is **no client-side "dest" or fallback-target concept**; that is server-side
@@ -174,14 +174,14 @@ distinguishable from a browser — measured at 10 cipher suites and 11 extension
 15 and 16 — and that it is not reachable by configuration
 (`foxhole-core/README.md:59-68`). `chromium_tls_fingerprint` is reported as `unsupported`.
 
-**Profiles implemented** (`capabilities.rs:1142-1156`): `chrome_151`, `chrome_133`, `chrome_131`,
-`edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`, `firefox_153`, `firefox_148`, plus `random` — one of
-the modern profiles drawn once per process. Seven are transcribed from uTLS; `chrome_151` and
-`firefox_153` come from a first-party capture because uTLS has no table for either shipping build.
+**Profiles implemented** (`capabilities.rs:1102-1114`): `chrome_151`, `chrome_133`, `chrome_131`,
+`edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`, `firefox_153`, `firefox_148`, plus `random` (one
+modern table chosen per process) and `randomized` (a fresh generated hello per connection). Seven
+tables are transcribed from uTLS; `chrome_151` and `firefox_153` come from first-party captures.
 
 **Refused rather than substituted**: `360` and `android` — both TLS 1.2 parrots that send no
 `key_share`, and REALITY derives its auth key from the client's X25519 share, so no REALITY
-handshake is possible with that hello (`capabilities.rs:1169`).
+handshake is possible with that hello (`capabilities.rs:1117`).
 
 **Offered ≠ implemented.** The hello advertises TLS 1.2, secp256r1/384r1 without shares,
 HelloRetryRequest, brotli certificate compression, PSK/0-RTT and (on `chrome_151`) ML-DSA. A server
@@ -190,9 +190,9 @@ that takes any of them up is refused, not downgraded to.
 ### Table feed
 
 Only tables travel; the generator is compiled in. `install_fingerprint_tables`
-(`runtime_tables.rs:103`) bounds the document, requires schema 1, rejects duplicate names, skips
-names this build does not implement, and re-derives every `fingerprint_sha256` over canonical
-ASCII JSON (`:232-248`). Any failure refuses the whole document. See
+(`runtime_tables.rs:39-70`) bounds the document; parsing requires schema 1, rejects duplicate names
+and skips names this build does not implement (`:93-142`). Every `fingerprint_sha256` is re-derived
+over canonical ASCII JSON (`:154-169`). Any failure refuses the whole document. See
 [03 — Updates and data delivery](03-updates-and-data-delivery.md).
 
 ---
@@ -223,17 +223,17 @@ flowchart TD
 
 | Pinned | Kind | Location |
 |---|---|---|
-| FoxHole DB manifest key | ECDSA P-256 SPKI, PEM literal | `app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeDb.kt:46-51` |
-| …its DER SHA-256 | `3acd123f…98d69` | `FoxholeDb.kt:53-54` |
-| …base64 duplicate for the Rust core | same bytes | `DnsFilterAssetInstaller.kt:254-256` |
-| TLS server SPKI pin | base64 SHA-256 of `subjectPublicKeyInfo`, must decode to 32 B; **replaces** WebPKI verification when set | field `config/tls.rs:19`; check `foxcore-transport/src/tls.rs:557-582` |
+| FoxHole DB manifest key | ECDSA P-256 SPKI, PEM literal | `app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeDb.kt:47-53` |
+| …its DER SHA-256 | `3acd123f…98d69` | `FoxholeDb.kt:55-56` |
+| …base64 for the Rust core | derived from the PEM | `FoxholeDb.kt:58-64`; consumed at `DnsFilterAssetInstaller.kt:255-258` |
+| TLS server SPKI pin | base64 SHA-256 of `subjectPublicKeyInfo`, must decode to 32 B; **replaces** WebPKI verification when set | field `config/tls.rs:19`; check `foxcore-transport/src/tls.rs:543-568` |
 | DNS rule-set signing key | per-source, from config; base64 SPKI or raw P-256 point, 1..4096 B; `ECDSA_P256_SHA256_ASN1` | `config/dns.rs:102-134`; `foxcore-route/src/ruleset.rs:13`, `:250-296` |
-| Per-fingerprint-table digest | `fingerprint_sha256`, re-derived in the core before install | `runtime_tables.rs:213`, `:232-248` |
+| Per-fingerprint-table digest | `fingerprint_sha256`, re-derived in the core before install | `runtime_tables.rs:137`, `:154-169` |
 | Threat-intel source digest | `sourceSha256: 6052636f…4864e` | `app/src/main/assets/sentinel/threat-intel.source.json:7` |
 | Third-party app identity | `KnownAppConfig.signing_digest` — hex SHA-256 of another app's signing cert, so a repackaged app fails closed | `config/policy.rs:212-217`; `AndroidApplicationIdentityResolver.kt:78-96` |
 | Gradle dependencies | per-artifact SHA-256 | `gradle/verification-metadata.xml` |
 | Release APK certificate | `e59de2486084c38f3c77e9df0eb5eff9a4559f3c68024f1208e0e9c04b0df665` | `config/release-cert-sha256.txt` — **build-time check only** |
-| FoxCore revision | `d7127c30508efa6c65f0a5e319ed9969a851257b` | `config/foxcore-revision.txt` — enforced in CI and the F-Droid recipe, **not** by the local Gradle build |
+| FoxCore revision | `4f58ea19ff6c81c32eac3a9d5124c3dbd314b2ee` | `config/foxcore-revision.txt`; local Gradle checks the sibling Git HEAD and refuses release mismatches (`app/build.gradle.kts:188-245`) |
 
 **Not pinned:**
 
@@ -247,15 +247,12 @@ flowchart TD
 - **No Ed25519, minisign or PGP** update signing. The only Ed25519 in the tree is REALITY's *server*
   certificate key, which is authenticated by HMAC-SHA512 under the derived `auth_key` — not pinned.
 
-The pinned PEM in `FoxholeDb.kt:46-51` was verified byte-for-byte against
+The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 `foxhole-db/manifest.public.pem`, and its DER SHA-256 against `manifest.json`'s `key_sha256`.
 
 ---
 
 ## 2.7 Inconsistencies found
 
-| Finding | Detail |
-|---|---|
-| **Stale REALITY capability comment** | `capabilities.rs:775-782` says the profile table "has two Chrome builds in it and nothing else. Firefox, Safari and iOS parrots are not implemented" — while `reality_fingerprints_implemented` at `:1142-1156` lists nine profiles *including* `firefox_153`, `firefox_148`, `safari_26_3` and `ios_14`, and the `transports` list names three Chrome builds. The comment contradicts the same file. |
-| **README "seven profiles"** | `foxhole-core/README.md:60-61` says "seven profiles transcribed from uTLS", which reads as the total. There are nine tables; seven are uTLS-derived and two are first-party captures. |
-| **Two copies of the DB pin** | PEM in `FoxholeDb.kt` and base64 DER in `DnsFilterAssetInstaller.kt`. A contract test keeps them equal, but rotation touches two files. |
+No open inconsistencies remain after rechecking the capability table, README profile count and the
+single-source FoxHole DB key derivation.

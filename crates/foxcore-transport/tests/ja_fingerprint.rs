@@ -1,29 +1,3 @@
-//! JA3 and JA4 for the generic (rustls) ClientHello, computed here and
-//! **validated against a live detector**.
-//!
-//! The parrot work had never been checked against anything that actually
-//! fingerprints TLS. This file closes that: `the_local_computation_matches_a_live_detector`
-//! opens a real connection to `tls.browserleaks.com`, records the exact bytes
-//! this core put on the wire, computes JA3/JA4 from those bytes, and asserts
-//! the result equals what the detector independently computed for the same
-//! connection.
-//!
-//! That is the point of the exercise. Once the computation is confirmed
-//! correct against a third party, it can be pointed at any hello — including
-//! the REALITY parrots, which cannot themselves reach a public detector because
-//! they only complete a handshake against a REALITY server.
-//!
-//! The network test is `#[ignore]`d: `cargo test --workspace` must not depend
-//! on a third-party service being up. Run it deliberately:
-//!
-//! ```text
-//! cargo test -p foxcore-transport --test ja_fingerprint -- --ignored --nocapture
-//! ```
-//!
-//! No credentials and no user data are involved: the request is a plain GET for
-//! a public JSON endpoint that reports the fingerprint of the caller's own
-//! ClientHello.
-
 use std::io::{Read as _, Write as _};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
@@ -31,7 +5,6 @@ use std::sync::{Arc, Mutex};
 use foxcore_api::TlsConfig;
 use foxcore_transport::{ja, rustls_client_config};
 
-/// A `TcpStream` that keeps a copy of everything written to it.
 struct Recording {
     inner: TcpStream,
     written: Arc<Mutex<Vec<u8>>>,
@@ -59,12 +32,6 @@ impl std::io::Write for Recording {
 
 const DETECTOR_HOST: &str = "tls.browserleaks.com";
 
-/// Confirm the JA3/JA4 implementation above against a third party.
-///
-/// This is the measurement that had never been done. It proves two things at
-/// once: that this core's generic ClientHello produces the fingerprint recorded
-/// below, and that the computation used to fingerprint the REALITY parrots
-/// (which cannot reach a public detector) is correct.
 #[test]
 #[ignore = "reaches tls.browserleaks.com; run deliberately"]
 fn the_local_computation_matches_a_live_detector() {
@@ -95,7 +62,6 @@ fn the_local_computation_matches_a_live_detector() {
     let _ = tls_stream.read_to_end(&mut response);
     let response = String::from_utf8_lossy(&response).into_owned();
 
-    // Our own hello, exactly as it left the socket.
     let recorded = written.lock().unwrap().clone();
     assert_eq!(recorded[0], 0x16, "first record is the handshake");
     let hello = ja::parse(&recorded[5..]);
@@ -131,23 +97,8 @@ fn the_local_computation_matches_a_live_detector() {
     assert_eq!(ours_ja4, theirs_ja4, "JA4 disagrees with the detector");
 }
 
-/// The JA4 of the configuration this core actually ships.
-///
-/// The live test above pins ALPN to `http/1.1`, because the detector's JSON has
-/// to be read back over HTTP/1.1 and the endpoint negotiates h2 whenever it is
-/// offered. The shipped default offers `h2, http/1.1`, so its JA4_a ends `h2`
-/// rather than `h1`.
-///
-/// This computes both locally, with the implementation the live test confirms
-/// against a third party character for character, and asserts the only
-/// difference is the two-character ALPN field. That is what lets the
-/// detector-measured number stand in for the shipped one.
-///
-/// Local, offline, and safe to run in CI.
 #[test]
 fn the_shipped_default_differs_from_the_measured_hello_only_in_alpn() {
-    // What the live test measured, and what the detector independently agreed
-    // it was.
     const MEASURED: &str = "t13d1011h1_61a7ad8aa9b6_f9531d972513";
 
     let mut http1 = TlsConfig {
@@ -163,7 +114,6 @@ fn the_shipped_default_differs_from_the_measured_hello_only_in_alpn() {
          re-run the live test before trusting anything else here"
     );
 
-    // The shipped default: no ALPN in the profile, so `h2, http/1.1` applies.
     let default = TlsConfig {
         enabled: true,
         server_name: Some("measure.example".to_owned()),
@@ -181,7 +131,6 @@ fn the_shipped_default_differs_from_the_measured_hello_only_in_alpn() {
     println!("shipped-default JA4: {default_ja4}");
 }
 
-/// One ClientHello record, captured off a loopback socket.
 fn capture_local(tls: &TlsConfig) -> Vec<u8> {
     use std::net::TcpListener;
 

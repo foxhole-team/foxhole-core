@@ -1,14 +1,3 @@
-//! Crypto and wire plumbing for [`crate::testkit`].
-//!
-//! Kept inside the `reality` module because it needs the same private pieces
-//! the client uses — key schedule, record layer, HMAC certificate — and the
-//! whole value of the harness is that it drives the *real* client code rather
-//! than a parallel implementation of it.
-//!
-//! Correctness here is only ever "the real client accepted it". Nothing in this
-//! file is constant-time, nothing is zeroized on drop, and nothing handles a
-//! second connection.
-
 use std::io;
 
 use aws_lc_rs::{
@@ -33,22 +22,14 @@ use super::reality_tls13_messages::{
 
 pub use super::common::{CONTENT_TYPE_APPLICATION_DATA, CONTENT_TYPE_HANDSHAKE};
 
-/// The record-layer version the client is expected to put on its first record.
-///
-/// Exposed so an integration test can assert the parrot's first three bytes
-/// without depending on the crate's private constants.
 pub const fn observed_initial_record_version() -> [u8; 2] {
     super::reality_tls13_messages::INITIAL_RECORD_VERSION
 }
 
-/// What the harness needs out of a ClientHello.
 pub struct ParsedClientHello {
     pub cipher_suite: CipherSuite,
-    /// The client's flat `x25519` share. REALITY authenticates against this one
-    /// even when a hybrid share is also offered.
     pub client_x25519: [u8; 32],
     pub session_id: [u8; HELLO_SESSION_ID_LEN],
-    /// ECDH(server REALITY key, client x25519) -> HKDF -> the REALITY auth key.
     pub auth_key: [u8; 32],
 }
 
@@ -64,7 +45,6 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message.to_owned())
 }
 
-/// Minimal ClientHello parse: enough to find the key share and the session id.
 pub fn parse_client_hello(
     hello: &[u8],
     server_private: &[u8; 32],
@@ -84,7 +64,6 @@ pub fn parse_client_hello(
         &hello[HELLO_SESSION_ID_OFFSET..HELLO_SESSION_ID_OFFSET + HELLO_SESSION_ID_LEN],
     );
 
-    // Walk to the extensions. Offsets are relative to the handshake message.
     let mut cursor = HELLO_SESSION_ID_OFFSET + HELLO_SESSION_ID_LEN;
     let cipher_suites_len = be16(hello, cursor)? as usize;
     let mut offered = Vec::with_capacity(cipher_suites_len / 2);
@@ -119,13 +98,6 @@ pub fn parse_client_hello(
     let client_x25519 =
         client_x25519.ok_or_else(|| invalid("no x25519 key share in ClientHello"))?;
 
-    // The first offered suite this build implements, in the client's own order
-    // — which is what a real server does. This used to be hard-coded to
-    // `0x1301` on the grounds that every parrot offers all three TLS 1.3
-    // suites; the `randomized` generator does not, because uTLS'
-    // `removeRandomCiphers` may delete the second and third. A harness that
-    // answered with a suite the client never offered would be testing the
-    // client's refusal path, not its handshake.
     let cipher_suite = offered
         .iter()
         .find_map(|id| CipherSuite::from_id(*id))
@@ -145,7 +117,6 @@ pub fn parse_client_hello(
 }
 
 fn find_x25519_share(body: &[u8]) -> io::Result<Option<[u8; 32]>> {
-    // KeyShareClientHello: 2-byte list length, then (group, len, data)*.
     let list_len = be16(body, 0)? as usize;
     let end = (2 + list_len).min(body.len());
     let mut cursor = 2;
@@ -174,7 +145,6 @@ fn be16(bytes: &[u8], at: usize) -> io::Result<u16> {
     Ok(u16::from_be_bytes([slice[0], slice[1]]))
 }
 
-/// ServerHello plus the `(EC)DHE` secret it commits to.
 pub fn build_server_hello(parsed: &ParsedClientHello) -> io::Result<(Vec<u8>, [u8; 32])> {
     let rng = SystemRandom::new();
 
@@ -204,7 +174,6 @@ pub fn build_server_hello(parsed: &ParsedClientHello) -> io::Result<(Vec<u8>, [u
     Ok((server_hello, shared_secret))
 }
 
-/// Application-data keys, one direction each.
 pub struct ServerAppKeys {
     cipher_suite: CipherSuite,
     server_key: AeadKey,
@@ -225,8 +194,6 @@ impl ServerAppKeys {
         Ok(out)
     }
 
-    /// `body` is the record payload without the 5-byte header; `record_len` is
-    /// the header's length field, which is also the AEAD's AAD.
     pub fn decrypt(&mut self, body: &mut [u8], record_len: u16) -> io::Result<Vec<u8>> {
         let mut decryptor =
             RecordDecryptor::new(&self.client_key, &self.client_iv, &mut self.client_seq);
@@ -244,8 +211,6 @@ pub struct EncryptedFlight {
     pub keys: ServerAppKeys,
 }
 
-/// EncryptedExtensions, Certificate, CertificateVerify and Finished, encrypted
-/// under the server handshake key, plus the application keys that follow.
 pub fn build_encrypted_flight(
     parsed: &ParsedClientHello,
     shared_secret: &[u8; 32],
@@ -285,8 +250,6 @@ pub fn build_encrypted_flight(
     transcript.update(&finished);
     let handshake_hash = transcript.finish();
 
-    // One record per message keeps the client's incremental parser honest and
-    // costs nothing here.
     let (server_hs_key, server_hs_iv) =
         derive_traffic_keys(&keys.server_handshake_traffic_secret, cipher_suite)?;
     let hs_key = AeadKey::new(cipher_suite, &server_hs_key)?;
@@ -321,7 +284,6 @@ pub fn build_encrypted_flight(
     })
 }
 
-/// RFC 8446 §4.4.3 CertificateVerify, Ed25519 (`0x0807`).
 fn build_certificate_verify(
     signing_key: &Ed25519KeyPair,
     transcript_hash: &[u8],

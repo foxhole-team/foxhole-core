@@ -94,20 +94,6 @@ impl DeferredOutbound {
         }
     }
 
-    /// File a lane the traffic policy has switched off, without building it.
-    ///
-    /// The entry is the same shape as a failed one — same id, same kind, same
-    /// refusal on the flow path — and differs in the two ways that matter.
-    /// `attempts` is zero, because nothing was attempted: that is the readable
-    /// proof that no Arti bootstrap ran. And the reason is
-    /// [`UnavailableReason::Disabled`], which is not retryable, so the retry
-    /// pass a network change triggers cannot start the bootstrap the switch
-    /// exists to prevent.
-    ///
-    /// Keeping the *entry* is the point. Dropping it instead would make
-    /// `.onion` refuse as "no Tor outbound is registered" rather than "the
-    /// overlay is off" — the same two sentences [`Self::kind`] exists to keep
-    /// apart.
     pub fn gated_off(id: impl Into<String>, kind: OutboundKind, config: OutboundConfig) -> Self {
         let id = id.into();
         Self {
@@ -135,11 +121,6 @@ impl DeferredOutbound {
         &self.inner.id
     }
 
-    /// Whether this entry was skipped by an overlay gate rather than failing.
-    ///
-    /// Read by the retry pass, which must consult the *live* gate for these:
-    /// a user who turns Tor back on has changed the answer, and nothing else
-    /// ever will.
     pub fn is_gated_off(&self) -> bool {
         !self.is_available() && self.failure().reason == UnavailableReason::Disabled
     }
@@ -467,11 +448,6 @@ mod tests {
         assert_eq!(entry.attempts(), 3, "the attempt at start counts as one");
     }
 
-    /// The state that proves the build never ran.
-    ///
-    /// `attempts == 0` is the assertion with teeth: every path that builds an
-    /// outbound files at least one attempt, so a zero here cannot be produced
-    /// by a bootstrap that happened and failed.
     #[test]
     fn a_gated_off_lane_was_never_built_and_is_never_rebuilt() {
         let entry = DeferredOutbound::gated_off("tor", OutboundKind::Tor, config());

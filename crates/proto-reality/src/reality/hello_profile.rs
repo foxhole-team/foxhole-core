@@ -14,26 +14,9 @@
 //!
 //! # Sources
 //!
-//! Two different kinds of table live here, and the difference is not cosmetic.
-//!
-//! `chrome_133`, `chrome_131`, `edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`
-//! and `firefox_148` are transcribed from uTLS' maintained parrots
-//! (`refraction-networking/utls`, `u_parrots.go`), which are in turn derived
-//! from BoringSSL's own ClientHello construction. uTLS is the code Xray and
-//! sing-box run, so agreeing with it is agreeing with the deployed population.
-//! `scripts/fingerprint-from-utls.py` checks that agreement.
-//!
-//! `chrome_151` and `firefox_153` are transcribed from a **first-party capture
-//! of the shipping browser**, because uTLS has not caught up: as of upstream
-//! commit `23b1dac1` (2026-08-02) `HelloChrome_Auto` is still `HelloChrome_133`
-//! and `HelloFirefox_Auto` is still `HelloFirefox_148`, and neither table
-//! carries what the browsers now send. Being faithful to uTLS there means being
-//! unfaithful to the browser, and a client claiming to be Firefox while
-//! matching no shipping Firefox is a louder signal than an unknown client.
-//! Those two tables are outside the uTLS script's remit by construction, and it
-//! reports them as such rather than skipping them silently.
-//!
-//! Specific rules and their sources:
+//! Versioned tables come from uTLS; current Chrome and Firefox tables use
+//! first-party captures until upstream catches up. The import script verifies
+//! every uTLS-derived profile.
 //!
 //! * **GREASE values** — BoringSSL's `ssl_get_grease_value`: a seed byte is
 //!   masked to `(byte & 0xf0) | 0x0a` and then repeated into both halves of the
@@ -101,7 +84,6 @@ impl RealityHelloProfile {
         }
     }
 
-    /// Every profile this build can write bytes for.
     pub const ALL: &'static [Self] = &[
         Self::Chrome151,
         Self::Chrome133,
@@ -240,16 +222,8 @@ pub const TLS_1_2: u16 = 0x0303;
 pub const TLS_1_1: u16 = 0x0302;
 pub const TLS_1_0: u16 = 0x0301;
 
-/// One extension slot: a constant blob, or something the session decides.
-///
-/// The lifetime exists for exactly one caller. Every transcribed table is
-/// `'static` — the bodies are literals in this file or leaked from a verified
-/// download — and [`ExtensionSlot`] is the alias those use. The `randomized`
-/// generator in [`super::randomized_hello`] draws a *fresh* slot list per
-/// connection, whose bodies live in the connection rather than in the binary,
-/// and it needs the same encoder. Anything generic over both must name
-/// `ExtensionSlotData<'_>`; naming the alias in a pattern pins `'static` and
-/// will not compile against a generated profile.
+/// Extension body borrowed from a static table or a per-connection randomized
+/// profile; generic encoders must preserve this lifetime.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ExtensionSlotData<'a> {
     /// Bytes that are the same on every connection from every client running
@@ -276,7 +250,6 @@ pub enum ExtensionSlotData<'a> {
     Padding,
 }
 
-/// The transcribed tables' slot type: [`ExtensionSlotData`] over `'static`.
 pub type ExtensionSlot = ExtensionSlotData<'static>;
 
 impl ExtensionSlotData<'_> {
@@ -295,7 +268,6 @@ impl ExtensionSlotData<'_> {
 ///
 /// See [`ExtensionSlotData`] for why this carries a lifetime: the transcribed
 /// tables are all `'static` and use the [`HelloProfile`] alias, while the
-/// `randomized` generator hands out a borrowed view of a per-connection draw.
 pub struct HelloProfileData<'a> {
     /// Name used in errors, so a refusal says which table produced the hello.
     pub name: &'a str,
@@ -303,14 +275,10 @@ pub struct HelloProfileData<'a> {
     pub extensions: &'a [ExtensionSlotData<'a>],
     /// Chrome 110+ shuffles the non-pinned extensions on every connection.
     pub permute_extensions: bool,
-    /// What this profile's ECH GREASE extension advertises.
     pub ech_grease: EchGreaseShape,
-    /// Whether the standalone `x25519` share repeats the hybrid's classical
-    /// key. Firefox does; the Chromium family does not.
     pub reuse_classical_key_share: bool,
 }
 
-/// The transcribed tables' profile type: [`HelloProfileData`] over `'static`.
 pub type HelloProfile = HelloProfileData<'static>;
 
 impl HelloProfileData<'_> {
@@ -467,44 +435,21 @@ const HPKE_AEAD_AES_128_GCM: u16 = 0x0001;
 /// The HPKE suite the ECH GREASE extension advertises.
 ///
 /// One suite, not a random pick between two. BoringSSL's `setup_ech_grease`
-/// chooses by hardware, not by coin flip:
-///
-/// > `const EVP_HPKE_AEAD *aead = has_aes_hw ? EVP_hpke_aes_128_gcm()`
-/// > `                                       : EVP_hpke_chacha20_poly1305();`
-///
-/// `has_aes_hw` is a property of the machine, so a given Chrome install sends
-/// the *same* AEAD id on every connection for its whole life. A client that
-/// alternated would be advertising a fingerprint no Chrome has — the opposite
-/// of what GREASE is for. uTLS' `BoringGREASEECH()` resolves this the same way
-/// and offers only `{HKDF_SHA256, AES_128_GCM}`, which is the branch every
-/// device with AES hardware takes; this build follows uTLS.
 const ECH_GREASE_SUITE: (u16, u16) = (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_AES_128_GCM);
 
-/// HPKE AEAD id, RFC 9180 §7.3.
 const HPKE_AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
-/// What a profile's ECH GREASE extension advertises.
-///
-/// Not one global rule: Chrome offers a single HPKE suite and four candidate
-/// payload lengths, Firefox offers two suites and exactly one length. Both are
-/// transcribed, because "which AEAD id and how long the payload is" is
-/// visible on the wire and a client that got either from the wrong browser
-/// would be neither.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct EchGreaseShape {
     pub suites: &'static [(u16, u16)],
     pub payload_lens: &'static [usize],
 }
 
-/// BoringSSL: one suite (chosen by AES hardware, so constant per install) and
-/// payload lengths 128/160/192/224.
 pub const CHROME_ECH_GREASE: EchGreaseShape = EchGreaseShape {
     suites: &[ECH_GREASE_SUITE],
     payload_lens: &[128, 160, 192, 224],
 };
 
-/// Firefox's `GREASEEncryptedClientHelloExtension`: two candidate suites and a
-/// single payload length of 223.
 pub const FIREFOX_ECH_GREASE: EchGreaseShape = EchGreaseShape {
     suites: &[
         (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_AES_128_GCM),
@@ -853,22 +798,6 @@ const CHROME_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x06, 0x01, // rsa_pkcs1_sha512
 ];
 
-/// `signature_algorithms` as Chromium 151 sends it: the three ML-DSA schemes
-/// ahead of the eight above.
-///
-/// This is the whole of the Chrome 133 -> 151 change, and it is the reason a
-/// `chrome_133` parrot now stands out. JA4_a and JA4_b are unmoved — same
-/// version, same SNI, same 15 ciphers, same 16 extensions, same first ALPN —
-/// but JA4_c ends in the signature algorithm list *in offer order*, so three
-/// new code points at the front of it change the second half of the
-/// fingerprint and nothing else.
-///
-/// The three are FIPS 204 ML-DSA at the code points draft-ietf-tls-mldsa
-/// assigns. This build implements none of them: it never authenticates the
-/// server with an ML-DSA certificate, and `validate_server_hello` refuses a
-/// certificate whose signature scheme is not one it verifies. They are offered
-/// because Chromium offers them, which is the same footing as the TLS 1.2
-/// cipher suites in [`CHROME_CIPHER_SUITES`].
 const CHROME_151_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x00, 0x16, // list length
     0x09, 0x04, // mldsa44
@@ -884,10 +813,7 @@ const CHROME_151_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x06, 0x01, // rsa_pkcs1_sha512
 ];
 
-// The five bodies below are `pub(super)` rather than private because the
-// `randomized` generator draws the same extensions and must write the same
-// bytes for them. Two copies of `01 00 00 00 00` in two files is two things to
-// keep in step.
+// Shared with the randomized generator to keep extension bytes identical.
 /// `status_request`: OCSP, empty responder list, empty request extensions.
 pub(super) const STATUS_REQUEST_BODY: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
 /// `ec_point_formats`: uncompressed only.
@@ -905,13 +831,6 @@ const COMPRESS_CERTIFICATE_BODY: &[u8] = &[0x02, 0x00, 0x02];
 /// `application_settings`: one protocol, `h2`.
 pub(super) const APPLICATION_SETTINGS_BODY: &[u8] = &[0x00, 0x03, 0x02, b'h', b'2'];
 
-/// `signature_algorithms` for the Apple tables (Safari 26.3, iOS 14).
-///
-/// Ten schemes, and note the duplicate `rsa_pss_rsae_sha384`: uTLS' table
-/// really does list `PSSWithSHA384` twice, so the wire really does carry it
-/// twice. Transcribed rather than tidied -- "obviously a typo upstream" is
-/// still what the population sends, and de-duplicating it would make this
-/// client the odd one out.
 const APPLE_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x00, 0x14, // list length
     0x04, 0x03, // ecdsa_secp256r1_sha256
@@ -926,8 +845,6 @@ const APPLE_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x02, 0x01, // rsa_pkcs1_sha1
 ];
 
-/// `signature_algorithms` for iOS 14: the Apple list plus `ecdsa_sha1`, which
-/// iOS puts after `ecdsa_secp384r1_sha384`.
 const IOS_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x00, 0x16, // list length
     0x04, 0x03, // ecdsa_secp256r1_sha256
@@ -943,9 +860,6 @@ const IOS_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x02, 0x01, // rsa_pkcs1_sha1
 ];
 
-/// `compress_certificate`: zlib (1) only. Safari's choice; Chrome and the
-/// Chromium forks send brotli. Not implemented either way -- a server that
-/// answers with a CompressedCertificate is refused by name.
 const COMPRESS_CERTIFICATE_ZLIB_BODY: &[u8] = &[0x02, 0x00, 0x01];
 
 const CHROME_CIPHER_SUITES: &[CipherSuiteSlot] = &[
@@ -991,11 +905,6 @@ const CHROME_SUPPORTED_VERSIONS: &[VersionSlot] = &[
     VersionSlot::Version(TLS_1_2),
 ];
 
-/// The extension table shared by all three Chrome profiles, parameterised by
-/// the two things that have moved across them: the `application_settings` code
-/// point (131 -> 133) and the `signature_algorithms` body (133 -> 151). The
-/// extension *set and order* has not changed across any of the three, so it is
-/// written once — a second copy would be a second thing to keep in step.
 macro_rules! chrome_extensions {
     ($application_settings:expr, $signature_algorithms:expr) => {
         &[
@@ -1058,14 +967,6 @@ macro_rules! chrome_extensions {
     };
 }
 
-/// Chromium 151, from a capture of Brave 151.1.93.136 on macOS.
-///
-/// Not from uTLS: upstream has no table for it. Every other field was checked
-/// against the capture and found unchanged from Chrome 133 — the same 16 cipher
-/// slots in the same order, the same 18 extension slots, GREASE in the same
-/// five places, `X25519MLKEM768` then `x25519` in both `supported_groups` and
-/// `key_share`, ALPS still at 0x44cd, ECH GREASE with the same HPKE suite, a
-/// 0x0301 record layer on the first record. Only `signature_algorithms` moved.
 pub static CHROME_151: HelloProfile = HelloProfile {
     name: "chrome_151",
     cipher_suites: CHROME_CIPHER_SUITES,
@@ -1093,12 +994,8 @@ pub static CHROME_131: HelloProfile = HelloProfile {
     reuse_classical_key_share: false,
 };
 
-// ------------------------------------------------- the Chromium-fork tables
-
-/// Edge 85 and QQ 11.1 share Chrome's cipher list exactly.
 const CHROMIUM_FORK_CIPHER_SUITES: &[CipherSuiteSlot] = CHROME_CIPHER_SUITES;
 
-/// Pre-ML-KEM `supported_groups`: no hybrid, so no post-quantum share.
 const CHROMIUM_FORK_SUPPORTED_GROUPS: &[GroupSlot] = &[
     GroupSlot::Grease,
     GroupSlot::Group(NamedGroup::X25519),
@@ -1111,8 +1008,6 @@ const CHROMIUM_FORK_KEY_SHARES: &[KeyShareSlot] = &[
     KeyShareSlot::Group(NamedGroup::X25519),
 ];
 
-/// These builds still offer 1.1 and 1.0. This client speaks only 1.3 and
-/// refuses a server that takes any of the lower offers.
 const CHROMIUM_FORK_SUPPORTED_VERSIONS: &[VersionSlot] = &[
     VersionSlot::Grease,
     VersionSlot::Version(TLS_1_3),
@@ -1176,7 +1071,6 @@ pub static EDGE_85: HelloProfile = HelloProfile {
         },
         ExtensionSlot::Padding,
     ],
-    // Edge 85 predates BoringSSL's extension permutation.
     permute_extensions: false,
     ech_grease: CHROME_ECH_GREASE,
     reuse_classical_key_share: false,
@@ -1246,10 +1140,6 @@ pub static QQ_11_1: HelloProfile = HelloProfile {
     reuse_classical_key_share: false,
 };
 
-// -------------------------------------------------------- the Apple tables
-
-/// Safari 26.3. Note the cipher order: 256-bit first, then ChaCha20, then
-/// 128-bit -- the reverse of Chrome's preference at the top of the list.
 const SAFARI_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Grease,
     CipherSuiteSlot::Negotiable(0x1302), // TLS_AES_256_GCM_SHA384
@@ -1289,7 +1179,6 @@ const SAFARI_KEY_SHARES: &[KeyShareSlot] = &[
     KeyShareSlot::Group(NamedGroup::X25519),
 ];
 
-/// Safari offers only 1.3 and 1.2 -- no 1.1/1.0, unlike the Chromium forks.
 const SAFARI_SUPPORTED_VERSIONS: &[VersionSlot] = &[
     VersionSlot::Grease,
     VersionSlot::Version(TLS_1_3),
@@ -1351,8 +1240,6 @@ pub static SAFARI_26_3: HelloProfile = HelloProfile {
     reuse_classical_key_share: false,
 };
 
-/// iOS 14: no ML-KEM, no session ticket, no certificate compression, and a
-/// long tail of TLS 1.2 suites including 3DES.
 const IOS_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Grease,
     CipherSuiteSlot::Negotiable(0x1301),
@@ -1383,7 +1270,6 @@ const IOS_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Decorative(0x000a),
 ];
 
-/// iOS 14 names five groups and GREASE, with no ML-KEM.
 const IOS_SUPPORTED_GROUPS: &[GroupSlot] = &[
     GroupSlot::Grease,
     GroupSlot::Group(NamedGroup::X25519),
@@ -1444,14 +1330,6 @@ pub static IOS_14: HelloProfile = HelloProfile {
     reuse_classical_key_share: false,
 };
 
-// ------------------------------------------------------- the Firefox table
-
-/// Firefox 148. The odd one out in almost every respect.
-///
-/// No GREASE anywhere — not in the cipher list, not in the groups, not in
-/// `supported_versions`, and no GREASE extensions bracketing the list. Firefox
-/// simply does not do it, and adding it "for consistency" would be the tell.
-/// The extension order is fixed for the same reason: Firefox does not permute.
 const FIREFOX_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Negotiable(0x1301), // TLS_AES_128_GCM_SHA256
     CipherSuiteSlot::Negotiable(0x1303), // TLS_CHACHA20_POLY1305_SHA256
@@ -1472,8 +1350,6 @@ const FIREFOX_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Decorative(0x0035),
 ];
 
-/// Firefox names two finite-field groups after the elliptic ones. Neither is
-/// executed; a server selecting one is refused by name.
 const FIREFOX_SUPPORTED_GROUPS: &[GroupSlot] = &[
     GroupSlot::Group(NamedGroup::X25519MlKem768),
     GroupSlot::Group(NamedGroup::X25519),
@@ -1484,8 +1360,6 @@ const FIREFOX_SUPPORTED_GROUPS: &[GroupSlot] = &[
     GroupSlot::Group(NamedGroup::Ffdhe3072),
 ];
 
-/// Three shares, and the P-256 one is why this profile needed a new key
-/// exchange rather than a new table.
 const FIREFOX_KEY_SHARES: &[KeyShareSlot] = &[
     KeyShareSlot::Group(NamedGroup::X25519MlKem768),
     KeyShareSlot::Group(NamedGroup::X25519),
@@ -1495,8 +1369,6 @@ const FIREFOX_KEY_SHARES: &[KeyShareSlot] = &[
 const FIREFOX_SUPPORTED_VERSIONS: &[VersionSlot] =
     &[VersionSlot::Version(TLS_1_3), VersionSlot::Version(TLS_1_2)];
 
-/// `signature_algorithms`: eleven schemes, ECDSA first, then PSS, then PKCS1,
-/// then the two SHA-1 entries. Nothing like Chrome's eight.
 const FIREFOX_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x00, 0x16, // list length
     0x04, 0x03, // ecdsa_secp256r1_sha256
@@ -1512,11 +1384,6 @@ const FIREFOX_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x02, 0x01, // rsa_pkcs1_sha1
 ];
 
-/// `delegated_credentials` (RFC 9345), four ECDSA schemes.
-///
-/// Offered because Firefox offers it. This client does not implement delegated
-/// credentials; a server that sends one is refused by the certificate reader
-/// rather than mis-parsed.
 const FIREFOX_DELEGATED_CREDENTIALS_BODY: &[u8] = &[
     0x00, 0x08, // list length
     0x04, 0x03, // ecdsa_secp256r1_sha256
@@ -1525,16 +1392,8 @@ const FIREFOX_DELEGATED_CREDENTIALS_BODY: &[u8] = &[
     0x02, 0x03, // ecdsa_sha1
 ];
 
-/// `record_size_limit` (RFC 8449) = 0x4001, one more than 2^14.
-///
-/// Advertised, not honoured: this client's record reader already accepts the
-/// full TLS 1.3 ciphertext limit, which is larger, so the value constrains the
-/// server to something this side can always take.
 const FIREFOX_RECORD_SIZE_LIMIT_BODY: &[u8] = &[0x40, 0x01];
 
-/// `compress_certificate`: zlib, brotli, zstd — all three, where Chrome sends
-/// brotli alone and Safari zlib alone. None is implemented; a
-/// CompressedCertificate is refused by name.
 const FIREFOX_COMPRESS_CERTIFICATE_BODY: &[u8] = &[0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03];
 
 pub static FIREFOX_148: HelloProfile = HelloProfile {
@@ -1586,29 +1445,9 @@ pub static FIREFOX_148: HelloProfile = HelloProfile {
     ],
     permute_extensions: false,
     ech_grease: FIREFOX_ECH_GREASE,
-    // uTLS' `ReuseHybridAndClassicalKeyShares`: one classical key backs both
-    // the hybrid's X25519 half and the standalone x25519 share.
     reuse_classical_key_share: true,
 };
 
-/// Firefox 153, from a capture of Firefox 153.0.4 on macOS.
-///
-/// Not from uTLS: `HelloFirefox_Auto` is still `HelloFirefox_148`. Three things
-/// moved, and between them they move JA4_a — the unhashed, human-readable half
-/// that a cheap detector matches first, where `firefox_148` now reads
-/// `t13d1715h2` and a real Firefox reads `t13d1617h2`:
-///
-/// * `TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA` (0xc009) is gone from the cipher
-///   list, taking it from seventeen suites to sixteen.
-/// * `session_ticket` is sent, empty, between `ec_point_formats` and `alpn`.
-/// * `psk_key_exchange_modes` is sent between `signature_algorithms` and
-///   `record_size_limit`.
-///
-/// Everything else was checked against the capture and is unchanged: no GREASE
-/// anywhere, no permutation, the same seven groups, the same three key shares
-/// with the classical one repeating the hybrid's X25519 half, the same eleven
-/// signature algorithms, `record_size_limit` 0x4001, all three certificate
-/// compression algorithms, and ECH GREASE with a 223-byte payload.
 const FIREFOX_153_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Negotiable(0x1301), // TLS_AES_128_GCM_SHA256
     CipherSuiteSlot::Negotiable(0x1303), // TLS_CHACHA20_POLY1305_SHA256
@@ -1620,7 +1459,6 @@ const FIREFOX_153_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Decorative(0xc02c),
     CipherSuiteSlot::Decorative(0xc030),
     CipherSuiteSlot::Decorative(0xc00a),
-    // 0xc009 stood here through Firefox 148 and is gone in 153.
     CipherSuiteSlot::Decorative(0xc013),
     CipherSuiteSlot::Decorative(0xc014),
     CipherSuiteSlot::Decorative(0x009c),
@@ -1647,8 +1485,6 @@ pub static FIREFOX_153: HelloProfile = HelloProfile {
             extension_type: ext::EC_POINT_FORMATS,
             body: EC_POINT_FORMATS_BODY,
         },
-        // New in 153. Empty, as it is in every profile here: a ticket body
-        // would be a TLS 1.2 resumption, and this client only speaks 1.3.
         ExtensionSlot::Constant {
             extension_type: ext::SESSION_TICKET,
             body: &[],
@@ -1672,9 +1508,6 @@ pub static FIREFOX_153: HelloProfile = HelloProfile {
             extension_type: ext::SIGNATURE_ALGORITHMS,
             body: FIREFOX_SIGNATURE_ALGORITHMS,
         },
-        // New in 153. `psk_dhe_ke` only, the same body the Chromium tables
-        // send. This client offers no `pre_shared_key`, so nothing can be
-        // resumed with it; Firefox sends it on a cold connection too.
         ExtensionSlot::Constant {
             extension_type: ext::PSK_KEY_EXCHANGE_MODES,
             body: PSK_KEY_EXCHANGE_MODES_BODY,
@@ -1694,7 +1527,6 @@ pub static FIREFOX_153: HelloProfile = HelloProfile {
     reuse_classical_key_share: true,
 };
 
-/// The ALPN list every profile in this table set sends.
 pub const CHROME_ALPN_PROTOCOLS: &[&str] = &["h2", "http/1.1"];
 
 /// Legacy `compression_methods`: null only.

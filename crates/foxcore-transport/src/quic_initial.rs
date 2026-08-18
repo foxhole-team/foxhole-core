@@ -1,28 +1,3 @@
-//! What a QUIC client Initial packet actually contains, read back off the wire.
-//!
-//! The TLS parroting work covers the ClientHello that `proto-reality` writes
-//! itself. It does not reach hysteria2 or TUIC: those carry their ClientHello
-//! inside QUIC CRYPTO frames built by `quinn`, and QUIC adds a fingerprint
-//! surface of its own *below* TLS — packet shape, connection-ID lengths, token,
-//! padding, and the transport-parameters set with its ordering.
-//!
-//! None of that could be measured, so none of it was known. This module is the
-//! instrument: give it the first datagram a client sends and it gives back
-//! every field, including the ClientHello, so a test can assert on the bytes
-//! rather than on what the configuration was supposed to mean.
-//!
-//! # Why decryption is not a break
-//!
-//! An Initial packet is "encrypted" with keys derived from the Destination
-//! Connection ID and a salt written down in RFC 9001 §5.2. Every observer on
-//! the path can do this, which is the whole reason the QUIC handshake has a
-//! fingerprint surface at all: the transport parameters are in the clear to
-//! anyone who bothers. Being able to do it here is what makes the measurement
-//! honest — it reads exactly what a censor's middlebox reads.
-//!
-//! Behind the off-by-default `fingerprinting` feature, next to [`crate::ja`],
-//! for the same reason: nothing in a shipped build needs to fingerprint itself.
-
 use std::io;
 use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
@@ -30,19 +5,14 @@ use std::time::{Duration, Instant};
 use aws_lc_rs::aead::{AES_128_GCM, Aad, LessSafeKey, Nonce, UnboundKey, quic};
 use aws_lc_rs::hkdf::{self, HKDF_SHA256, Salt};
 
-/// QUIC v1, RFC 9000 §15.
 pub const VERSION_1: u32 = 0x0000_0001;
-/// RFC 9001 §5.2. Version-specific; a v2 salt would be a different constant.
 const INITIAL_SALT_V1: [u8; 20] = [
     0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17, 0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad,
     0xcc, 0xbb, 0x7f, 0x0a,
 ];
 
-/// The TLS extension that carries the QUIC transport parameters, RFC 9001 §8.2.
 pub const QUIC_TRANSPORT_PARAMETERS_EXTENSION: u16 = 0x0039;
 
-/// Transport parameter code points this workspace has an opinion about.
-/// RFC 9000 §18.2 plus the two extensions quinn emits.
 pub mod transport_parameter {
     pub const MAX_IDLE_TIMEOUT: u64 = 0x01;
     pub const MAX_UDP_PAYLOAD_SIZE: u64 = 0x03;
@@ -57,26 +27,16 @@ pub mod transport_parameter {
     pub const DISABLE_ACTIVE_MIGRATION: u64 = 0x0c;
     pub const ACTIVE_CONNECTION_ID_LIMIT: u64 = 0x0e;
     pub const INITIAL_SOURCE_CONNECTION_ID: u64 = 0x0f;
-    /// RFC 9368 (QUIC Version Negotiation). Chrome sends it; quinn does not.
     pub const VERSION_INFORMATION: u64 = 0x11;
-    /// RFC 9221.
     pub const MAX_DATAGRAM_FRAME_SIZE: u64 = 0x0020;
-    /// RFC 9287.
     pub const GREASE_QUIC_BIT: u64 = 0x2ab2;
-    /// draft-ietf-quic-ack-frequency-07.
     pub const MIN_ACK_DELAY_DRAFT07: u64 = 0xff04_de1b;
 
-    /// RFC 9000 §18.1: reserved ("GREASE") parameters are `31 * N + 27`.
-    /// A peer must ignore them; an observer can still notice whether the value
-    /// is drawn per connection or baked into the binary.
     pub fn is_reserved(id: u64) -> bool {
         id >= 27 && (id - 27).is_multiple_of(31)
     }
 }
 
-/// A frame type seen inside a decrypted Initial packet, in wire order.
-/// Runs of PADDING are coalesced into one entry with their total length,
-/// because the interesting quantity is how much padding there was and where.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Frame {
     Padding { len: usize },
@@ -87,11 +47,8 @@ pub enum Frame {
     Other { ty: u64 },
 }
 
-/// One QUIC Initial packet, decrypted and taken apart.
 #[derive(Debug, Clone)]
 pub struct InitialPacket {
-    /// The unprotected first byte. Bit 0x40 is the "fixed bit"; the low two
-    /// bits are the packet-number length minus one.
     pub first_byte: u8,
     pub version: u32,
     pub destination_connection_id: Vec<u8>,
@@ -99,23 +56,17 @@ pub struct InitialPacket {
     pub token: Vec<u8>,
     pub packet_number: u64,
     pub packet_number_len: usize,
-    /// Frames in the order they appeared in the decrypted payload.
     pub frames: Vec<Frame>,
-    /// CRYPTO frame contents as `(offset, bytes)`, in wire order.
     pub crypto: Vec<(u64, Vec<u8>)>,
-    /// Bytes this packet occupied inside its datagram — a coalesced datagram
-    /// carries more than one.
     pub packet_len: usize,
 }
 
-/// Every Initial packet found in one datagram, plus the datagram's own length.
 #[derive(Debug, Clone)]
 pub struct InitialDatagram {
     pub len: usize,
     pub packets: Vec<InitialPacket>,
 }
 
-/// One `(id, value)` transport parameter, kept in the order it was written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransportParameter {
     pub id: u64,
@@ -123,7 +74,6 @@ pub struct TransportParameter {
 }
 
 impl TransportParameter {
-    /// The value read as a QUIC varint, for the parameters that carry one.
     pub fn as_varint(&self) -> Option<u64> {
         let mut cursor = Cursor::new(&self.value);
         let value = cursor.varint().ok()?;
@@ -135,9 +85,6 @@ fn other(message: impl Into<String>) -> io::Error {
     io::Error::other(message.into())
 }
 
-/// A bounds-checked reader. Every parser here is fed bytes that arrived from
-/// the network, so "the packet was truncated" has to be an error rather than a
-/// panic even in a test harness.
 struct Cursor<'a> {
     bytes: &'a [u8],
     at: usize,
@@ -178,7 +125,6 @@ impl<'a> Cursor<'a> {
         Ok(value)
     }
 
-    /// RFC 9000 §16: the top two bits of the first byte give the length.
     fn varint(&mut self) -> io::Result<u64> {
         let first = self.byte()?;
         let len = 1usize << (first >> 6);
@@ -198,7 +144,6 @@ impl hkdf::KeyType for Len {
     }
 }
 
-/// HKDF-Expand-Label, RFC 8446 §7.1, with TLS 1.3's `tls13 ` label prefix.
 fn expand_label(secret: &hkdf::Prk, label: &str, len: usize) -> io::Result<Vec<u8>> {
     let mut info = Vec::with_capacity(4 + 6 + label.len());
     info.extend_from_slice(
@@ -218,9 +163,6 @@ fn expand_label(secret: &hkdf::Prk, label: &str, len: usize) -> io::Result<Vec<u
     Ok(out)
 }
 
-/// The client's Initial keys for `dcid`, RFC 9001 §5.2. Always AES-128-GCM:
-/// the Initial keys are fixed by the specification and do not depend on the
-/// cipher suite the ClientHello goes on to offer.
 struct InitialKeys {
     key: LessSafeKey,
     iv: [u8; 12],
@@ -253,21 +195,14 @@ impl InitialKeys {
     }
 }
 
-/// Parse every Initial packet in one client datagram.
-///
-/// Long-header packets that are not Initial (a coalesced Handshake, say) end
-/// the walk rather than erroring: their keys come from the handshake and are
-/// not derivable from the wire.
 pub fn parse_datagram(datagram: &[u8]) -> io::Result<InitialDatagram> {
     let mut packets = Vec::new();
     let mut offset = 0usize;
     while offset < datagram.len() {
         let rest = &datagram[offset..];
-        // A zero first byte is padding between coalesced packets, not a packet.
         if rest[0] == 0 || rest[0] & 0x80 == 0 {
             break;
         }
-        // Long header, type bits 0x30: Initial is 0b00.
         if rest[0] & 0x30 != 0x00 {
             break;
         }
@@ -284,7 +219,6 @@ pub fn parse_datagram(datagram: &[u8]) -> io::Result<InitialDatagram> {
     })
 }
 
-/// Parse and decrypt one Initial packet at the start of `bytes`.
 pub fn parse_initial(bytes: &[u8]) -> io::Result<InitialPacket> {
     let mut cursor = Cursor::new(bytes);
     let protected_first = cursor.byte()?;
@@ -307,8 +241,6 @@ pub fn parse_initial(bytes: &[u8]) -> io::Result<InitialPacket> {
     let length = usize::try_from(cursor.varint()?).map_err(|_| other("length overflow"))?;
     let pn_offset = cursor.at;
 
-    // RFC 9001 §5.4.2: the sample starts four bytes past the packet number,
-    // which is why header protection can be removed before its length is known.
     let sample = bytes
         .get(pn_offset + 4..pn_offset + 4 + 16)
         .ok_or_else(|| other("packet too short for a header-protection sample"))?;
@@ -414,9 +346,6 @@ fn parse_frames(payload: &[u8]) -> io::Result<(Vec<Frame>, Vec<(u64, Vec<u8>)>)>
                 frames.push(Frame::ConnectionClose);
             }
             other_ty => {
-                // An Initial packet may only carry the frames above (RFC 9000
-                // §17.2.2). Anything else means the parse went off the rails,
-                // and guessing a length would hide that.
                 frames.push(Frame::Other { ty: other_ty });
                 break;
             }
@@ -425,12 +354,6 @@ fn parse_frames(payload: &[u8]) -> io::Result<(Vec<Frame>, Vec<(u64, Vec<u8>)>)>
     Ok((frames, crypto))
 }
 
-/// Reassemble the CRYPTO stream from every packet of every datagram, in offset
-/// order, and return the first complete handshake message.
-///
-/// A ClientHello with an ML-KEM key share does not fit in one Initial packet,
-/// so this is not a formality: the hello arrives in pieces, and a harness that
-/// only looked at the first datagram would silently measure half of it.
 pub fn client_hello(datagrams: &[InitialDatagram]) -> io::Result<Vec<u8>> {
     let mut chunks: Vec<(u64, &[u8])> = Vec::new();
     for datagram in datagrams {
@@ -451,7 +374,6 @@ pub fn client_hello(datagrams: &[InitialDatagram]) -> io::Result<Vec<u8>> {
                 stream.len()
             )));
         }
-        // Retransmits and overlaps are legal; take only what extends the stream.
         let already = stream.len() - offset;
         if already < data.len() {
             stream.extend_from_slice(&data[already..]);
@@ -476,11 +398,6 @@ pub fn client_hello(datagrams: &[InitialDatagram]) -> io::Result<Vec<u8>> {
     Ok(stream)
 }
 
-/// The QUIC transport parameters carried by a ClientHello, in wire order.
-///
-/// Order is the point. RFC 9000 lets a client write them in any order, so the
-/// order it *chooses* is a per-implementation constant unless it is shuffled —
-/// which is exactly the kind of tell TLS extension permutation exists to remove.
 pub fn transport_parameters(client_hello: &[u8]) -> io::Result<Vec<TransportParameter>> {
     let extension = find_extension(client_hello, QUIC_TRANSPORT_PARAMETERS_EXTENSION)
         .ok_or_else(|| other("ClientHello carries no quic_transport_parameters extension"))?;
@@ -498,19 +415,10 @@ pub fn transport_parameters(client_hello: &[u8]) -> io::Result<Vec<TransportPara
     Ok(parameters)
 }
 
-/// A UDP socket that answers nothing and records what was said to it.
-///
-/// This is the whole "server" a QUIC fingerprint measurement needs. A client's
-/// first flight is sent before it has heard a single byte back, so a socket
-/// that never replies sees exactly the packets a censor's first look would —
-/// and no live server, no credentials and no traffic leaving the machine are
-/// involved.
 pub struct InitialCapture {
     socket: UdpSocket,
 }
 
-/// One captured first flight: the datagrams, in arrival order, and the
-/// ClientHello reassembled from them.
 #[derive(Debug, Clone)]
 pub struct CapturedFlight {
     pub datagrams: Vec<InitialDatagram>,
@@ -518,14 +426,10 @@ pub struct CapturedFlight {
 }
 
 impl CapturedFlight {
-    /// Every datagram's length, in arrival order. The shape of the first flight
-    /// — how many datagrams and how big — is itself an observable.
     pub fn datagram_lens(&self) -> Vec<usize> {
         self.datagrams.iter().map(|d| d.len).collect()
     }
 
-    /// The first Initial packet of the first datagram, which is the one an
-    /// observer keys on.
     pub fn first_packet(&self) -> &InitialPacket {
         &self.datagrams[0].packets[0]
     }
@@ -536,7 +440,6 @@ impl CapturedFlight {
 }
 
 impl InitialCapture {
-    /// Bind on loopback. Port zero: the caller reads back the real address.
     pub fn bind() -> io::Result<Self> {
         let socket = UdpSocket::bind("127.0.0.1:0")?;
         Ok(Self { socket })
@@ -546,13 +449,6 @@ impl InitialCapture {
         self.socket.local_addr()
     }
 
-    /// Read datagrams until the client's ClientHello is complete, or `window`
-    /// elapses.
-    ///
-    /// Stopping at the first complete hello rather than at a timer is what
-    /// keeps the datagram count honest: a client that gets no reply will
-    /// eventually retransmit its flight, and counting those would report a
-    /// first flight larger than the one actually sent.
     pub fn collect_first_flight(&self, window: Duration) -> io::Result<CapturedFlight> {
         let deadline = Instant::now() + window;
         let mut datagrams = Vec::new();
@@ -589,7 +485,6 @@ impl InitialCapture {
     }
 }
 
-/// The body of one extension of a ClientHello handshake message.
 pub fn find_extension(client_hello: &[u8], wanted: u16) -> Option<&[u8]> {
     let be16 = |at: usize| -> Option<usize> {
         Some(usize::from(u16::from_be_bytes([

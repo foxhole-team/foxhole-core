@@ -6,16 +6,11 @@
 //! `THIRD_PARTY_NOTICES.md` and this crate's `LICENSE-MIT`.
 
 mod common;
-/// Holds the hello tables to `fingerprints/*.json`. Tests only.
 #[cfg(test)]
 mod fingerprint_vector;
 mod hello_profile;
-/// JA3/JA4 for every parrot, using the detector-validated computation.
 #[cfg(test)]
 mod parrot_fingerprints;
-/// uTLS' `randomized` *generator*, ported. The one hello here that is not a
-/// table, and the only one whose bytes differ between two connections of the
-/// same build.
 mod randomized_hello;
 mod reality_aead;
 mod reality_auth;
@@ -30,13 +25,7 @@ mod reality_records;
 mod reality_tls13_keys;
 mod reality_tls13_messages;
 mod reality_util;
-/// Reads a signed hello-table document into the tables above. Data only: the
-/// generator is compiled in and this cannot add a profile name to it.
 mod runtime_tables;
-// Also under `cfg(test)`: the `randomized` generator has no golden vector to
-// compare against, so the only way to assert that a *drawn* hello is usable is
-// to complete a handshake with it — against this harness, in memory, with the
-// draw pinned to a seed. Parts of it go unused in that build, hence the allow.
 #[cfg_attr(all(test, not(feature = "testkit")), allow(dead_code))]
 #[cfg(any(test, feature = "testkit"))]
 pub(crate) mod testkit_internals;

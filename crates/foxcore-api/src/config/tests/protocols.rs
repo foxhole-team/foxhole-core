@@ -31,9 +31,6 @@ fn parses_amneziawg_obfuscation_parameters() {
     );
 }
 
-/// amnezia-vpn/amneziawg-go#141: an `I` slot that renders to nothing is put on
-/// the wire as a zero-length UDP datagram. The tag list here is not empty — it is
-/// `<d>`, which is zero-width because an init packet has no payload to carry.
 #[test]
 fn amneziawg_rejects_an_init_packet_that_renders_no_bytes() {
     let json = amnezia_json(r#"{"init_packets":[{"tags":[{"tag":"payload"}]}]}"#);
@@ -43,7 +40,6 @@ fn amneziawg_rejects_an_init_packet_that_renders_no_bytes() {
     assert!(error.contains("at least one byte"), "unexpected: {error}");
 }
 
-/// The same empty datagram, reached down the junk path instead of the `I` path.
 #[test]
 fn amneziawg_rejects_junk_packets_that_would_be_empty() {
     let json = amnezia_json(
@@ -56,8 +52,6 @@ fn amneziawg_rejects_junk_packets_that_would_be_empty() {
     assert!(error.contains("junk_max_size"), "unexpected: {error}");
 }
 
-/// `Jmax` below the MTU is the whole point of junk; at or above it every junk
-/// datagram fragments, which is the signature upstream warns about.
 #[test]
 fn amneziawg_junk_fragments_only_at_or_above_the_mtu() {
     let mut amnezia = AmneziaConfig {
@@ -70,14 +64,10 @@ fn amneziawg_junk_fragments_only_at_or_above_the_mtu() {
     amnezia.junk_max_size = 1280;
     assert!(amnezia.junk_fragments_at_mtu(1280));
     assert!(amnezia.junk_fragments_at_mtu(1279));
-    // No junk, no fragments: Jmax is unread when Jc is zero.
     amnezia.junk_packet_count = 0;
     assert!(!amnezia.junk_fragments_at_mtu(1280));
 }
 
-/// The rule the helper above states, applied. A profile that lowered its own MTU
-/// to 1280 and asks for 1280-byte junk is refused rather than clamped: clamping
-/// would keep it working while sending a size the peer's generator never picked.
 #[test]
 fn amneziawg_refuses_junk_that_fragments_at_the_profile_mtu() {
     let junk = |max: u16| {
@@ -91,10 +81,8 @@ fn amneziawg_refuses_junk_that_fragments_at_the_profile_mtu() {
         .to_string();
     assert!(error.contains("junk_max_size"), "unexpected: {error}");
     assert!(error.contains("1280"), "unexpected: {error}");
-    // One byte below still fits the path, so it stays a valid profile.
     EngineConfig::parse(&amnezia_json_with_mtu(1280, &junk(1279)))
         .expect("junk below the MTU is the ordinary case and must keep parsing");
-    // And `Jc = 0` never reads `Jmax`, so the comparison must not fire on it.
     EngineConfig::parse(&amnezia_json_with_mtu(
         1280,
         r#"{"junk_packet_count":0,"junk_min_size":0,"junk_max_size":1280}"#,
@@ -102,10 +90,6 @@ fn amneziawg_refuses_junk_that_fragments_at_the_profile_mtu() {
     .expect("without junk packets Jmax puts nothing on the wire");
 }
 
-/// `H1..H4` as AWG 2.0 intervals. A range is carried as a range and serialized
-/// back to the `"lo-hi"` text a `.conf` carries, because the header is drawn
-/// afresh per datagram and collapsing it would put a constant on the wire where
-/// the profile asked for a moving target.
 #[test]
 fn amneziawg_header_ranges_round_trip_beside_single_values() {
     let json = amnezia_json(
@@ -127,14 +111,9 @@ fn amneziawg_header_ranges_round_trip_beside_single_values() {
 
     let text = serde_json::to_string(&amnezia).expect("the block should serialize");
     assert!(text.contains(r#""header_initiation":"10-19""#), "{text}");
-    // The single value stays a bare number rather than becoming "20-20", so a 1.5
-    // document written before ranges existed round-trips unchanged.
     assert!(text.contains(r#""header_response":20"#), "{text}");
 }
 
-/// Inverted bounds are upstream's own refusal in `u32_range_from_string`, and an
-/// interval that overlaps another is ambiguous for exactly the datagrams that
-/// draw the shared value — an intermittent tunnel rather than a broken one.
 #[test]
 fn amneziawg_refuses_inverted_and_overlapping_header_ranges() {
     let inverted = EngineConfig::parse(&amnezia_json(r#"{"header_initiation":"19-10"}"#))
@@ -461,9 +440,6 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
         assert!(EngineConfig::parse(&invalid).is_err());
     }
 
-    // REALITY is a security layer, not a carrier. A stream transport above it
-    // is the ordinary shape of a REALITY node in the wild (gRPC especially),
-    // and used to be rejected here for a limitation the wire does not have.
     for transport in [
         r#"{"type":"websocket","path":"/ws"}"#,
         r#"{"type":"http_upgrade","path":"/up"}"#,
@@ -496,18 +472,12 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
         };
         vless.reality.as_ref().unwrap().fingerprint
     };
-    // The bare name follows the current browser rather than pinning a build:
-    // it is a promise to look like Chrome, and a table that stopped matching a
-    // shipping Chrome would not keep that promise. The build-specific spellings
-    // are how a caller pins one deliberately.
     assert_eq!(fingerprint("\"chrome\""), RealityFingerprint::Chrome151);
     assert_eq!(fingerprint("\"chrome_151\""), RealityFingerprint::Chrome151);
     assert_eq!(fingerprint("\"chrome_133\""), RealityFingerprint::Chrome133);
     assert_eq!(fingerprint("\"chrome_131\""), RealityFingerprint::Chrome131);
     assert_eq!(RealityFingerprint::default(), RealityFingerprint::Chrome151);
 
-    // The other profiles, by both spellings: the short name a share link
-    // carries and the build-specific name this core uses.
     for (value, expected) in [
         ("\"edge\"", RealityFingerprint::Edge85),
         ("\"edge_85\"", RealityFingerprint::Edge85),
@@ -520,21 +490,13 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
         ("\"firefox\"", RealityFingerprint::Firefox153),
         ("\"firefox_153\"", RealityFingerprint::Firefox153),
         ("\"firefox_148\"", RealityFingerprint::Firefox148),
-        // The one value that names no browser: uTLS' generator, ported in
-        // `proto_reality::reality::randomized_hello`. It is a name this core
-        // can produce bytes for — different bytes every connection — so it
-        // belongs in the accepted list rather than the refused one below.
         ("\"randomized\"", RealityFingerprint::Randomized),
     ] {
         assert_eq!(fingerprint(value), expected, "fingerprint {value}");
     }
 
-    // And the list stays closed: a uTLS parrot name this core cannot produce
-    // bytes for is a refusal here, not a silent fall back to Chrome. The link
-    // parser is where `fp=firefox` becomes a reported substitution; a *config*
-    // naming a profile with no table is a malformed config.
-    //
-    // `360` and `android` are refused at both layers.
+    // Configs never substitute unknown parrots; `360` and `android` are refused
+    // here and by the link importer.
     for unknown in [
         "\"360\"",
         "\"android\"",
@@ -898,8 +860,6 @@ fn hysteria2_timing(timing: &str) -> Result<Hysteria2Config, ConfigError> {
     Ok(hy2)
 }
 
-/// A profile written before these fields existed must keep the exact QUIC
-/// timing the hardcoded build used, or every live server sees new behaviour.
 #[test]
 fn defaults_hysteria2_quic_timing_to_the_previously_hardcoded_values() {
     let hy2 = hysteria2_timing("").unwrap();
@@ -929,8 +889,6 @@ fn refuses_hysteria2_quic_timing_outside_supported_ranges() {
     }
 }
 
-/// A keepalive that is not comfortably below the idle timeout cannot hold the
-/// path open once a single PING is lost.
 #[test]
 fn refuses_hysteria2_keepalive_that_cannot_hold_the_idle_timeout_open() {
     for invalid in [

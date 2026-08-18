@@ -1,32 +1,3 @@
-//! Properties, because there is no vector.
-//!
-//! Every other hello in this crate is checked against frozen bytes: a table
-//! either reproduces `fingerprints/chrome_133.json` or it does not. That test
-//! cannot exist here. The whole claim of `randomized` is that the bytes differ
-//! per connection, so a golden vector would either be wrong or would have to
-//! freeze the randomness that makes the profile a profile.
-//!
-//! So what is pinned is the *shape of the space*: which extensions may appear,
-//! which must appear, which combinations may not, how far the draw is allowed
-//! to move, and — the one that decides whether this ships at all — that every
-//! draw carries TLS 1.3 and an `x25519` key share, without which REALITY has
-//! nothing to derive its authentication key from.
-//!
-//! The randomness is injected ([`SeededDraws`]), so every assertion below runs
-//! over a fixed, reproducible set of seeds. A failure names a seed and can be
-//! replayed.
-//!
-//! # The negative controls
-//!
-//! A property test that passes against a broken generator proves nothing, so
-//! [`neutralising_the_generator_fails_the_properties`] breaks it four ways —
-//! freezes the draw, drops a mandatory extension, drops the TLS 1.3 block, and
-//! takes uTLS' P-256-only key-share draw — and asserts that the same checks
-//! then fail, and that the same handshake harness then rejects the hello.
-//!
-//! Everything is synthetic: `example.com`, a client random of repeated bytes,
-//! and a REALITY key that belongs to nobody.
-
 use std::collections::BTreeSet;
 use std::io;
 
@@ -44,18 +15,8 @@ use crate::reality::reality_key_exchange::NamedGroup;
 use crate::reality::reality_tls13_messages::construct_client_hello;
 use crate::reality::testkit_internals as internals;
 
-/// How many draws every property runs over. Large enough that a coin weighted
-/// 0.33 lands on both faces thousands of times, small enough to stay a unit
-/// test.
 const SEEDS: u64 = 3_000;
 
-// ------------------------------------------------------------ the vocabulary
-
-/// Every extension code point a generated hello may carry, and nothing else.
-///
-/// This is the closed vocabulary, written out rather than derived from the
-/// generator: a new variant added to [`Slot`] without a decision about whether
-/// it belongs on the wire fails here.
 const ALLOWED_EXTENSIONS: [u16; 15] = [
     ext::SERVER_NAME,
     ext::SESSION_TICKET,
@@ -74,8 +35,6 @@ const ALLOWED_EXTENSIONS: [u16; 15] = [
     ext::PADDING,
 ];
 
-/// The eight that are not optional. Five are unconditional in uTLS; the other
-/// three come with the TLS 1.3 branch, which this port forces.
 const MANDATORY_EXTENSIONS: [u16; 8] = [
     ext::SERVER_NAME,
     ext::SESSION_TICKET,
@@ -87,7 +46,6 @@ const MANDATORY_EXTENSIONS: [u16; 8] = [
     ext::SUPPORTED_VERSIONS,
 ];
 
-/// Every signature scheme the draw may reach, base plus optional.
 fn signature_algorithm_universe() -> BTreeSet<u16> {
     BASE_SIGNATURE_ALGORITHMS
         .iter()
@@ -99,14 +57,6 @@ fn signature_algorithm_universe() -> BTreeSet<u16> {
 const X25519_GROUP: u16 = 0x001d;
 const SECP256R1_GROUP: u16 = 0x0017;
 
-// -------------------------------------------------------------- the parser
-
-/// A strict walk over the ClientHello.
-///
-/// Deliberately not [`ja::parse`], which is written to survive whatever a real
-/// network hands it. Here every length field has to add up exactly and the
-/// message has to end where it says it does — which is the well-formedness
-/// half of the claim, and the half a lenient parser would hide.
 struct Parsed {
     ciphers: Vec<u16>,
     extensions: Vec<(u16, Vec<u8>)>,
@@ -179,13 +129,6 @@ fn parse_strict(hello: &[u8]) -> Result<Parsed, String> {
     })
 }
 
-// -------------------------------------------------------------- the checks
-
-/// Every property one hello must satisfy, as a `Result` rather than an assert.
-///
-/// A `Result` so the negative controls can assert that these *fail* without
-/// catching a panic — a check that can only shout is a check that cannot be
-/// tested itself.
 fn check(hello: &[u8]) -> Result<(), String> {
     let parsed = parse_strict(hello)?;
 
@@ -208,8 +151,6 @@ fn check(hello: &[u8]) -> Result<(), String> {
         return Err("an extension type appears twice".to_owned());
     }
 
-    // ALPS is TLS 1.3-only and draft-vvv-tls-alps-01 allows it only beside an
-    // ALPN extension. uTLS gates it on exactly that.
     if types.contains(&ext::APPLICATION_SETTINGS_OLD) && !types.contains(&ext::ALPN) {
         return Err("application_settings without ALPN".to_owned());
     }
@@ -223,7 +164,6 @@ fn check(hello: &[u8]) -> Result<(), String> {
             .unwrap_or_default()
     };
 
-    // --- REALITY compatibility. The two that decide whether this can ship.
     let versions = body(ext::SUPPORTED_VERSIONS);
     if versions.first().copied() != Some((versions.len() - 1) as u8) {
         return Err("supported_versions list length is wrong".to_owned());
@@ -269,7 +209,6 @@ fn check(hello: &[u8]) -> Result<(), String> {
         return Err("supported_groups is missing secp256r1".to_owned());
     }
 
-    // --- the cipher list, and uTLS' bounds on it.
     if parsed.ciphers.is_empty() || parsed.ciphers.len() > 22 {
         return Err(format!(
             "{} cipher suites is out of range",
@@ -303,9 +242,6 @@ fn check(hello: &[u8]) -> Result<(), String> {
                 "cipher 0x{id:04x} is outside Go's cipherSuites table"
             ));
         };
-        // `sortableCiphers.Less` sorts every non-obsolete suite ahead of every
-        // obsolete one. This is what keeps the shuffle browser-shaped rather
-        // than uniformly random.
         if *obsolete {
             seen_obsolete = true;
         } else if seen_obsolete {
@@ -315,7 +251,6 @@ fn check(hello: &[u8]) -> Result<(), String> {
         }
     }
 
-    // --- signature algorithms.
     let sig_body = body(ext::SIGNATURE_ALGORITHMS);
     let declared = u16::from_be_bytes([sig_body[0], sig_body[1]]) as usize;
     if declared + 2 != sig_body.len() || !declared.is_multiple_of(2) {
@@ -342,12 +277,10 @@ fn check(hello: &[u8]) -> Result<(), String> {
             return Err(format!("base signature scheme 0x{base:04x} is missing"));
         }
     }
-    // RFC 8446 §4.2.3: "RSASSA-PSS ... is mandatory in TLS 1.3".
     if !present.contains(&PSS_RSAE_SHA256) {
         return Err("rsa_pss_rsae_sha256 is missing on a TLS 1.3 hello".to_owned());
     }
 
-    // --- padding.
     if let Some(position) = types.iter().position(|id| *id == ext::PADDING) {
         if position + 1 != types.len() {
             return Err("padding is not last".to_owned());
@@ -367,8 +300,6 @@ fn check(hello: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-// ------------------------------------------------------------- the fixtures
-
 const SERVER_PRIVATE: [u8; 32] = [0x4a; 32];
 const SERVER_NAME: &str = "example.com";
 
@@ -379,21 +310,12 @@ fn server_public_key() -> [u8; 32] {
     public
 }
 
-/// The ClientHello handshake message a draw produces, without the REALITY
-/// session-id encryption — the shape is all these properties are about.
-///
-/// Every per-connection value the executor asks for is pinned: the key shares
-/// are synthetic bytes of the right length rather than a real
-/// [`ClientKeyExchange`], because a freshly generated public key would make the
-/// hello differ between two calls with the *same* seed and there would be no
-/// way to tell an injected-randomness failure from an ephemeral key.
 fn hello_bytes(drawn: &RandomizedHello) -> io::Result<Vec<u8>> {
     drawn.with_profile(|profile| {
         let key_shares: Vec<(NamedGroup, Vec<u8>)> = profile
             .key_share_groups()
             .into_iter()
             .map(|group| {
-                // x25519 is 32 bytes, an uncompressed P-256 point is 65.
                 let len = if group == NamedGroup::X25519 { 32 } else { 65 };
                 (group, vec![0x7b_u8; len])
             })
@@ -416,10 +338,6 @@ fn draw(seed: u64) -> RandomizedHello {
     RandomizedHello::draw(&mut SeededDraws::new(seed))
 }
 
-// -------------------------------------------------------- the property tests
-
-/// The headline claim: every draw is a well-formed ClientHello that REALITY
-/// can actually use.
 #[test]
 fn every_draw_is_well_formed_and_reality_compatible() {
     for seed in 0..SEEDS {
@@ -431,12 +349,6 @@ fn every_draw_is_well_formed_and_reality_compatible() {
     }
 }
 
-/// The draw is bounded the way uTLS bounds it — and it is a draw at all.
-///
-/// The first half of this is the interesting one: "bounded" is not a mood, it
-/// is that every optional piece appears on *both* faces across the sample and
-/// nothing outside the vocabulary ever appears. A generator that always said
-/// yes, or always said no, would pass [`check`] and fail here.
 #[test]
 fn the_draw_is_bounded_and_actually_varies() {
     let optional = [
@@ -486,9 +398,6 @@ fn the_draw_is_bounded_and_actually_varies() {
         );
     }
 
-    // uTLS' bounds, stated as numbers. Three TLS 1.3 suites plus nineteen
-    // non-RC4 legacy ones is twenty-two before `removeRandomCiphers`, and that
-    // function never removes index 0.
     assert!(
         cipher_counts.iter().all(|count| (1..=22).contains(count)),
         "cipher counts out of range: {cipher_counts:?}"
@@ -497,14 +406,11 @@ fn the_draw_is_bounded_and_actually_varies() {
         cipher_counts.len() > 4,
         "removeRandomCiphers is not removing anything: {cipher_counts:?}"
     );
-    // `supported_groups`: three groups or four, never anything else.
     assert_eq!(
         group_counts,
         BTreeSet::from([2 + 3 * 2, 2 + 4 * 2]),
         "supported_groups lengths"
     );
-    // Signature schemes: seven at minimum (six base plus forced PSS), eleven at
-    // most, and only the four documented steps in between.
     assert_eq!(
         scheme_counts,
         BTreeSet::from([2 + 7 * 2, 2 + 8 * 2, 2 + 9 * 2, 2 + 10 * 2, 2 + 11 * 2]),
@@ -517,10 +423,6 @@ fn the_draw_is_bounded_and_actually_varies() {
     );
 }
 
-/// The injected source is the only source: the same seed is the same hello.
-///
-/// Without this the tests above would be measuring the OS RNG, and a failure
-/// could not be replayed.
 #[test]
 fn the_same_seed_draws_the_same_hello() {
     for seed in [0_u64, 1, 42, 9_999] {
@@ -532,12 +434,6 @@ fn the_same_seed_draws_the_same_hello() {
     }
 }
 
-/// A generated hello completes a REALITY handshake against the test server.
-///
-/// Well-formed is not the same as usable. This drives the real client through
-/// the real harness — the one `proto-vless`' integration test dials over a
-/// socket — for a sample of pinned draws, and only succeeds if the server can
-/// find the `x25519` share, derive the REALITY key, and be believed.
 #[test]
 fn a_generated_hello_completes_a_reality_handshake() {
     for seed in 0..128_u64 {
@@ -546,7 +442,6 @@ fn a_generated_hello_completes_a_reality_handshake() {
     }
 }
 
-/// Drive one connection to a completed handshake in memory.
 fn complete_handshake(hello: RealityHello) -> io::Result<()> {
     let mut connection = RealityClientConnection::new(RealityClientConfig {
         public_key: server_public_key(),
@@ -594,20 +489,8 @@ fn complete_handshake(hello: RealityHello) -> io::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------- negative control
-
-/// Break the generator four ways; the properties above must notice all four.
-///
-/// This is the test that makes the others mean something. Each case takes a
-/// real draw and neutralises exactly one thing — the two that uTLS itself can
-/// produce and this port excludes, plus a dropped mandatory extension and a
-/// frozen draw — and asserts that the checks fail, with the reason quoted so a
-/// future edit that weakens a check fails here rather than going quiet.
 #[test]
 fn neutralising_the_generator_fails_the_properties() {
-    // 1. The draw is fixed: one hello for every connection. Every per-hello
-    //    check still passes — a constant hello is a perfectly well-formed one —
-    //    and that is exactly why "it varies" has to be its own assertion.
     let frozen = hello_bytes(&draw(7)).expect("hello");
     assert!(
         check(&frozen).is_ok(),
@@ -630,7 +513,6 @@ fn neutralising_the_generator_fails_the_properties() {
          `the_draw_is_bounded_and_actually_varies` requires to be large"
     );
 
-    // 2. A mandatory extension is dropped.
     let mut dropped = draw(11);
     dropped
         .layout
@@ -642,10 +524,6 @@ fn neutralising_the_generator_fails_the_properties() {
         "{reason}"
     );
 
-    // 3. uTLS' TLS 1.2 branch: no key_share, no supported_versions. This one
-    //    cannot even be built — `HelloProfile::validate` refuses a ClientHello
-    //    with no key_share extension before any bytes exist — which is the
-    //    strongest form the check could take.
     let mut tls12 = draw(13);
     tls12
         .layout
@@ -653,10 +531,6 @@ fn neutralising_the_generator_fails_the_properties() {
     let error = hello_bytes(&tls12).expect_err("a TLS 1.2 shape must not produce a hello");
     assert!(error.to_string().contains("key_share"), "{error}");
 
-    // 4. uTLS' `FirstKeyShare_Set_CurveP256`, weighted 0.25 upstream. The hello
-    //    is well-formed TLS and a browser could send it; REALITY cannot use it,
-    //    because the server reads the flat x25519 share out of the ClientHello
-    //    and there is not one. Both the check and the harness must say so.
     let mut p256 = draw(17);
     p256.key_shares = vec![KeyShareSlot::Group(NamedGroup::Secp256r1)];
     p256.supported_groups = vec![
@@ -674,27 +548,11 @@ fn neutralising_the_generator_fails_the_properties() {
         "{server_side}"
     );
 
-    // And with all four restored, the generator passes again.
     for seed in [7_u64, 11, 13, 17] {
         check(&hello_bytes(&draw(seed)).expect("hello")).expect("restored");
     }
 }
 
-// ------------------------------------------------------- what a detector sees
-
-/// What this costs, measured rather than asserted: **JA4 moves too.**
-///
-/// The parrots have a stable JA4 and a moving JA3 — JA4 sorts its cipher and
-/// extension lists, so Chrome's per-connection permutation and its GREASE drop
-/// out, which is exactly how a real browser behaves. A generated hello has a
-/// different cipher *set* and a different extension *set* per connection, so
-/// sorting does not save it, and the JA4 moves.
-///
-/// That is the trade in one line: an exact-match blocklist cannot hold this
-/// client, and an aggregate-statistics detector gets a signal no browser
-/// produces — a single client whose JA4 is never the same twice. The test
-/// asserts the fact rather than a preference, so that a future change which
-/// stabilises JA4 has to come here and say so.
 #[test]
 fn a_generated_hello_moves_ja3_and_ja4_together() {
     let mut ja3s = BTreeSet::new();

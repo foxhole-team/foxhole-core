@@ -1,25 +1,3 @@
-//! The randomness and key-agreement seam.
-//!
-//! Everything the handshake does with these outputs is deterministic, so
-//! putting the trait boundary *here* — at the KEM results rather than at raw
-//! entropy — is what makes the wire format testable. `tests/encryption_vector.rs`
-//! drives the same handshake code from values recorded out of the reference Go
-//! implementation and compares the bytes; that would be impossible one layer
-//! lower, because ML-KEM keygen and encapsulation draw their randomness inside
-//! the provider and neither Go's `crypto/mlkem` nor `aws-lc-rs` lets a caller
-//! seed them.
-//!
-//! What that boundary does *not* prove is that `aws-lc-rs` and Go agree on
-//! ML-KEM-768 and X25519 themselves. Both are FIPS 203 / RFC 7748 with
-//! published vectors, and this workspace already relies on that agreement for
-//! REALITY's `X25519MLKEM768`; the live interop run recorded in the report is
-//! what actually exercises it end to end.
-//!
-//! NOTE: the X25519 helpers below duplicate ~30 lines that already exist,
-//! private, in `proto-reality`'s key exchange. They are copied rather than
-//! shared because that crate belongs to another change in flight. The right
-//! home is a small shared primitive crate — see the report.
-
 use std::io;
 
 use aws_lc_rs::kem::{Ciphertext, DecapsulationKey, EncapsulationKey, ML_KEM_768};
@@ -31,40 +9,27 @@ use super::params::{
     NfsPublicKey, X25519_LEN,
 };
 
-/// `pfsKey`: the ML-KEM secret followed by the X25519 secret.
 pub const PFS_KEY_LEN: usize = ML_KEM_768_SHARED_SECRET_LEN + X25519_LEN;
-/// Client's forward-secret offer: `ek || x25519_pub`.
 pub const PFS_OFFER_LEN: usize = ML_KEM_768_ENCAPSULATION_KEY_LEN + X25519_LEN;
-/// Server's forward-secret answer: `ct || x25519_pub`.
 pub const PFS_ANSWER_LEN: usize = ML_KEM_768_CIPHERTEXT_LEN + X25519_LEN;
 
-/// One hop's contribution to `ivAndRelays`, plus the secret it establishes.
 pub struct NfsShare {
-    /// What goes on the wire: an ephemeral X25519 public key, or an ML-KEM-768
-    /// ciphertext.
     pub wire: Vec<u8>,
     pub shared_secret: [u8; 32],
 }
 
-/// The client's half-finished forward-secret exchange.
 pub trait PfsOffer: Send {
-    /// `ek || x25519_pub`, exactly [`PFS_OFFER_LEN`] bytes.
     fn public_bytes(&self) -> &[u8];
-    /// Complete against the server's `ct || x25519_pub`.
     fn derive(self: Box<Self>, answer: &[u8]) -> io::Result<[u8; PFS_KEY_LEN]>;
 }
 
-/// Randomness and key agreement, as the handshake needs them.
 pub trait HandshakeCrypto: Send {
     fn fill_random(&mut self, out: &mut [u8]) -> io::Result<()>;
-    /// `crypto.RandBetween`, inclusive at both ends.
     fn rand_between(&mut self, from: u32, to: u32) -> u32;
-    /// Establish `nfsKey` against one hop's long-term public key.
     fn nfs_share(&mut self, peer: &NfsPublicKey) -> io::Result<NfsShare>;
     fn pfs_offer(&mut self) -> io::Result<Box<dyn PfsOffer>>;
 }
 
-/// The shipped implementation.
 pub struct LiveCrypto;
 
 impl HandshakeCrypto for LiveCrypto {
@@ -81,9 +46,6 @@ impl HandshakeCrypto for LiveCrypto {
         if getrandom::fill(&mut bytes).is_err() {
             return from;
         }
-        // Matching upstream's modulo reduction rather than a rejection loop.
-        // The residual bias is over padding lengths, which are cover traffic;
-        // no key material is drawn this way.
         from + ((u64::from_be_bytes(bytes) >> 1) % span) as u32
     }
 
@@ -190,8 +152,6 @@ impl PfsOffer for LivePfsOffer {
         peer.copy_from_slice(&answer[ML_KEM_768_CIPHERTEXT_LEN..]);
         let x25519_secret = x25519_agree(&self.x25519_private, &peer)?;
 
-        // pfsKey is `ML-KEM secret || X25519 secret`, the same order
-        // draft-ietf-tls-ecdhe-mlkem gives X25519MLKEM768.
         let mut pfs_key = [0_u8; PFS_KEY_LEN];
         pfs_key[..ML_KEM_768_SHARED_SECRET_LEN]
             .copy_from_slice(&shared_secret_32(ml_kem_secret.as_ref())?);

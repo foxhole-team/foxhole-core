@@ -279,11 +279,6 @@ async fn open_stream(
     require_padding: bool,
     padding_sizes: Option<PaddingSizes>,
 ) -> Result<BoxStream, NaiveError> {
-    // A CSPRNG, not the fast non-cryptographic generator this used before: it feeds padding
-    // lengths *and* the padding bytes themselves. xoshiro state is recoverable from a modest
-    // run of its own output, so a predictable generator would let an observer predict the whole
-    // padding sequence — the one thing padding exists to prevent. One small draw per packet, so
-    // the cost is nothing.
     let mut rng = StdRng::from_os_rng();
     let request = build_request(destination, credentials, &mut rng)?;
 

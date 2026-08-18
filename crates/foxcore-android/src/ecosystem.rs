@@ -1,35 +1,6 @@
-//! The mini-platform's JNI surface: isolated web apps, and the share vault.
-//!
-//! **This module is behind the `mini-platform` feature and the shipped build
-//! does not enable it.** Everything here is groundwork for a later release: the
-//! Java classes `com.foxhole.core.component.FoxholeNativeComponents` and
-//! `FoxholeNativeShares` that these entry points are named for do not exist in
-//! the app yet, so every symbol below is an export nothing can call. It is
-//! compiled, type-checked and tested under `--features mini-platform` rather
-//! than commented out, because commented-out code stops compiling without
-//! anyone finding out. `scripts/android-elf-gate.sh` checks both halves of that
-//! arrangement: the exports must be absent from a release artifact, and the
-//! feature must not be in the crate's `shipped` set.
-//!
-//! What leaves the shipped artifact with these symbols is the ability to
-//! *publish* a share as an onion service. Tor as a transport is untouched: it is
-//! an outbound and a route inside the engine config, reached through
-//! `nativeStart*`, `nativeReloadPolicy` and `nativeStats` in `lib.rs`, none of
-//! which is gated, and there has never been a `nativeTor*` entry point.
-//!
-//! Two rules shape everything here, and neither is checkable by the compiler.
-//!
-//! **No secret crosses the boundary.** A component lease carries a 256-bit
-//! credential and a share carries two capability tokens; none of them is ever
-//! handed to Java. The app gets an opaque `long`, and the credential stays in
-//! this process, in a table this module owns. An app that only ever holds a
-//! handle cannot leak a capability into a log, an intent extra or a crash
-//! report — and every one of those is somewhere a `byte[]` eventually lands.
-//!
-//! **Everything is owned by the running engine.** The component manager belongs
-//! to a `CoreRuntime` generation, and the vault is attached to one. When the
-//! engine stops, every call here starts failing closed: this makes the
-//! single-root runtime invariant observable rather than merely intended.
+//! Source-only JNI for isolated web apps and the share vault.
+//! Release builds exclude these symbols; handles are generation-scoped and
+//! never expose lease or share capabilities to Java.
 
 use std::collections::HashMap;
 use std::fmt::Write as _;

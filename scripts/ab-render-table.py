@@ -90,8 +90,6 @@ def bench_summary(path):
     merged["bytes"] = sum(r.get("bytes", 0) for r in runs)
     merged["ok"] = sum(r.get("ok", 0) for r in runs)
     merged["failed"] = sum(r.get("failed", 0) for r in runs)
-    # Percentiles are taken from the widest window rather than averaged: a mean
-    # of percentiles is not a percentile of anything.
     widest = max(runs, key=lambda r: r.get("ok", 0))
     merged["connect_us"] = widest.get("connect_us", {})
     merged["ttfb_us"] = widest.get("ttfb_us", {})
@@ -176,9 +174,6 @@ def main():
         return 0
 
     notes = []
-    # The measured state is its own column and comes from the device, not from
-    # the regime name. A regime called "screen-off" that actually ran with the
-    # display dreaming has to be visible as such in the row itself.
     header = ("| regime | measured state | protocol node | arm | throughput MiB/s | CPU s/GiB "
               "| peak RSS MB | threads | ctx-sw /s (proxy for wakeups) | connect p50 ms "
               "| connect p95 ms | TTFB p50 ms | ok/failed |")
@@ -189,9 +184,6 @@ def main():
         arms = cells[(regime, node)]
         fox, sbx = arms.get("foxcore"), arms.get("singbox")
 
-        # The fairness gate. Both arms must have been measured, both must be
-        # valid, and both must have run in the same device state - otherwise the
-        # numeric cells are withheld and the reason is printed.
         comparable = True
         reason = ""
         for arm_name, cell in (("FoxCore", fox), ("sing-box", sbx)):

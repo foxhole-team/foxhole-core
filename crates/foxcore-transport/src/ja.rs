@@ -1,19 +1,3 @@
-//! JA3 and JA4, computed from ClientHello bytes.
-//!
-//! Behind the off-by-default `fingerprinting` feature, because nothing in a
-//! shipped build needs to fingerprint its own hello. It lives in `src` rather
-//! than in a test so that `proto-reality` can point the *same* implementation
-//! at its parrots: the computation is validated against a live detector in
-//! `tests/ja_fingerprint.rs`, and a second copy would be a second thing to
-//! validate.
-//!
-//! JA3: Salesforce, 2017. JA4: FoxIO JA4+ specification.
-//! JA3 (Salesforce, 2017) and JA4 (FoxIO, JA4+ spec).
-//!
-//! Both are pure functions of the ClientHello, which is why a detector is
-//! needed only once — to confirm the implementation — and never again.
-
-/// RFC 8701 GREASE values are excluded from every JA3 and JA4 list.
 pub fn is_grease(value: u16) -> bool {
     (value >> 8) == (value & 0xff) && (value & 0x0f) == 0x0a
 }
@@ -38,7 +22,6 @@ fn join(values: &[u16]) -> String {
         .join("-")
 }
 
-/// `version,ciphers,extensions,curves,point_formats`, MD5 of that string.
 pub fn ja3_text(hello: &Hello) -> String {
     let ciphers: Vec<u16> = hello
         .ciphers
@@ -78,14 +61,6 @@ pub fn ja3_hash(hello: &Hello) -> String {
     hex(&md5(ja3_text(hello).as_bytes()))
 }
 
-/// The first character of JA4_a. The JA4 specification calls it the transport:
-/// "QUIC=`q`, DTLS=`d`, or TLS over TCP=`t`".
-///
-/// It exists because the same ClientHello means a different client depending on
-/// what carried it — and because `t` was hardcoded here, every fingerprint this
-/// workspace computed for a QUIC hello named the wrong protocol. FoxIO publish
-/// Chrome's QUIC fingerprint as `q13d0312h3_…`; nothing that starts with `t`
-/// can be compared against it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Transport {
     Tcp,
@@ -101,15 +76,10 @@ impl Transport {
     }
 }
 
-/// JA4 for a hello that arrived over TCP.
-///
-/// `_r` is the raw (unhashed) form the detector also reports, which is what
-/// makes a mismatch debuggable rather than a bare hash difference.
 pub fn ja4(hello: &Hello) -> (String, String) {
     ja4_over(hello, Transport::Tcp)
 }
 
-/// JA4: `JA4_a_JA4_b_JA4_c`, for a hello that arrived over `transport`.
 pub fn ja4_over(hello: &Hello, transport: Transport) -> (String, String) {
     let ciphers: Vec<u16> = hello
         .ciphers
@@ -124,8 +94,6 @@ pub fn ja4_over(hello: &Hello, transport: Transport) -> (String, String) {
         .filter(|v| !is_grease(*v))
         .collect();
 
-    // Highest offered version: `supported_versions` wins over the legacy
-    // field, GREASE excluded.
     let version = hello
         .supported_versions
         .iter()
@@ -154,13 +122,10 @@ pub fn ja4_over(hello: &Hello, transport: Transport) -> (String, String) {
         extensions.len().min(99)
     );
 
-    // JA4_b: ciphers, sorted, hex, comma-joined.
     let mut sorted_ciphers = ciphers.clone();
     sorted_ciphers.sort_unstable();
     let b_raw = hex_list(&sorted_ciphers);
 
-    // JA4_c: extensions sorted with SNI and ALPN removed, then the
-    // signature algorithms **in order**, separated by an underscore.
     let mut sorted_extensions: Vec<u16> = extensions
         .iter()
         .copied()
@@ -191,8 +156,6 @@ fn hex_list(values: &[u16]) -> String {
         .join(",")
 }
 
-/// JA4 truncates to the first 12 hex characters. An empty list hashes to
-/// twelve zeroes by definition, not to the hash of the empty string.
 fn truncated_sha256(text: &str) -> String {
     if text.is_empty() {
         return "000000000000".to_owned();
@@ -209,8 +172,6 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// MD5, for JA3 only. JA3 specifies MD5 and nothing else; it is a label
-/// here, never a security primitive.
 fn md5(data: &[u8]) -> [u8; 16] {
     const S: [u32; 64] = [
         7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 5, 9, 14, 20, 5, 9, 14, 20, 5,
@@ -272,7 +233,6 @@ fn md5(data: &[u8]) -> [u8; 16] {
     out
 }
 
-/// Parse a ClientHello *handshake message* (no record header).
 pub fn parse(body: &[u8]) -> Hello {
     let be16 = |at: usize| u16::from_be_bytes([body[at], body[at + 1]]);
     let mut hello = Hello {
@@ -340,8 +300,6 @@ pub fn parse(body: &[u8]) -> Hello {
 mod transport_tests {
     use super::*;
 
-    /// The RFC 9001 Appendix A.2 hello, which is a QUIC hello by construction —
-    /// it carries extension 0x39 and could not have travelled over TCP.
     fn quic_hello() -> Hello {
         Hello {
             legacy_version: 0x0303,
@@ -356,10 +314,6 @@ mod transport_tests {
         }
     }
 
-    /// The bug this fixes: `ja4` hardcoded `t`, so a QUIC hello was reported
-    /// under the transport character that means TLS over TCP. FoxIO publish
-    /// Chrome's QUIC fingerprint starting `q13d…`; nothing starting with `t`
-    /// could ever be compared against it.
     #[test]
     fn the_transport_character_follows_the_transport() {
         let hello = quic_hello();
@@ -367,9 +321,6 @@ mod transport_tests {
         assert!(ja4_over(&hello, Transport::Tcp).0.starts_with('t'));
     }
 
-    /// Negative control: the character is the *only* thing the transport
-    /// changes. If a future edit made it alter the hashes as well, the two
-    /// strings would stop differing by exactly one byte and this would fail.
     #[test]
     fn the_transport_changes_the_first_character_and_nothing_else() {
         let hello = quic_hello();
@@ -380,9 +331,6 @@ mod transport_tests {
         assert_eq!(quic_raw[1..], tcp_raw[1..]);
     }
 
-    /// The plain `ja4` entry point keeps its old meaning, so every existing
-    /// caller — the REALITY parrot tables and the live-detector test — is
-    /// untouched by the new parameter.
     #[test]
     fn the_original_entry_point_is_still_tcp() {
         let hello = quic_hello();

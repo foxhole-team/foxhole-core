@@ -16,22 +16,6 @@ pub const ALERT_DESC_CLOSE_NOTIFY: u8 = 0x00;
 pub const VERSION_TLS_1_2_MAJOR: u8 = 0x03;
 pub const VERSION_TLS_1_2_MINOR: u8 = 0x03;
 
-/// TLS 1.0 version bytes (0x03, 0x01), the record-layer version of the *first*
-/// record a connection sends.
-///
-/// Not a TLS 1.0 anything: it is the `legacy_record_version` a client puts on
-/// the initial ClientHello record before a version is negotiated. RFC 8446
-/// §5.1 permits either 0x0301 or 0x0303 there, so both are correct TLS — but
-/// the parrot has to send what the client it imitates sends, and BoringSSL
-/// sends 0x0301:
-///
-/// > Before the version is determined, outgoing records use TLS 1.0 for
-/// > historical compatibility requirements.
-/// >   — `tls_record_version`, boringssl/ssl/tls_record.cc
-///
-/// uTLS inherits the same rule from Go's `crypto/tls` (`writeRecordLocked`
-/// sets `vers = VersionTLS10` while `c.vers == 0`), which is the code path
-/// Xray and sing-box actually run. Every record after this one is 0x0303.
 pub const VERSION_TLS_1_0_MAJOR: u8 = 0x03;
 pub const VERSION_TLS_1_0_MINOR: u8 = 0x01;
 

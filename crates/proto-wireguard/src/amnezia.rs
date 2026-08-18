@@ -8,9 +8,7 @@
 //!   handshake, so the first thing on the wire is not a 148-byte initiation.
 //! * `S1`/`S2` prepend random junk to the initiation and response, moving the
 //!   recognisable fields off their fixed offsets.
-//! * `H1..H4` replace WireGuard's four one-byte message types with arbitrary
-//!   32-bit values — or, since AmneziaWG 2.0, with an inclusive *range* of them
-//!   ([`HeaderRange`]) — erasing the `01/02/03/04 00 00 00` signature.
+//! * `H1..H4` replace message types with disjoint 32-bit [`HeaderRange`] values.
 //!
 //! The obfuscation is symmetric: both peers share the same parameters, so a
 //! sealed handshake is just a standard one with a different header and a junk
@@ -22,25 +20,6 @@ use crate::message::{
     TYPE_RESPONSE, TYPE_TRANSPORT, message_type,
 };
 
-/// One `H1..H4` value: a closed interval of 32-bit headers.
-///
-/// AmneziaWG 1.5 gave each message type one fixed replacement header. 2.0 made
-/// it a range, and the upstream server generator emits ranges *by default*
-/// (`H1 = 234567-345678`), so this is the ordinary shape rather than the exotic
-/// one. The reference is `u32_range_t` in the kernel module's `src/type.h`:
-///
-/// * the sender draws a fresh value per datagram
-///   (`u32_range_pick_one` → `get_random_u32_inclusive(lo, hi)`, called from
-///   `send.c` on every initiation, response, cookie reply and data packet);
-/// * the receiver accepts anything the interval contains
-///   (`u32_range_contains`, `receive.c`);
-/// * both bounds are inclusive, and `hi < lo` is rejected at parse time;
-/// * two ranges may not overlap, because the interval is what tells the
-///   receiver which of the four message types arrived.
-///
-/// A single value is the degenerate range `lo == hi`, which is exactly how the
-/// reference stores a 1.5 profile — so this one type covers both versions and
-/// there is no second code path to keep in step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HeaderRange {
     start: u32,
@@ -48,7 +27,6 @@ pub struct HeaderRange {
 }
 
 impl HeaderRange {
-    /// The 1.5 form: one header, stored as the interval `[value, value]`.
     pub const fn single(value: u32) -> Self {
         Self {
             start: value,
@@ -56,8 +34,6 @@ impl HeaderRange {
         }
     }
 
-    /// `start..=end`, or `None` when the bounds are inverted — the same refusal
-    /// `u32_range_from_string` makes on `hi < lo`.
     pub const fn new(start: u32, end: u32) -> Option<Self> {
         if end < start {
             return None;
@@ -73,34 +49,18 @@ impl HeaderRange {
         self.end
     }
 
-    /// Whether this interval names exactly one header, i.e. is a 1.5 value.
     pub const fn is_single(&self) -> bool {
         self.start == self.end
     }
 
-    /// Inclusive both ends, mirroring `u32_range_contains`.
     pub const fn contains(&self, value: u32) -> bool {
         self.start <= value && value <= self.end
     }
 
-    /// Mirrors `u32_range_overlap`. Two intervals that share any header make the
-    /// message types ambiguous on the wire.
     pub const fn overlaps(&self, other: &Self) -> bool {
         self.start <= other.end && other.start <= self.end
     }
 
-    /// The header to put on one datagram, given a raw 32-bit draw.
-    ///
-    /// Randomness is the caller's — this crate takes all of it through
-    /// [`crate::tunnel::Entropy`] so a test can pin it — and a single-valued
-    /// range never consults it at all, which is what keeps a 1.5 or vanilla
-    /// profile byte-identical to what it was before ranges existed.
-    ///
-    /// The reduction is `%` over a `u64` span, the same idiom the junk-size draw
-    /// already uses. It is very slightly biased towards the low end of a span
-    /// that does not divide 2^32; the value is a DPI decoy rather than a secret,
-    /// and the reference's own `get_random_u32_inclusive` is a rejection loop
-    /// this crate has no reason to reproduce.
     pub const fn pick(&self, draw: u32) -> u32 {
         if self.start == self.end {
             return self.start;
@@ -130,8 +90,6 @@ pub struct AmneziaParams {
     /// header, exactly like `S1`/`S2`.
     pub cookie_junk_size: u16,
     pub transport_junk_size: u16,
-    /// Replacement 32-bit header for each message type. A 1.5 profile carries
-    /// four single-valued ranges; a 2.0 one carries intervals.
     pub header_initiation: HeaderRange,
     pub header_response: HeaderRange,
     pub header_cookie: HeaderRange,
@@ -187,24 +145,11 @@ impl AmneziaParams {
         if self.junk_packet_count > 0 && self.junk_min_size > self.junk_max_size {
             return Err(WireguardError::InvalidParameters);
         }
-        // `Jc = 4, Jmax = 0` passes every bound above and asks
-        // `render_junk_packets` for four empty buffers, which reach the socket as
-        // zero-length UDP datagrams. That is the junk-path twin of
-        // amnezia-vpn/amneziawg-go#141, and a datagram with no payload is a
-        // signature of its own: no WireGuard message type can be that short, so
-        // it names the sender to anyone counting packet sizes. `render_init_packets`
-        // drops a zero-width `I` template for the same reason; there is no
-        // equivalent skip here, because junk with no size is not junk.
         if self.junk_packet_count > 0 && self.junk_max_size == 0 {
             return Err(WireguardError::InvalidParameters);
         }
-        // Custom headers must stay collision-free, otherwise the receiver cannot
-        // tell an initiation from a transport packet. With ranges the test is
-        // overlap rather than equality — two intervals that share a single
-        // header are ambiguous for exactly the datagrams that draw it, which is
-        // an intermittent failure rather than a clean one. `netlink.c` refuses
-        // the same way, and it refuses `H1` against all three others rather
-        // than only its neighbour.
+        // Every pair of ranges must be disjoint or message types become
+        // intermittently ambiguous on the wire.
         let headers = [
             self.header_initiation,
             self.header_response,
@@ -233,24 +178,6 @@ impl AmneziaParams {
         }
     }
 
-    /// Whether these four header bytes name a header in `expected`.
-    ///
-    /// Containment on an obfuscated profile: `H1..H4` replace the whole 32-bit
-    /// word, so every bit of it is signal, and on a 2.0 profile the peer draws a
-    /// fresh value inside the interval for each datagram. A word outside the
-    /// interval is not our peer. (For a 1.5 profile the interval holds one
-    /// value, so this is the exact comparison it has always been.)
-    ///
-    /// Type-byte only on a vanilla one. The upper three bytes are then
-    /// WireGuard's reserved field, which [`crate::message`] already ignores
-    /// everywhere it decodes (`message_kind`) and which some providers use as a
-    /// client identifier they stamp on what they send back. Comparing the whole
-    /// word here refused those datagrams *before* any decoder saw them, so the
-    /// leniency one layer down was unreachable: the handshake response was
-    /// dropped, and on a peer that stamps only data frames the tunnel came up,
-    /// counted bytes out, and delivered nothing to the tun. Nothing is weakened
-    /// by accepting them — what proves a datagram genuine is its AEAD tag or its
-    /// `mac1`, neither of which covers these three bytes.
     fn header_matches(&self, header: [u8; 4], expected: HeaderRange) -> bool {
         if self.is_vanilla() {
             header[0] == expected.start() as u8
@@ -277,10 +204,7 @@ impl AmneziaParams {
         }
     }
 
-    /// Obfuscate a freshly encoded handshake message: swap the 4-byte header for
-    /// the custom one and prepend the per-type junk. `random` supplies every
-    /// byte of randomness the transform needs so it stays deterministic under
-    /// test.
+    /// Obfuscate a handshake using caller-supplied entropy for deterministic tests.
     ///
     /// The junk size is taken from the shared parameters, never from the caller,
     /// so the peer can strip exactly as many bytes back off.
@@ -301,15 +225,7 @@ impl AmneziaParams {
     /// datagram buffers and hands one in. `out` is cleared first, so a buffer
     /// that carried a previous datagram is reused rather than grown.
     ///
-    /// Only the junk prefix is zeroed, and only so `random` has something to
-    /// write into. Everything after it is appended byte for byte, which on a
-    /// vanilla profile — where the prefix is empty — means the whole transform
-    /// touches each byte exactly once.
-    ///
-    /// `random` is asked for the header draw only when the range holds more than
-    /// one header. A 1.5 or vanilla profile therefore consumes exactly the
-    /// entropy it always did, and its output is byte-identical to what it was
-    /// before ranges existed.
+    /// Fixed headers consume no extra entropy, preserving legacy wire bytes.
     pub fn obfuscate_into(
         &self,
         message: &[u8],
@@ -327,8 +243,6 @@ impl AmneziaParams {
         out.reserve(junk_size + message.len());
         out.resize(junk_size, 0);
         random(&mut out[..junk_size]);
-        // One draw per datagram, which is what `send.c` does: the interval is a
-        // moving target for a DPI rule only if the value actually moves.
         let header = if header.is_single() {
             header.start()
         } else {
@@ -615,11 +529,6 @@ mod tests {
         assert!(params.deobfuscate_transport(&mut handshake).is_err());
     }
 
-    /// On a vanilla profile the upper three header bytes are WireGuard's
-    /// reserved field: a receiver is told to ignore them, and a provider that
-    /// uses them as a client identifier stamps them on what it sends back.
-    /// Classifying on the whole word dropped those datagrams before any decoder
-    /// could apply the leniency it already had.
     #[test]
     fn a_vanilla_profile_reads_a_type_through_stamped_reserved_bytes() {
         let params = AmneziaParams::default();
@@ -639,11 +548,6 @@ mod tests {
         assert_eq!(&recovered[4..], &response[4..]);
     }
 
-    /// And the leniency stops there. With `H1..H4` configured the header is a
-    /// 32-bit value the peers agreed on, so a word that differs only in the
-    /// bytes plain WireGuard calls reserved is not this peer's — accepting it
-    /// would turn a custom header into eight bits of signal instead of
-    /// thirty-two.
     #[test]
     fn an_obfuscated_profile_still_matches_the_whole_header_word() {
         let params = tuned();
@@ -666,10 +570,6 @@ mod tests {
         ));
     }
 
-    /// AmneziaWG 2.0 headers are intervals, and the upstream server generator
-    /// emits them by default. A range profile has to work in three places at
-    /// once: the sender draws inside the interval, the receiver accepts anything
-    /// inside it, and nothing outside it is ours.
     fn ranged() -> AmneziaParams {
         AmneziaParams {
             header_initiation: HeaderRange::new(234_567, 345_678).unwrap(),
@@ -688,8 +588,6 @@ mod tests {
         let mut plain = vec![TYPE_TRANSPORT, 0, 0, 0];
         plain.extend_from_slice(&[0xAB; 32]);
 
-        // Two different draws, so two different headers — this is the property a
-        // fixed value cannot have and the whole reason 2.0 introduced ranges.
         let mut draws = [0x00_u8, 0x01_u8].into_iter();
         let mut seen = Vec::new();
         for _ in 0..2 {
@@ -737,8 +635,6 @@ mod tests {
     #[test]
     fn overlapping_ranges_are_refused_because_the_types_would_be_ambiguous() {
         let mut params = ranged();
-        // One shared header is enough: the datagrams that draw it are
-        // undecodable, which is an intermittent fault rather than a clean one.
         params.header_response = HeaderRange::new(345_678, 500_000).unwrap();
         assert!(matches!(
             params.validate(),
@@ -785,11 +681,6 @@ mod tests {
         assert!(params.validate().is_err());
     }
 
-    /// The junk-path twin of amnezia-vpn/amneziawg-go#141. `Jc` with `Jmax = 0`
-    /// satisfies every other bound and would hand `render_junk_packets` empty
-    /// buffers, so the socket would carry zero-length UDP datagrams — a length no
-    /// WireGuard message type has, which identifies the sender rather than hiding
-    /// it. Refused here because this is the layer that emits.
     #[test]
     fn junk_packets_that_would_be_empty_are_rejected() {
         let mut params = tuned();
@@ -798,12 +689,9 @@ mod tests {
         params.junk_max_size = 0;
         assert!(params.validate().is_err());
 
-        // A single byte is enough to be a packet, so the bound is `> 0` and not a
-        // minimum size this crate invented.
         params.junk_max_size = 1;
         assert!(params.validate().is_ok());
 
-        // And `Jc = 0` never reads `Jmax`, so it must not trip the same check.
         params.junk_packet_count = 0;
         params.junk_max_size = 0;
         assert!(params.validate().is_ok());

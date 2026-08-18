@@ -146,18 +146,10 @@ fn amnezia_params(config: &foxcore_api::AmneziaConfig) -> AmneziaParams {
     }
 }
 
-/// The serialized header range as the wire crate's own.
-///
-/// Infallible by construction: both types refuse inverted bounds at the point
-/// they are built, so `new` cannot fail here. The fallback is the low bound
-/// alone rather than a panic — a header that lost its range still describes a
-/// tunnel, where an aborted process describes nothing.
 fn header_range(config: foxcore_api::AmneziaHeaderRange) -> HeaderRange {
     HeaderRange::new(config.start, config.end).unwrap_or(HeaderRange::single(config.start))
 }
 
-/// The AmneziaWG 3.0 timer block as the tunnel's own. Absent fields stay absent,
-/// which is what makes the tunnel fall back to the WireGuard constants.
 fn peer_timers(config: &foxcore_api::AmneziaTimers) -> PeerTimers {
     let range =
         |value: Option<foxcore_api::AmneziaTimerRange>| value.map(|range| (range.start, range.end));
@@ -233,8 +225,6 @@ mod tests {
     use proto_wireguard::message::{INITIATION_LEN, RESPONSE_LEN, TYPE_RESPONSE};
     use proto_wireguard::tunnel::{Entropy, PeerTunnel};
 
-    /// Deterministic filler, so a junk size can be asserted without asserting
-    /// the junk itself.
     struct Counting(u8);
 
     impl Entropy for Counting {
@@ -247,9 +237,6 @@ mod tests {
         }
     }
 
-    /// Every obfuscation field set to something a default could not produce, so
-    /// a value that failed to arrive shows up as a wrong length or a wrong
-    /// header rather than as a passing test.
     fn every_parameter_set() -> AmneziaConfig {
         AmneziaConfig {
             junk_packet_count: 3,
@@ -288,14 +275,6 @@ mod tests {
         }
     }
 
-    /// The claim this product makes to its user is that an imported AmneziaWG
-    /// profile is obfuscated on the wire. A parameter that is parsed, validated,
-    /// carried into `PeerSettings` and then not applied would keep every layer's
-    /// tests green while the datagrams stay recognisably WireGuard — which is
-    /// worse than plain WireGuard, because the user believes otherwise.
-    ///
-    /// So this asserts the bytes, from the profile's own config type through to
-    /// what the socket would be handed.
     #[test]
     fn every_amneziawg_parameter_reaches_the_wire() {
         let config = every_parameter_set();
@@ -303,13 +282,11 @@ mod tests {
         let mut tunnel = PeerTunnel::new(settings(&config), Box::new(Counting(0))).unwrap();
         tunnel.send_packet(&[0x45; 40], 0).unwrap();
 
-        // I1 first: three literal bytes and five random ones.
         let mut datagram = Vec::new();
         assert!(tunnel.poll_transmit(&mut datagram).is_some());
         assert_eq!(datagram.len(), 8, "I1 = <b 0xc0ffee><r 5>");
         assert_eq!(&datagram[..3], &[0xc0, 0xff, 0xee]);
 
-        // Then Jc junk datagrams, each Jmin..=Jmax bytes.
         for index in 0..config.junk_packet_count {
             assert!(
                 tunnel.poll_transmit(&mut datagram).is_some(),
@@ -324,7 +301,6 @@ mod tests {
             );
         }
 
-        // Then the initiation: S1 bytes of junk, then H1 where the type was.
         assert!(tunnel.poll_transmit(&mut datagram).is_some());
         assert_eq!(
             datagram.len(),
@@ -342,9 +318,6 @@ mod tests {
             "a handshake attempt is I-packets, junk, initiation — and nothing else"
         );
 
-        // S2/H2 and S3/H3 are the peer's direction, so they are asserted where
-        // the receiver reads them: at the length the peer must produce and with
-        // the header it must carry.
         for (junk, body_len, header, kind) in [
             (
                 config.response_junk_size,
@@ -369,8 +342,6 @@ mod tests {
             assert_eq!(recovered[0], kind);
         }
 
-        // S4/H4 on a data packet, which is the only one that carries traffic and
-        // therefore the only one a DPI box sees more than once.
         let mut sealed = vec![proto_wireguard::message::TYPE_TRANSPORT, 0, 0, 0];
         sealed.extend_from_slice(&[0xAB; 48]);
         let wire = params.obfuscate(&sealed, |junk| junk.fill(0x5A)).unwrap();
@@ -387,9 +358,6 @@ mod tests {
         );
     }
 
-    /// The other half of the same claim: a profile with no AmneziaWG block must
-    /// be byte-for-byte plain WireGuard, not "obfuscation with everything at
-    /// zero" — a peer that expects plain WireGuard has to be reachable.
     #[test]
     fn a_profile_without_an_amnezia_block_is_plain_wireguard() {
         let params = AmneziaParams::default();

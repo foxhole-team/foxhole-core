@@ -1,27 +1,3 @@
-//! Holds the Rust hello tables to the committed fingerprint data.
-//!
-//! `fingerprints/*.json` is the reviewable transcription of each profile:
-//! for most of them uTLS' matching `Hello*` parrot (`u_parrots.go`), and for
-//! `chrome_151` and `firefox_153` a first-party capture of the shipping
-//! browser, because uTLS carries no table for either build. They are data, not
-//! documentation: everything below re-reads them and asserts that the tables
-//! in `hello_profile.rs` still say the same thing.
-//!
-//! The capture-derived vectors are generated from the captured bytes rather
-//! than from the Rust tables, so the two sides of every assertion below have
-//! independent origins and agreement means something.
-//!
-//! The point is drift. A parrot fails silently — a wrong code point or a moved
-//! extension costs nothing at handshake time and everything at a DPI box — so
-//! the table that produces the bytes and the table a reviewer reads have to be
-//! checked against each other by something that runs in CI, not by eye.
-//!
-//! This is the seam a signed fingerprint feed would later arrive through: the
-//! JSON is already the shape such a feed would carry, and the built-in tables
-//! are the fail-closed default it would have to agree with. Nothing here
-//! parses JSON outside `cfg(test)`; the shipped library has no feed and no
-//! network dependency for its parrot.
-
 use serde_json::Value;
 
 use super::hello_profile::{
@@ -30,11 +6,6 @@ use super::hello_profile::{
 };
 use super::reality_tls13_messages::INITIAL_RECORD_VERSION;
 
-/// Every profile this build writes, paired with its committed vector.
-///
-/// A profile added to `RealityHelloProfile` without a vector here fails
-/// `every_profile_has_a_committed_vector`, so the table below cannot quietly
-/// fall behind the enum.
 const VECTORS: &[(RealityHelloProfile, &str)] = &[
     (
         RealityHelloProfile::Chrome151,
@@ -85,9 +56,6 @@ fn table(json: &str) -> Value {
     serde_json::from_str(json).expect("fingerprint file is not valid JSON")
 }
 
-/// Parse `"0x1301"` and friends. The files spell every code point as a
-/// zero-padded hex string so a reviewer reads the same token that appears in
-/// the RFC and in uTLS.
 fn hex16(value: &Value) -> u16 {
     let text = value.as_str().expect("code point must be a string");
     let digits = text
@@ -100,8 +68,6 @@ fn fingerprint(json: &str) -> Value {
     table(json)["fingerprint"].clone()
 }
 
-/// The code point a slot writes, or `None` for the slots whose type is a
-/// per-connection GREASE value rather than a constant.
 fn slot_code_point(slot: &ExtensionSlot) -> Option<u16> {
     match slot {
         ExtensionSlot::Constant { extension_type, .. } => Some(*extension_type),
@@ -116,18 +82,11 @@ fn slot_code_point(slot: &ExtensionSlot) -> Option<u16> {
     }
 }
 
-/// The vector's own integrity: the stored digest must cover the stored table.
-///
-/// Without this, a hand edit to the data would quietly re-point every
-/// assertion below at whatever the editor happened to write.
 fn assert_digest(json: &str) {
     use aws_lc_rs::digest;
 
     let file = table(json);
     let canonical = canonical_json(&file["fingerprint"]);
-    // ASCII-only by construction: the digest has to be reproducible from any
-    // language, and Python's `json.dumps` escapes non-ASCII by default while
-    // `serde_json` does not. Keeping the table ASCII removes the question.
     assert!(
         canonical.is_ascii(),
         "fingerprint table contains non-ASCII; the digest would depend on an \
@@ -146,8 +105,6 @@ fn assert_digest(json: &str) {
     );
 }
 
-/// JSON with sorted keys and no whitespace — the convention the files document
-/// in `fingerprint_sha256_covers`.
 fn canonical_json(value: &Value) -> String {
     match value {
         Value::Object(map) => {
@@ -180,8 +137,6 @@ fn the_committed_fingerprints_are_self_consistent() {
     }
 }
 
-/// The enum and the vector table must name the same set. Adding a profile
-/// without a committed vector would leave it with no drift guard at all.
 #[test]
 fn every_profile_has_a_committed_vector() {
     assert_eq!(
@@ -195,8 +150,6 @@ fn every_profile_has_a_committed_vector() {
             "{profile:?} has no vector"
         );
     }
-    // And each vector's `name` must be the table's own name, so a
-    // copy-and-paste that pairs the wrong file with a profile is caught.
     for (json, profile) in pairs() {
         assert_eq!(
             table(json)["name"].as_str(),
@@ -248,9 +201,6 @@ fn cipher_suites_match_the_committed_table() {
     }
 }
 
-/// Extension *order* before permutation. The permutation is per connection,
-/// but the table order is what a reviewer diffs against uTLS, and the two
-/// GREASE slots and padding are pinned regardless.
 #[test]
 fn extension_order_matches_the_committed_table() {
     for (json, profile) in pairs() {
@@ -368,8 +318,6 @@ fn groups_shares_versions_and_alpn_match_the_committed_table() {
     }
 }
 
-/// The record-layer version is the field the tables did not used to carry at
-/// all, and the field the client used to get wrong.
 #[test]
 fn the_record_layer_version_matches_the_committed_table() {
     for (json, _) in pairs() {

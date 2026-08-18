@@ -1,19 +1,3 @@
-//! What the generic (rustls) TLS path actually puts on the wire.
-//!
-//! `proto-reality` writes its own ClientHello from a table transcribed from
-//! uTLS, so the REALITY path is a parrot. Every *other* protocol that speaks
-//! TLS here — VLESS/VMess/Trojan/Shadowsocks/AnyTLS/Naive/HTTP over TLS — goes
-//! through rustls, which decides its own hello shape.
-//!
-//! Nobody had measured the difference. This file does: it captures the real
-//! bytes off a socket and asserts, field by field, what rustls sends. It is a
-//! measurement first and a regression guard second — when rustls changes its
-//! hello, this test says so and the numbers in the comparison note stop being
-//! fiction.
-//!
-//! Everything is synthetic and nothing leaves the machine: the "server" is a
-//! `TcpListener` on 127.0.0.1 that reads one record and hangs up.
-
 use std::io::Read as _;
 use std::net::{TcpListener, TcpStream};
 use std::sync::Arc;
@@ -21,7 +5,6 @@ use std::sync::Arc;
 use foxcore_api::TlsConfig;
 use foxcore_transport::rustls_client_config;
 
-/// Fields of a ClientHello, parsed back off the wire.
 #[derive(Debug)]
 struct Hello {
     record_version: [u8; 2],
@@ -29,7 +12,6 @@ struct Hello {
     session_id_len: usize,
     cipher_suites: Vec<u16>,
     compression_methods: Vec<u8>,
-    /// Extension code points, in the order they were sent.
     extensions: Vec<u16>,
     supported_groups: Vec<u16>,
     key_share_groups: Vec<u16>,
@@ -132,7 +114,6 @@ fn parse(record: &[u8]) -> Hello {
     hello
 }
 
-/// Dial a local listener with the real client config and return the hello.
 fn capture(tls: &TlsConfig) -> Hello {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let port = listener.local_addr().unwrap().port();
@@ -143,7 +124,6 @@ fn capture(tls: &TlsConfig) -> Hello {
         let mut connection =
             rustls::ClientConnection::new(config, name).expect("client connection");
         let mut socket = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-        // One write is all that is needed: the hello is the first flight.
         let _ = connection.write_tls(&mut socket);
     });
 
@@ -164,18 +144,12 @@ fn default_tls() -> TlsConfig {
     }
 }
 
-/// The measurement. Every assertion here is a fact about rustls, recorded so
-/// the comparison with Chrome is grounded in bytes rather than in reading the
-/// rustls source.
 #[test]
 fn the_generic_path_hello_is_recorded_field_by_field() {
     let hello = capture(&default_tls());
 
-    // Printed so `cargo test -- --nocapture` is a measurement tool, not just a
-    // pass/fail.
     println!("rustls ClientHello: {hello:#?}");
 
-    // --- Fields that match Chrome already -----------------------------------
     assert_eq!(
         hello.legacy_version, 0x0303,
         "legacy_version is 0x0303 in every TLS 1.3 hello"
@@ -186,23 +160,14 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
     );
     assert_eq!(hello.compression_methods, vec![0x00]);
 
-    // rustls already writes 0x0301 on the initial record, for the same
-    // historical-compatibility reason BoringSSL does. This was *assumed* to be
-    // a divergence before it was measured; it is not one.
     assert_eq!(
         hello.record_version,
         [0x03, 0x01],
         "rustls matches Chrome on the initial record version"
     );
 
-    // supported_versions carries the same two versions Chrome offers. Only the
-    // GREASE entry is missing.
     assert_eq!(hello.supported_versions, vec![0x0304, 0x0303]);
 
-    // --- Differences configuration CAN reach --------------------------------
-
-    // The post-quantum group now leads, as Chrome's does, and a share is sent
-    // for it. The aws-lc-rs default put it last; `crypto_provider` reorders.
     assert_eq!(
         hello.supported_groups.first(),
         Some(&0x11ec),
@@ -214,11 +179,6 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
         "shares for hybrid and x25519, as Chrome sends (minus GREASE)"
     );
 
-    // --- Differences that are architectural ---------------------------------
-
-    // No GREASE anywhere. Chrome puts a GREASE value in cipher_suites,
-    // supported_groups, supported_versions and two extension slots. rustls has
-    // no API for any of it.
     assert!(
         !hello.cipher_suites.iter().any(|id| is_grease(*id)),
         "rustls does not GREASE its cipher list"
@@ -232,9 +192,6 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
         "rustls does not GREASE supported_groups"
     );
 
-    // Ten suites against Chrome's sixteen, in a different order, and ending in
-    // the renegotiation SCSV (0x00ff) that Chrome does not send at all --
-    // Chrome carries `renegotiation_info` as an extension instead.
     assert_eq!(
         hello.cipher_suites,
         vec![
@@ -248,9 +205,6 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
         "rustls leads with AES-256; Chrome leads with GREASE then AES-128"
     );
 
-    // The extension *set*. Order is deliberately not asserted here: rustls
-    // shuffles it per connection (see the test below), which is the same thing
-    // Chrome does since 110. Eleven extensions against Chrome's eighteen.
     let mut sent = hello.extensions.clone();
     sent.sort_unstable();
     assert_eq!(
@@ -261,7 +215,6 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
         "the recorded rustls extension set (0x0010 is the default ALPN)"
     );
 
-    // Extensions Chrome sends that rustls does not, at all.
     for (code_point, name) in [
         (0x0012_u16, "signed_certificate_timestamp"),
         (0x001b, "compress_certificate"),
@@ -276,8 +229,6 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
         );
     }
 
-    // signature_algorithms includes ed25519 (0x0807), which Chrome never
-    // offers, and is in a different order.
     assert!(
         hello.signature_algorithms.contains(&0x0807),
         "rustls offers ed25519; Chrome does not"
@@ -285,12 +236,6 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
     assert_eq!(hello.signature_algorithms.len(), 10);
 }
 
-/// rustls permutes its extension order per connection.
-///
-/// Worth its own test because it was assumed to be a static tell and is not:
-/// rustls shuffles, exactly as Chrome has since 110. A fixed order would have
-/// been the single loudest thing about this hello, and it is not there. What
-/// remains is the extension *set*, which the test above pins.
 #[test]
 fn rustls_shuffles_its_extension_order() {
     let tls = default_tls();
@@ -303,7 +248,6 @@ fn rustls_shuffles_its_extension_order() {
         "rustls emitted one fixed extension order over 12 connections; if upstream \
          stopped permuting, the generic path gained a static fingerprint"
     );
-    // Whatever the order, the set never changes.
     let sets: std::collections::HashSet<Vec<u16>> = orders
         .iter()
         .map(|order| {
@@ -315,10 +259,6 @@ fn rustls_shuffles_its_extension_order() {
     assert_eq!(sets.len(), 1, "the extension set must not vary");
 }
 
-/// `curve_preferences` reaches the wire in the order given, after the hybrid.
-///
-/// The hybrid is prepended when a list omits it (see the security test below),
-/// so what this pins is that the *rest* of the order is the profile's.
 #[test]
 fn curve_preferences_reach_the_wire_in_order() {
     use foxcore_api::CurveGroup;
@@ -334,7 +274,6 @@ fn curve_preferences_reach_the_wire_in_order() {
     assert_eq!(hello.supported_groups, vec![0x11ec, 0x001d, 0x0017]);
 }
 
-/// ALPN is configurable and reaches the wire verbatim.
 #[test]
 fn alpn_reaches_the_wire_in_order() {
     let mut tls = default_tls();
@@ -347,30 +286,18 @@ fn is_grease(value: u16) -> bool {
     (value >> 8) == (value & 0xff) && (value & 0x0f) == 0x0a
 }
 
-/// Kept honest: the parser must reject something that is not a ClientHello,
-/// or every assertion above could be passing on a misread buffer.
 #[test]
 #[should_panic(expected = "not a handshake record")]
 fn the_parser_rejects_a_non_handshake_record() {
     parse(&[0x17, 0x03, 0x03, 0x00, 0x01, 0x00]);
 }
 
-// Silence the unused warning for `Arc` when features change the imports above.
 const _: Option<Arc<()>> = None;
 
-/// A profile cannot silently negotiate a classical-only key exchange.
-///
-/// This is the security half of the fingerprint work and the one that would
-/// matter even if nobody ever looked at a ClientHello. `curve_preferences`
-/// replaces the provider's group list, so naming `["x25519"]` to shape a hello
-/// used to drop `X25519MLKEM768` and quietly remove post-quantum protection.
-/// Now the hybrid is prepended to any list that omits it.
 #[test]
 fn a_curve_preference_cannot_silently_drop_the_post_quantum_group() {
     use foxcore_api::CurveGroup;
 
-    // The exact shape that used to downgrade: a classical-only preference set
-    // for cosmetic reasons.
     let mut tls = default_tls();
     tls.curve_preferences = vec![CurveGroup::X25519, CurveGroup::Secp256r1];
     let hello = capture(&tls);
@@ -384,7 +311,6 @@ fn a_curve_preference_cannot_silently_drop_the_post_quantum_group() {
         "and a share must be sent for it"
     );
 
-    // A profile that names the hybrid keeps its own order untouched.
     let mut tls = default_tls();
     tls.curve_preferences = vec![CurveGroup::X25519, CurveGroup::X25519MlKem768];
     let hello = capture(&tls);
@@ -395,11 +321,6 @@ fn a_curve_preference_cannot_silently_drop_the_post_quantum_group() {
     );
 }
 
-/// Dropping the hybrid stays possible, but only by saying so.
-///
-/// The escape hatch exists because a server that mishandles a 1216-byte key
-/// share is a real thing to have to work around. The point is that it takes a
-/// field named after what it does, which shows up in a config review.
 #[test]
 fn classical_only_is_reachable_but_only_deliberately() {
     use foxcore_api::CurveGroup;
@@ -419,7 +340,6 @@ fn classical_only_is_reachable_but_only_deliberately() {
     );
 }
 
-/// A profile that names no ALPN still sends one, because a browser does.
 #[test]
 fn the_default_alpn_is_what_a_browser_sends() {
     let tls = default_tls();

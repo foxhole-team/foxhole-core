@@ -15,16 +15,11 @@ pub const VLESS_FLOW_VISION: &str = "xtls-rprx-vision";
 /// a shape the implementation actually requires, so a profile that does not meet
 /// one is refused rather than run with the flow quietly dropped — a server told
 /// `flow=xtls-rprx-vision` pads its side no matter what the client then does.
-/// Validate the parts of a VLESS profile that are not the carrier.
 pub(super) fn validate_vless(config: &VlessConfig) -> Result<(), ConfigError> {
     if let Some(encryption) = &config.encryption {
         let params = super::parse_vless_encryption(encryption.expose())
             .map_err(|error| ConfigError::Invalid(error.to_string()))?;
         if config.flow.is_some() {
-            // Upstream supports XTLS over VLESS Encryption and recommends it,
-            // but the handover needs a splice point this layer does not expose
-            // yet. Refusing by name beats negotiating a flow we would then fail
-            // to honour, which desynchronises the server.
             return Err(ConfigError::Invalid(
                 "VLESS Vision over VLESS encryption is not implemented; set flow to none".into(),
             ));
@@ -87,22 +82,10 @@ pub struct VlessConfig {
     pub packet_encoding: PacketEncoding,
     #[serde(default)]
     pub tls: TlsConfig,
-    /// Optional REALITY security layer. It is mutually exclusive with `tls`,
-    /// and stands where `tls` would stand: `transport` is composed above it,
-    /// so gRPC and WebSocket work over REALITY as they do over TLS. The
-    /// ClientHello it writes is built from the
-    /// named [`RealityFingerprint`] profile; the set of names is closed and
-    /// small, not a generic uTLS surface.
+    /// Optional REALITY layer; mutually exclusive with `tls` and composed below
+    /// the stream transport using a closed [`RealityFingerprint`] table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reality: Option<RealityConfig>,
-    /// VLESS Encryption: the post-quantum layer that lives *inside* VLESS,
-    /// independent of `tls` and `reality`. Holds the `encryption=` value
-    /// verbatim, as [`parse_vless_encryption`] accepts it.
-    ///
-    /// `None` is `encryption=none` — plaintext VLESS inside whatever the
-    /// carrier provides. It is a [`SecretString`] because the value embeds the
-    /// server's key material; those are public keys, but so is
-    /// `RealityConfig::public_key`, which is redacted for the same reason.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub encryption: Option<SecretString>,
 }
@@ -127,39 +110,14 @@ pub enum PacketEncoding {
     Packetaddr,
 }
 
-/// Which ClientHello the REALITY transport writes.
-///
-/// Each variant names a browser build whose hello shape is reproduced from a
-/// table: extension order, GREASE slots, key-exchange groups and padding. The
-/// list is closed on purpose — a name here is a promise that the bytes were
-/// derived from a published capture of that build, so it cannot accept
-/// arbitrary uTLS strings the way Xray's `fingerprint=` does.
-///
-/// `chrome` — the name this field carried when there was only one profile — is
-/// still accepted and means whichever Chrome table is current, so a profile an
-/// installed app already saved keeps parsing *and* keeps matching a browser
-/// that still ships. Today that is [`Self::Chrome151`]; `firefox` resolves the
-/// same way to [`Self::Firefox153`]. A bare name is a promise to look like the
-/// current browser, not a pin to one build, and pinning is what the explicit
-/// `chrome_133`-style names are for.
+/// Closed set of verified ClientHello tables. Bare `chrome` and `firefox`
+/// aliases track the current table; versioned names pin exact bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RealityFingerprint {
-    /// Chromium 151 on desktop. Chrome 133's hello plus the three ML-DSA
-    /// signature algorithms Chromium now offers ahead of the rest, which is
-    /// the whole of the difference and all of it lands in JA4_c.
-    ///
-    /// Transcribed from a first-party capture: uTLS has no table for this
-    /// build, so following uTLS here would mean not following the browser.
     #[default]
     #[serde(rename = "chrome_151", alias = "chrome")]
     Chrome151,
-    /// Chrome 133 on desktop: X25519MLKEM768 first in `supported_groups` and
-    /// `key_share`, ALPS at the 0x44cd code point, ECH GREASE, permuted
-    /// extensions.
-    ///
-    /// Kept because it is the faithful transcription of uTLS'
-    /// `HelloChrome_133`, which is what the deployed Xray and sing-box
-    /// population still sends. It no longer matches a shipping Chrome.
+    /// uTLS-compatible Chrome 133 table retained for deployed peers.
     #[serde(rename = "chrome_133")]
     Chrome133,
     /// Chrome 131. Byte-identical to [`Self::Chrome133`] except that
@@ -167,49 +125,18 @@ pub enum RealityFingerprint {
     /// the only thing that moved between the two builds.
     #[serde(rename = "chrome_131")]
     Chrome131,
-    /// Microsoft Edge 85. sing-box maps `fp=edge` here; uTLS' `HelloEdge_Auto`
-    /// is `HelloEdge_85`, not `_106`, which uTLS marks broken.
     #[serde(rename = "edge_85", alias = "edge")]
     Edge85,
-    /// Safari 26.3 on macOS. ML-KEM hybrid, zlib certificate compression, no
-    /// padding extension, 1.3/1.2 only.
     #[serde(rename = "safari_26_3", alias = "safari")]
     Safari263,
-    /// Safari on iOS 14. No ML-KEM, no session ticket, no certificate
-    /// compression, and a long TLS 1.2 suite tail including 3DES.
     #[serde(rename = "ios_14", alias = "ios")]
     Ios14,
-    /// QQ Browser 11.1. Chromium fork: Chrome's cipher list with the older
-    /// `application_settings` code point.
     #[serde(rename = "qq_11_1", alias = "qq")]
     Qq111,
-    /// Firefox 153. Firefox 148's hello without cipher 0xc009 and with
-    /// `session_ticket` and `psk_key_exchange_modes` added — enough to move
-    /// JA4_a, the unhashed half a cheap detector reads first.
-    ///
-    /// Transcribed from a first-party capture; uTLS has no table for it.
     #[serde(rename = "firefox_153", alias = "firefox")]
     Firefox153,
-    /// Firefox 148. No GREASE at all, a P-256 key share alongside the hybrid,
-    /// `delegated_credentials` and `record_size_limit`, and a fixed extension
-    /// order — Firefox does not permute.
-    ///
-    /// Kept as the faithful transcription of uTLS' `HelloFirefox_148`. It no
-    /// longer matches a shipping Firefox.
     #[serde(rename = "firefox_148")]
     Firefox148,
-    /// uTLS' `HelloRandomized` **generator**, not a table.
-    ///
-    /// The only value here that names no browser. A fresh ClientHello is drawn
-    /// for every connection from uTLS' weight vector, inside the closed
-    /// vocabulary that generator uses. Two draws that uTLS allows are excluded
-    /// because REALITY cannot use them at all — the TLS 1.2 cap and the
-    /// P-256-only key share both produce a hello with no `x25519` share for the
-    /// server to authenticate against.
-    ///
-    /// It defeats an exact-match blocklist by construction and costs a stable
-    /// JA4: a real browser's JA4 does not move between connections, and this
-    /// one does.
     #[serde(rename = "randomized")]
     Randomized,
 }

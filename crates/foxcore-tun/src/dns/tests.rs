@@ -387,15 +387,6 @@ async fn onion_query_is_never_sent_without_a_tor_outbound() {
     );
 }
 
-/// A Tor lane skipped because the user switched the overlay off still refuses
-/// `.onion` as *off*, not as *absent*.
-///
-/// This is why the gate skips the build and keeps the registry entry rather
-/// than dropping it. The two refusals below are the same `PermissionDenied`
-/// with two different sentences behind them, and the sentence is the whole
-/// difference between "you turned this off" and "your profile has no Tor
-/// outbound" — one is a setting the user can flip, the other is a profile they
-/// would have to edit.
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test]
 async fn a_gated_off_tor_lane_refuses_onion_as_disabled_rather_than_as_missing() {

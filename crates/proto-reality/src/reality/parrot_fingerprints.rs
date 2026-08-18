@@ -1,26 +1,9 @@
-//! What a detector sees when this core sends each REALITY parrot.
-//!
-//! The parrots cannot be pointed at a public JA3/JA4 service: they only
-//! complete a handshake against a REALITY server, and a detector needs a
-//! completed connection to answer. So the fingerprint is computed here, with
-//! the *same* implementation that `foxcore-transport/tests/ja_fingerprint.rs`
-//! validates against `tls.browserleaks.com` — that test asserts the
-//! computation reproduces a third party's answer byte for byte, which is what
-//! makes the numbers below measurements rather than assertions.
-//!
-//! Run with `--nocapture` to print the table.
-//!
-//! Everything is synthetic: a public key of repeated bytes and an
-//! `example.com` SNI.
-
 use foxcore_transport::ja;
 
 use super::hello_profile::RealityHelloProfile;
 use super::reality_client_connection::{RealityClientConfig, RealityClientConnection};
 
 fn hello_bytes(profile: RealityHelloProfile) -> Vec<u8> {
-    // A REALITY public key that belongs to nobody. Any valid X25519 point does:
-    // the hello's *shape* does not depend on which server it is aimed at.
     let config = RealityClientConfig {
         public_key: [0x2a; 32],
         short_id: [1, 2, 3, 4, 5, 6, 7, 8],
@@ -34,12 +17,6 @@ fn hello_bytes(profile: RealityHelloProfile) -> Vec<u8> {
     wire[5..].to_vec()
 }
 
-/// Every parrot's JA3 and JA4, printed and sanity-checked.
-///
-/// The assertions are structural rather than golden hashes: the hello is
-/// GREASEd and (for Chrome) permuted per connection, so a frozen hash would
-/// either be wrong or would require freezing the randomness that makes the
-/// parrot a parrot. What is pinned is what a detector keys on first.
 #[test]
 fn every_parrot_reports_the_fingerprint_its_table_implies() {
     println!("\n{:<12} {:<34} JA4", "profile", "JA3");
@@ -51,8 +28,6 @@ fn every_parrot_reports_the_fingerprint_its_table_implies() {
         println!("{:<12} {ja3:<34} {ja4}", format!("{profile:?}"));
         println!("             raw {ja4_raw}");
 
-        // JA4_a is human-readable and is what a cheap detector matches first:
-        // TLS version, SNI present, cipher count, extension count, ALPN.
         let a = ja4.split('_').next().expect("JA4_a");
         assert!(
             a.starts_with("t13d"),
@@ -60,8 +35,6 @@ fn every_parrot_reports_the_fingerprint_its_table_implies() {
         );
         assert!(a.ends_with("h2"), "{profile:?}: first ALPN is h2: {a}");
 
-        // GREASE must never reach a fingerprint. If it did, every connection
-        // would produce a different JA4 and the parrot would defeat itself.
         for value in hello.ciphers.iter().chain(hello.extensions.iter()) {
             if ja::is_grease(*value) {
                 assert!(
@@ -73,24 +46,6 @@ fn every_parrot_reports_the_fingerprint_its_table_implies() {
     }
 }
 
-/// The capture-derived profiles must reproduce the *browser's* JA4.
-///
-/// This is the only assertion in the tree that compares a parrot against a
-/// measurement of the thing it imitates rather than against another
-/// description of it. `chrome_151.json` and `firefox_153.json` each record, in
-/// `provenance.measured_ja4`, the JA4 computed from the captured ClientHello of
-/// the shipping browser; the number is written in exactly one place and read
-/// from there, so a table edit that moves the fingerprint fails here instead of
-/// silently producing a client that matches no browser.
-///
-/// JA4 is the right thing to pin and JA3 is not: JA4 sorts its cipher and
-/// extension lists, so Chrome's per-connection permutation and every GREASE
-/// value drop out, and what remains is exactly the part a detector can match
-/// across connections.
-///
-/// The older uTLS-derived tables are deliberately not pinned this way. They
-/// describe builds nobody here can run, so the honest reference for them stays
-/// `scripts/fingerprint-from-utls.py`.
 #[test]
 fn the_captured_profiles_reproduce_the_browsers_measured_ja4() {
     const CAPTURED: &[(RealityHelloProfile, &str, &str)] = &[
@@ -122,11 +77,6 @@ fn the_captured_profiles_reproduce_the_browsers_measured_ja4() {
     }
 }
 
-/// JA4 is stable across connections; JA3 is not, for the profiles that permute.
-///
-/// The sharpest practical result here. JA4 sorts its lists, so Chrome's
-/// per-connection extension shuffle does not move it — which is why a JA4
-/// blocklist is the thing to worry about and a JA3 one largely is not.
 #[test]
 fn ja4_is_stable_while_ja3_moves_for_the_permuting_profiles() {
     let mut ja4s = std::collections::HashSet::new();
@@ -143,7 +93,6 @@ fn ja4_is_stable_while_ja3_moves_for_the_permuting_profiles() {
          profile lost its shuffle"
     );
 
-    // Firefox neither GREASEs nor permutes, so both are stable.
     let mut ja4s = std::collections::HashSet::new();
     let mut ja3s = std::collections::HashSet::new();
     for _ in 0..8 {

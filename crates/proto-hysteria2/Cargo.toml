@@ -25,9 +25,5 @@ zerocopy.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-# The QUIC Initial parser and its capture socket, which is how this crate's
-# fingerprint tests read their own first flight back off the wire. Feature-gated
-# so no shipped build carries it; a dev-dependency so `cargo ndk check` (which
-# builds no tests) never turns it on.
 foxcore-transport = { path = "../foxcore-transport", features = ["fingerprinting"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

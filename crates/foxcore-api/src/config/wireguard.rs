@@ -85,9 +85,6 @@ pub struct AmneziaConfig {
     /// The string form is parsed exactly once, where the profile is imported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub init_packets: Vec<AmneziaInitPacket>,
-    /// AmneziaWG 3.0 timer policy. Absent means the WireGuard spec's own
-    /// constants, which is what the reference falls back to for each field it
-    /// was not given.
     #[serde(default, skip_serializing_if = "AmneziaTimers::is_default")]
     pub timers: AmneziaTimers,
     /// `H1..H4`: replacement 32-bit message headers.
@@ -101,35 +98,17 @@ pub struct AmneziaConfig {
     pub header_transport: AmneziaHeaderRange,
 }
 
-/// AmneziaWG 3.0's five tunable timers, in seconds.
-///
-/// The reference keeps these on the *device* rather than the peer and writes
-/// each as a `u16` range (`RekeyTimeout = 4-6`). Every one of them is local: it
-/// decides when this side acts and never appears on the wire. They are carried
-/// rather than ignored because a server with a `RejectAfterTime` shorter than
-/// the spec's 180 s discards traffic a client still believes it may send, and
-/// that shows up as a tunnel that works for two minutes.
-///
-/// `None` is the spec constant for that field, exactly as the reference treats
-/// an unset range.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AmneziaTimers {
-    /// `RekeyTimeout` — how long an unanswered initiation stands (spec: 5 s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rekey_timeout_s: Option<AmneziaTimerRange>,
-    /// `RekeyAfterTime` — session age at which a replacement handshake starts
-    /// (spec: 120 s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rekey_after_time_s: Option<AmneziaTimerRange>,
-    /// `RejectAfterTime` — session age past which a key is dead (spec: 180 s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reject_after_time_s: Option<AmneziaTimerRange>,
-    /// `KeepaliveTimeout` — the passive keepalive of §6.5 (spec: 10 s).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keepalive_timeout_s: Option<AmneziaTimerRange>,
-    /// `MaxHandshakeAttempts` — retries before a peer is given up on (spec:
-    /// `REKEY_ATTEMPT_TIME / REKEY_TIMEOUT` = 18).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_handshake_attempts: Option<AmneziaTimerRange>,
 }
@@ -140,8 +119,6 @@ impl AmneziaTimers {
     }
 }
 
-/// A `u16` range, the shape AmneziaWG 3.0 writes every timer in. Same grammar
-/// and same serialized forms as [`AmneziaHeaderRange`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "AmneziaTimerRangeRepr", into = "AmneziaTimerRangeRepr")]
 pub struct AmneziaTimerRange {
@@ -197,7 +174,6 @@ impl TryFrom<AmneziaTimerRangeRepr> for AmneziaTimerRange {
     }
 }
 
-/// `lo` or `lo-hi` in `u16`, the grammar of `u16_range_from_string`.
 pub fn parse_amnezia_timer_range(text: &str) -> Result<AmneziaTimerRange, String> {
     let malformed = || format!("AmneziaWG timer must be N or N-M seconds, got {text}");
     match text.split_once('-') {
@@ -214,15 +190,6 @@ pub fn parse_amnezia_timer_range(text: &str) -> Result<AmneziaTimerRange, String
     }
 }
 
-/// One `H1..H4` value: a single header, or the inclusive range AmneziaWG 2.0
-/// draws each datagram's header from.
-///
-/// Serialized as a bare number when the two bounds agree and as `"lo-hi"`
-/// otherwise, which is both what `wg show` prints and what a `.conf` carries —
-/// so a 1.5 document written before ranges existed still parses, and a 2.0 one
-/// round-trips through the same field. The wire behaviour lives in
-/// `proto_wireguard::amnezia::HeaderRange`; this is the serialized twin, kept
-/// here because `foxcore-api` may not depend on a protocol crate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "AmneziaHeaderRangeRepr", into = "AmneziaHeaderRangeRepr")]
 pub struct AmneziaHeaderRange {
@@ -238,8 +205,6 @@ impl AmneziaHeaderRange {
         }
     }
 
-    /// `start..=end`, or `None` for inverted bounds — the refusal upstream's
-    /// `u32_range_from_string` makes on `hi < lo`.
     pub const fn new(start: u32, end: u32) -> Option<Self> {
         if end < start {
             return None;
@@ -256,8 +221,6 @@ impl AmneziaHeaderRange {
     }
 }
 
-/// The two shapes a header may arrive in. Untagged so `1` and `"1-9"` are both
-/// accepted for the same field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum AmneziaHeaderRangeRepr {
@@ -286,13 +249,6 @@ impl TryFrom<AmneziaHeaderRangeRepr> for AmneziaHeaderRange {
     }
 }
 
-/// `lo` or `lo-hi`, decimal, both bounds inclusive and `hi >= lo`.
-///
-/// The grammar is upstream's `u32_range_from_string` (amneziawg-tools
-/// `src/type.c`) and nothing wider: no whitespace inside, no hexadecimal, no
-/// open ends. It is public because the link importer parses the same text out of
-/// a `.conf` and out of a `wireguard://` query, and a second parser is how the
-/// two eventually disagree about a profile.
 pub fn parse_amnezia_header_range(text: &str) -> Result<AmneziaHeaderRange, String> {
     let malformed = || format!("AmneziaWG header must be N or N-M, got {text}");
     match text.split_once('-') {
@@ -387,28 +343,10 @@ const MAX_AMNEZIA_JUNK_PACKET_COUNT: u16 = 128;
 const MAX_AMNEZIA_INIT_PACKETS: usize = 5;
 
 impl AmneziaConfig {
-    /// Whether `Jmax` would make every junk datagram fragment.
-    ///
-    /// Junk rides the outer UDP socket, so the size that matters is the path's,
-    /// and the profile's `mtu` is the only figure it states. Upstream's README
-    /// warns that a `Jmax` at or above the MTU fragments; a censor sees a UDP
-    /// flow whose every early datagram arrives in two IP fragments, which is a
-    /// stronger signal than the fixed-size initiation the junk exists to hide.
-    ///
-    /// `MAX_AMNEZIA_JUNK_SIZE` (1280) already caps `Jmax`, so this only bites a
-    /// profile that lowered its own MTU to 1280 or below — the mobile case where
-    /// fragmentation is real rather than theoretical.
-    ///
-    /// This is the single definition of the rule, and `validate` below applies it
-    /// so a document that never went through the app cannot get past it.
-    /// `ProfileImportConfigBuildSupport` and `FoxCoreWireGuardTranslator` on the
-    /// Android side refuse on the same comparison at import and at translation.
     pub fn junk_fragments_at_mtu(&self, mtu: u16) -> bool {
         self.junk_packet_count > 0 && self.junk_max_size >= mtu
     }
 
-    /// `mtu` is the enclosing profile's, because that is the only path size a
-    /// profile states and `Jmax` has to be judged against it.
     pub(super) fn validate(&self, mtu: u16) -> Result<(), ConfigError> {
         if self.junk_max_size > MAX_AMNEZIA_JUNK_SIZE
             || self.init_junk_size > MAX_AMNEZIA_JUNK_SIZE
@@ -458,14 +396,6 @@ impl AmneziaConfig {
                     "AmneziaWG init packets must be at most {MAX_AMNEZIA_JUNK_SIZE} bytes"
                 )));
             }
-            // amneziawg-go emits a zero-length UDP datagram for an `I` slot that
-            // renders to nothing (amnezia-vpn/amneziawg-go#141), and a bare
-            // datagram with no payload is a signature of its own rather than
-            // cover traffic. `render_init_packets` skips such a template instead,
-            // but a profile that asks for one is asking for a packet, so it is
-            // refused here rather than silently dropped one layer down.
-            // `<d>`/`<ds>` are the trap: the tag list is not empty, and every tag
-            // in it is zero-width because an init packet carries no payload.
             if length == 0 {
                 return Err(ConfigError::Invalid(
                     "AmneziaWG init packets must render at least one byte".into(),
@@ -482,19 +412,12 @@ impl AmneziaConfig {
                 "AmneziaWG junk_min_size must not exceed junk_max_size".into(),
             ));
         }
-        // The same zero-length datagram as above, reached down the junk path:
-        // `Jc = 4` with `Jmax = 0` satisfies every bound here and asks
-        // `render_junk_packets` for four empty buffers.
         if self.junk_packet_count > 0 && self.junk_max_size == 0 {
             return Err(ConfigError::Invalid(
                 "AmneziaWG junk_max_size must be at least 1 byte when junk_packet_count is set"
                     .into(),
             ));
         }
-        // Refused rather than clamped. Clamping would keep the profile working
-        // and quietly send junk of a size the peer's own generator never picked,
-        // and the peer is the party that has to look ordinary too; the operator
-        // has to change the figure on both sides.
         if self.junk_fragments_at_mtu(mtu) {
             return Err(ConfigError::Invalid(format!(
                 "AmneziaWG junk_max_size {} must stay below the profile MTU {mtu}, \
@@ -508,9 +431,6 @@ impl AmneziaConfig {
             self.header_cookie,
             self.header_transport,
         ];
-        // Overlap, not equality: a 2.0 header is an interval, and two intervals
-        // that share even one value leave the receiver unable to type the
-        // datagrams that happen to draw it.
         for (index, header) in headers.iter().enumerate() {
             if headers[index + 1..]
                 .iter()

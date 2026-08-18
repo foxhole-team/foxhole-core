@@ -1,16 +1,5 @@
-//! Share links and subscriptions across the ABI.
-//!
-//! Without this the app cannot import a profile through the core at all: 2267
-//! lines of parsers were reachable only from host-side dev binaries, so every
-//! link the user pasted had to be parsed a second time in Kotlin — two parsers
-//! for one format, disagreeing at exactly the edge cases that matter.
-//!
-//! Everything here returns secrets. An imported profile *is* a credential, and
-//! the JSON these functions hand back must be treated the way the app treats a
-//! password: never logged, never in a bug report, never in an analytics event.
-//! The one place that rule is enforced rather than requested is the rejection
-//! report, which is built in `foxcore-link` specifically so it can be shown and
-//! logged safely.
+//! Core-owned link parsing across JNI; successful JSON contains credentials,
+//! while rejection reports deliberately omit input values.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -22,8 +11,6 @@ use jni::objects::{JClass, JString};
 use jni::sys::jstring;
 use serde::Serialize;
 
-/// The same wording every entry point in this library uses, so a caller
-/// matching on it does not have to know which module threw.
 const PANIC: &str = "panic inside FoxCore JNI boundary";
 
 fn finish_string(
@@ -49,24 +36,11 @@ fn finish_string(
 #[derive(Serialize)]
 struct ProfileJson<'a> {
     name: Option<&'a str>,
-    /// The tag the core routes by, so the app never has to invent one and then
-    /// disagree with the config it just built.
     outbound: &'a foxcore_api::OutboundConfig,
-    /// Parameters the core understood and deliberately did not carry out.
-    ///
-    /// Absent for a profile imported whole, so a caller can ignore the field
-    /// until there is something to say. Non-empty means the server works but
-    /// not in every respect the provider wrote down — a WireGuard profile's own
-    /// `dns=`, for instance, which the engine's resolver configuration
-    /// overrides. Losing the server over that would be worse; losing the *fact*
-    /// silently is what this field exists to prevent.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     dropped: Vec<DroppedJson<'a>>,
 }
 
-/// The name of a dropped option and what the core does instead — **never its
-/// value**. A subscription's parameter values are untrusted input, and this
-/// struct is meant to be safe to show and to log.
 #[derive(Serialize)]
 struct DroppedJson<'a> {
     option: &'a str,
@@ -109,11 +83,7 @@ fn rejected_json(line: &RejectedLine) -> RejectedJson<'_> {
     }
 }
 
-/// Parses one share link into the outbound config the core would run.
-///
-/// The same parser the core itself uses, which is the point: a link that
-/// imports here is a link that connects, and one that does not is refused with
-/// the reason rather than half-accepted with a silently dropped option.
+/// Parse one share link into the outbound config the core would run.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeImportLink(
     env: JNIEnv<'_>,
@@ -126,9 +96,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeI
             .get_string(&link)
             .map_err(|_| "the link is not a string".to_string())?
             .into();
-        // The error is rendered, not the link. `LinkError` is written not to
-        // echo its input, and this is the boundary where that stops being a
-        // convention and starts being visible to the user.
         let profile = import_link(&link).map_err(|error| error.to_string())?;
         serde_json::to_string(&profile_json(&profile))
             .map_err(|_| "the profile could not be rendered".to_string())
@@ -136,15 +103,6 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeI
     finish_string(&mut env, result)
 }
 
-/// Imports every profile in a subscription body, reporting the lines that did
-/// not parse instead of refusing the whole body over one of them.
-///
-/// Real subscriptions carry support links, notices and protocols this build
-/// does not have. The strict all-or-nothing import stays available in the
-/// crate; it is not what an app should call, because one advertising line
-/// costing the user ten servers is not a defensible failure mode.
-///
-/// The body may be plain lines or base64; the crate decides.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeImportSubscription(
     env: JNIEnv<'_>,
@@ -171,14 +129,11 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeI
 mod tests {
     use super::*;
 
-    // Percent-encoded exactly as a provider writes them: base64 keys carry `/`
-    // and `=`, which a URL parser will not accept raw in userinfo or a query.
+    // Provider-shaped percent-encoded base64 keys.
     const WG_PRIVATE: &str = "l40T7xeXzdV13X8f%2F1IjcRR0wbrACb0bebRqcN01mbQ%3D";
     const WG_PUBLIC: &str = "%2F94rCPHnchHT%2FrfGYWR3oBaNKtGcelLi4ainYamMiTc%3D";
 
-    /// D8: the app imports the owner's WireGuard server and is never told that
-    /// the profile's own resolver was not applied. The parser reports it; this
-    /// boundary used to drop the report on the floor.
+    /// A dropped option is reported without leaking its value.
     #[test]
     fn an_imported_profile_carries_the_options_the_core_did_not_apply() {
         let link = format!(
@@ -202,8 +157,7 @@ mod tests {
         );
     }
 
-    /// A profile imported whole says nothing, so a caller can ignore the field
-    /// until there is something in it.
+    /// Profiles imported whole omit the optional field.
     #[test]
     fn a_profile_with_nothing_dropped_omits_the_field() {
         let link = format!(

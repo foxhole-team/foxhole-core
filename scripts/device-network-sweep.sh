@@ -1,21 +1,4 @@
 #!/bin/bash
-# Prove the runtime survives a real network transition, not a synthetic one.
-#
-#   scripts/device-network-sweep.sh <serial> <config-name>
-#
-# `device-scenarios.sh netchange` delivers the callback synthetically, which
-# leaves every socket valid. This walks the phone between two saved Wi-Fi
-# networks with a live tunnel and flows in flight, which does not: the handle
-# changes, the sockets die and DNS re-runs.
-#
-# The verdict is an exit fingerprint fetched through the tunnel on the far side,
-# never a state field. A runtime that still says `connected` while carrying
-# nothing is the failure this repository has been bitten by before, so the
-# assertion is "same exit, different network".
-#
-# Measured on a Pixel 7 Pro, 2026-08-04, umbrella_corp -> albert_wesker ->
-# umbrella_corp with a VLESS tunnel up: the same exit fingerprint on both
-# networks, `reconnects=0 sock_err=0 flow_errors=0 rebind_fail=0` throughout.
 
 set -uo pipefail
 

@@ -1,24 +1,3 @@
-//! `fp=firefox` all the way to the socket.
-//!
-//! The whole point of a parrot is that the bytes are somebody else's. A profile
-//! that asks for Firefox and sends Chrome is not a smaller version of the right
-//! answer — it is a client that claims one population and joins another, and
-//! nothing between the link and the socket notices, because every layer in
-//! between is happy to carry a name it never checks.
-//!
-//! So this test does not check a name. It dials, reads the first record off the
-//! wire, and asks the hello what it is: Firefox sends `record_size_limit` and
-//! `delegated_credentials` and no GREASE at all; the Chromium family sends
-//! `session_ticket`, `application_settings`, and brackets its extension list
-//! with a GREASE pair. Two disjoint sets, both visible to anything on the path.
-//!
-//! Both directions are asserted, and that matters more than it looks: the
-//! version of this code being fixed answered *every* profile with Chrome, so a
-//! test that only pinned Chrome's markers would have passed against it.
-//!
-//! Everything is synthetic: `example.net`, `198.51.100.0/24`, a nil-ish UUID
-//! and a public key of repeated bytes.
-
 use std::time::Duration;
 
 use foxcore_api::{Destination, EngineConfig, OutboundConfig};
@@ -28,15 +7,10 @@ use proto_vless::VlessOutbound;
 use tokio::io::AsyncReadExt as _;
 use tokio::net::TcpListener;
 
-/// A REALITY public key that decodes to 32 bytes and belongs to nobody.
 const PUBLIC_KEY: &str = "t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ";
 const UUID: &str = "d0cf0001-0000-4000-8000-000000000000";
 const SNI: &str = "reality.example.net";
 
-// Extensions that separate the two families. Not a hash: a JA3 would move with
-// Chrome's per-connection permutation, and a JA4 would have to be regenerated
-// every time a table is refreshed. These code points are what the profiles
-// themselves are made of.
 const SESSION_TICKET: u16 = 0x0023;
 const DELEGATED_CREDENTIALS: u16 = 0x0022;
 const RECORD_SIZE_LIMIT: u16 = 0x001c;
@@ -51,13 +25,6 @@ fn link(port: u16, fingerprint: &str) -> String {
     )
 }
 
-/// The FoxCore engine config the Android app writes for a REALITY node.
-///
-/// Spelled out rather than imported so this test states the *contract* between
-/// the two repositories: the app's translator emits `reality.fingerprint` as
-/// one of these canonical names, and this is what the core does with it. The
-/// app's `FoxCoreRealityFingerprintTest` asserts the other half — that
-/// `fp=firefox` reaches this field as `firefox_148` rather than as `chrome`.
 fn app_engine_config(port: u16, fingerprint: &str) -> String {
     format!(
         r#"{{"schema_version":1,
@@ -70,7 +37,6 @@ fn app_engine_config(port: u16, fingerprint: &str) -> String {
     )
 }
 
-/// Dial a local listener with the profile and return the ClientHello body.
 async fn client_hello_from(config: OutboundConfig, listener: TcpListener) -> Vec<u8> {
     let OutboundConfig::Vless(vless) = config else {
         panic!("profile must be VLESS");
@@ -109,7 +75,6 @@ async fn client_hello_from(config: OutboundConfig, listener: TcpListener) -> Vec
     record[5..].to_vec()
 }
 
-/// Every extension type the hello carries.
 fn extension_types(hello: &[u8]) -> Vec<u16> {
     let mut cursor = 4 + 2 + 32;
     cursor += 1 + hello[cursor] as usize;
@@ -130,10 +95,6 @@ fn is_grease(value: u16) -> bool {
     high == low && low & 0x0f == 0x0a
 }
 
-/// The hello is Firefox's: its two signature extensions are present, the
-/// Chromium ones are not, and there is no GREASE anywhere. Firefox is the
-/// sharpest case in the table set precisely because it shares nothing with the
-/// profile this code used to substitute.
 fn assert_is_firefox(label: &str, hello: &[u8]) {
     let types = extension_types(hello);
     assert!(
@@ -150,8 +111,6 @@ fn assert_is_firefox(label: &str, hello: &[u8]) {
     );
 }
 
-/// The hello is Chrome's, which is the control: without it, a test could pass
-/// by sending Firefox to everybody.
 fn assert_is_chrome(label: &str, hello: &[u8]) {
     let types = extension_types(hello);
     assert!(
@@ -177,7 +136,6 @@ fn assert_is_chrome(label: &str, hello: &[u8]) {
     );
 }
 
-/// A share link asking for Firefox produces a Firefox ClientHello.
 #[tokio::test]
 async fn a_firefox_link_puts_a_firefox_hello_on_the_wire() {
     for (fingerprint, check) in [
@@ -200,8 +158,6 @@ async fn a_firefox_link_puts_a_firefox_hello_on_the_wire() {
     }
 }
 
-/// The other half of the app's chain: the engine config the Android translator
-/// writes reaches the wire as the profile it names.
 #[tokio::test]
 async fn the_engine_config_the_app_writes_reaches_the_wire_as_that_profile() {
     for (fingerprint, check) in [
@@ -220,14 +176,6 @@ async fn the_engine_config_the_app_writes_reaches_the_wire_as_that_profile() {
     }
 }
 
-/// A name the core does not implement is refused by the config, not rounded to
-/// the nearest table.
-///
-/// `randomized` is deliberately absent from this list: it names a uTLS
-/// *generator*, and whether this build has one is a separate question from
-/// whether a name is honoured. `360` and `android` are here permanently — they
-/// are TLS 1.2 parrots with no `key_share` extension, so REALITY cannot derive
-/// its authentication key from them at all.
 #[tokio::test]
 async fn an_unimplemented_profile_name_is_refused_by_the_config() {
     for fingerprint in ["chrome_999", "360", "android", "hellogolang"] {

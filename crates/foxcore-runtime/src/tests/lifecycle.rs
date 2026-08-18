@@ -299,21 +299,6 @@ fn an_outbound_that_cannot_be_built_leaves_the_engine_and_the_other_lanes_runnin
     assert_eq!(runtime.stop(), StopResult::Stopped);
 }
 
-/// Tor switched off means Tor is never built — not built and then not routed
-/// to.
-///
-/// The registry used to be created before the overlay gates were resolved, and
-/// the gates were consulted only at routing time. A profile carrying
-/// `traffic.tor_enabled: false` therefore still ran a full Arti bootstrap at
-/// every start: a directory fetch and guard connections for a lane the user had
-/// switched off, holding the start for up to `bootstrap_timeout_s`.
-///
-/// `attempts == 0` is the assertion that proves it, and the only one that can:
-/// every path that builds an outbound files at least one attempt, so a zero
-/// here cannot have been produced by a bootstrap that ran and failed. The
-/// profile below points Arti at `/nonexistent/state`, so a build that *did*
-/// happen would report `internal` (or `unsupported` without the feature) with
-/// one attempt, exactly as the test above asserts it does when the lane is on.
 #[test]
 fn a_switched_off_tor_lane_is_never_bootstrapped() {
     let (tun, _peer) = UnixStream::pair().unwrap();
@@ -371,16 +356,11 @@ fn a_switched_off_tor_lane_is_never_bootstrapped() {
          active traffic policy' rather than 'requires a registered Tor outbound'"
     );
 
-    // The user never had a failure, so no failure is reported. Reusing the
-    // `unavailable_outbound` path would have published one here.
     let events = runtime.drain_events_json(16);
     assert!(!events.contains("outbound_unavailable"), "{events}");
     let snapshot = runtime.snapshot_json();
     assert!(snapshot.contains(r#""reason":"disabled""#), "{snapshot}");
 
-    // And the trap the retry pass sets: `is_retryable` is what a network change
-    // consults, so a gated-off entry built the ordinary way would start the
-    // forbidden bootstrap on the next Wi-Fi/mobile flip.
     assert_eq!(runtime.retry_unavailable_outbounds(), 0);
     runtime.network_changed_with_handle(7);
     let after = runtime.unavailable_outbounds();

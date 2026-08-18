@@ -64,10 +64,6 @@ fn wireguard_json(private_key: &str, address: &str, allowed_ips: &str) -> String
     )
 }
 
-/// An AmneziaWG profile carrying an explicit interface MTU, which is the figure
-/// `Jmax` is judged against. `amnezia_json` omits it and so gets the 1420-byte
-/// default, above `MAX_AMNEZIA_JUNK_SIZE`; the fragmentation rule is only
-/// reachable by a profile that lowered its own MTU.
 fn amnezia_json_with_mtu(mtu: u16, amnezia: &str) -> String {
     format!(
         r#"{{

@@ -1,64 +1,4 @@
 #!/usr/bin/env bash
-# FoxCore against bare sing-box, per protocol, on one phone, automatically.
-#
-#   scripts/ab-singbox-compare.sh <serial> plan     [--sub-file P | --sub-url-env VAR]
-#   scripts/ab-singbox-compare.sh <serial> stage    [--sub-file P | --sub-url-env VAR]
-#   scripts/ab-singbox-compare.sh <serial> run      <regime-label>
-#   scripts/ab-singbox-compare.sh <serial> regimes
-#   scripts/ab-singbox-compare.sh <serial> table
-#   scripts/ab-singbox-compare.sh <serial> clean
-#
-# ---------------------------------------------------------------------------
-# WHY THE COMPARISON HAS THIS SHAPE
-#
-# Both arms are driven as a local SOCKS5 listener on the phone, not as a VPN.
-# That is not a convenience: sing-box cannot open a TUN on a stock non-rooted
-# Android device, and Android deliberately keeps the `shell` uid outside VPN
-# capture so adb survives a tunnel - so a shell-side load generator never
-# reaches a TUN in either arm. A SOCKS listener in front of one outbound is the
-# only shape both cores can take identically, which makes it the only shape in
-# which a number means anything. `scripts/device-tun-plane.sh` covers what the
-# TUN plane can still say honestly (process footprint), and says why it cannot
-# say more.
-#
-# Everything that could differ between the arms is pinned to the same value:
-#
-#   * the same node - one share link, parsed by foxcore-link for the FoxCore
-#     arm and translated once by ab-link-to-singbox.py for the sing-box arm;
-#   * the same load - one `foxcore-bench-client` binary, which imports no
-#     workspace crate, driving both arms with identical target, concurrency,
-#     duration and timeout;
-#   * the same listener shape - SOCKS5 with no authentication on both sides
-#     (`--server raw` for FoxCore, a `socks` inbound for sing-box), because
-#     FoxCore's audited LAN proxy carries a 64-session ceiling that sing-box's
-#     inbound has no equivalent of, and measuring against it would report a
-#     product decision as a throughput result;
-#   * the same accounting - /proc sampling from outside both processes, so
-#     neither a Rust nor a Go runtime's own bookkeeping is in the number;
-#   * the same regime - device state is read before and after every single
-#     measurement, and a measurement whose state moved underneath it is
-#     written out as INVALID rather than kept.
-#
-# WHAT THIS CANNOT MEASURE, AND WILL NOT PRETEND TO
-#
-#   * Doze and app-standby buckets do not apply to a `shell`-uid process, so
-#     the screen-off and unplugged regimes here capture the CPU governor, the
-#     radio and thermal state - not Doze. Rows are labelled with the state
-#     that was actually read, never with a regime that was merely intended.
-#   * Wakelocks are an app-framework concept. Neither arm holds one, so the
-#     column reports involuntary/voluntary context switches from /proc, which
-#     is the closest symmetric proxy, and says so.
-#   * If a node starts in one arm and not the other, that is the result. The
-#     row is kept with the failing cell marked, never dropped and never
-#     re-pointed at a different node.
-#
-# CREDENTIALS
-#
-# The subscription is never a literal in this file. It arrives as a file path
-# or as the *name* of an environment variable holding the URL. Generated node
-# configs live in a scratch directory outside the repo, mode 0600, and are
-# removed from the device by `clean`. Nothing this script prints contains a
-# server address, uuid, password or key: nodes are named `vless-reality-grpc-3`.
 set -uo pipefail
 
 ADB="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
@@ -69,11 +9,9 @@ shift 2
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 
-# Scratch, never the repo. Overridable so a caller can keep a run.
 WORK="${AB_WORK_DIR:-${TMPDIR:-/tmp}/foxcore-ab}"
 DEVDIR="${AB_DEVICE_DIR:-/data/local/tmp/ab-run}"
 
-# Load shape. One set of values for both arms, recorded into every row.
 AB_TARGET="${AB_TARGET:-speed.cloudflare.com:80}"
 AB_PATH="${AB_PATH:-/__down?bytes=10000000}"
 AB_CONCURRENCY="${AB_CONCURRENCY:-4}"
@@ -82,22 +20,11 @@ AB_TIMEOUT_S="${AB_TIMEOUT_S:-30}"
 AB_SAMPLE_S="${AB_SAMPLE_S:-1}"
 AB_FOX_PORT="${AB_FOX_PORT:-11080}"
 AB_SB_PORT="${AB_SB_PORT:-11081}"
-# How long to wait for the owner to unplug / reconnect before giving up on a
-# regime. The owner is using the phone; blind sleeps are not acceptable here.
 AB_PROMPT_TIMEOUT_S="${AB_PROMPT_TIMEOUT_S:-900}"
 
 device() { "$ADB" -s "$SERIAL" "$@"; }
 dsh() { device shell "$@" 2>/dev/null | tr -d '\r'; }
 
-# Start something on the device and come straight back.
-#
-# `adb shell "cmd &"` does NOT return: adb holds the connection open until every
-# descendant has released the shell's stdout, and a backgrounded child keeps it.
-# Observed directly here - the arm came up, and the harness then sat on the adb
-# call forever while the measurement window it was supposed to be timing ran out.
-# `setsid` in a subshell with all three descriptors redirected is what actually
-# detaches it.
-# dspawn <command> <stdout-file> [stdin-file]
 dspawn() {
     local command="$1" out="$2" in_file="${3:-/dev/null}"
     device shell "cd $DEVDIR && ( setsid $command <$in_file >>$out 2>&1 & ) ; echo spawned" >/dev/null 2>&1
@@ -105,10 +32,6 @@ dspawn() {
 log() { printf '[ab] %s\n' "$*" >&2; }
 die() { printf '[ab] FATAL: %s\n' "$*" >&2; exit 1; }
 
-# --------------------------------------------------------------------------
-# Device state. Read, never assumed. Every measurement carries the state it
-# was taken in, and a state that moved mid-measurement invalidates the row.
-# --------------------------------------------------------------------------
 
 state_json() {
     local battery power idle plugged level temp screen deep light
@@ -122,13 +45,6 @@ state_json() {
     esac
     level="$(printf '%s\n' "$battery" | awk '/^  level:/ {print $2}')"
     temp="$(printf '%s\n' "$battery" | awk '/^  temperature:/ {print $2}')"
-    # `Dreaming` is the screensaver/daydream, and it is NOT an idle display: the
-    # panel is lit and the CPU is doing screensaver work. It used to fall into
-    # the `*)` arm and be recorded as "unknown", which the fairness gate then
-    # happily compared against another "unknown" - two rows agreeing that
-    # neither knew what state it was in. Named explicitly so a dreaming window
-    # can never be published as a screen-off one. `stay_on_while_plugged_in`
-    # plus no display timeout is what produces it while charging.
     case "$power" in
         *Awake*) screen="on" ;;
         *Dreaming*) screen="dreaming" ;;
@@ -137,12 +53,6 @@ state_json() {
     esac
     deep="$(dsh dumpsys deviceidle get deep)"
     light="$(dsh dumpsys deviceidle get light)"
-    # The fuel gauge's own uAh accumulator, carried on every measurement so a
-    # battery delta needs no separate bookkeeping. It quantises at 16000 uAh on
-    # this device (one step = 16 mAh), which is why a 180s window was
-    # unresolvable: three of four arms landed on exactly one step and the
-    # comparison could not tell them apart. A window has to be long enough to
-    # accumulate many steps before the difference between arms means anything.
     local charge
     charge="$(dsh 'cat /sys/class/power_supply/battery/charge_counter 2>/dev/null')"
     printf '{"plugged":"%s","battery_pct":%s,"battery_decikelvin":%s,"screen":"%s","doze_deep":"%s","doze_light":"%s","vpn_capture":"%s","charge_uah":%s,"t":%s}' \
@@ -150,26 +60,11 @@ state_json() {
         "$(shell_egress_interface)" "${charge:--1}" "$(date +%s)"
 }
 
-# Which interface the `shell` uid actually leaves by.
-#
-# This is not a detail. Android usually keeps uid 2000 outside VPN capture so
-# adb survives a tunnel - but with an always-on VPN in lockdown mode the uid
-# range that gets the tun table is 0-99999, which includes shell. On this
-# device `ip route get 1.1.1.1` for uid 2000 resolved to `dev tun0`, meaning
-# BOTH arms were dialling out through the owner's running VPN.
-#
-# That is fatal to the CPU column specifically: FoxCore then sits in the path
-# twice - once as the arm under test, once as the VPN carrying it - and only
-# the first process is sampled, so FoxCore's measured cost is understated by
-# however much work happened in the VPN process. Throughput and latency are
-# merely bounded rather than skewed, but nothing here is a clean core number.
 shell_egress_interface() {
     dsh "ip route get 1.1.1.1 2>/dev/null" | awk '/dev/ {for (i = 1; i < NF; i++) if ($i == "dev") {print $(i + 1); exit}}'
 }
 
 state_key() {
-    # The fields a row is only comparable within. Battery percentage and
-    # temperature drift continuously and are recorded but not part of the key.
     printf '%s\n' "$1" | sed -E 's/.*"plugged":"([^"]*)".*"screen":"([^"]*)","doze_deep":"([^"]*)","doze_light":"([^"]*)".*/\1|\2|\3|\4/'
 }
 
@@ -178,9 +73,6 @@ notify() {
     dsh "cmd notification post -S bigtext -t '$title' '$tag' '$body'" >/dev/null
 }
 
-# Poll a real device predicate rather than sleeping. The owner may take a long
-# time; the notification is re-posted periodically so it is not lost under
-# other notifications.
 await_state() {
     local field="$1" want="$2" tag="$3" title="$4" body="$5"
     local waited=0 current
@@ -200,16 +92,12 @@ await_state() {
         esac
         sleep 5
         waited=$((waited + 5))
-        # Re-post every minute so a buried notification still gets seen.
         [ $((waited % 60)) -eq 0 ] && notify "$tag" "$title" "$body"
     done
     log "timed out after ${AB_PROMPT_TIMEOUT_S}s waiting for $field=$want"
     return 1
 }
 
-# --------------------------------------------------------------------------
-# Subscription intake. Path or env-var name, never a literal, never argv.
-# --------------------------------------------------------------------------
 
 resolve_subscription() {
     local sub_file="" url_env=""
@@ -231,7 +119,6 @@ resolve_subscription() {
         local url="${!url_env:-}"
         [ -n "$url" ] || die "$url_env is empty"
         case "$url" in https://*) ;; *) die "$url_env must be an https URL" ;; esac
-        # Down curl's stdin config, so the URL never appears in `ps`.
         printf 'url = "%s"\n' "$url" | curl --config - --fail --silent --show-error \
             --location --proto '=https' --tlsv1.2 --max-filesize 1048576 \
             --max-time 60 --retry 2 --retry-all-errors \
@@ -246,10 +133,6 @@ resolve_subscription() {
 
 plan() {
     resolve_subscription "$@"
-    # `--pin-server-ip` is on by default and can be turned off with
-    # AB_PIN_SERVER_IP=0. See the note in ab-link-to-singbox.py: without it the
-    # sing-box arm cannot resolve the node's own hostname on Android and fails
-    # every request in milliseconds, which would read as a FoxCore win.
     local pin=()
     [ "${AB_PIN_SERVER_IP:-1}" = "1" ] && pin+=("--pin-server-ip")
     python3 "$HERE/ab-link-to-singbox.py" \
@@ -260,9 +143,6 @@ plan() {
         ${pin[@]+"${pin[@]}"}
 }
 
-# --------------------------------------------------------------------------
-# Staging. Binaries and node configs onto the device.
-# --------------------------------------------------------------------------
 
 stage() {
     plan "$@" >/dev/null || die "planning failed"
@@ -298,7 +178,6 @@ stage() {
     device push "$HERE/ab-proc-sampler.sh" "$DEVDIR/proc-sampler.sh" >/dev/null
     dsh "chmod 755 $DEVDIR/proc-sampler.sh" >/dev/null
 
-    # Node material. 0600 on the device too; `clean` removes it.
     local count=0
     for file in "$WORK"/nodes/*.link "$WORK"/nodes/*.sb.json; do
         [ -e "$file" ] || continue
@@ -308,8 +187,6 @@ stage() {
     done
     log "staged $count node files"
 
-    # Record exactly what is being compared, by digest, so a table can never be
-    # quoted against a binary nobody can identify later.
     {
         printf 'sing_box_version: %s\n' "$(dsh "$DEVDIR/sing-box version | head -1")"
         printf 'sing_box_sha256: %s\n' "$(dsh "sha256sum $DEVDIR/sing-box" | awk '{print $1}')"
@@ -323,27 +200,7 @@ stage() {
     cat "$WORK/provenance.txt" >&2
 }
 
-# --------------------------------------------------------------------------
-# One arm, one node, one measurement.
-# --------------------------------------------------------------------------
 
-# The arms are started after a `cd` into the device directory, so their argv[0]
-# is the bare `./foxcore-socks`, NOT the absolute path. Matching on `$DEVDIR/...`
-# therefore matches nothing - which is not a harmless miss: it left a previous
-# run's listener holding the port, the new arm died with EADDRINUSE, and the
-# load generator happily measured the stale process instead. Both the pattern
-# and its verification are on argv shapes that actually occur.
-#
-# The bracket in each pattern is load-bearing, not decoration. `pgrep -f` and
-# `pkill -f` on toybox match against every process's full command line -
-# including the `sh -c "pkill -f 'sing-box run -c'"` that adb just spawned to
-# run the kill. So a naive `pkill -f 'sing-box run -c'` matches its own shell
-# and kills it, and the process it was aimed at survives. Observed directly:
-# sing-box stayed up for four minutes across several measurements while
-# proc-samplers piled up behind it, which is the failure that silently
-# measures a stale process from a previous node. `s[i]ng-box` is a regex that
-# matches the literal text "sing-box" in the target, but the killer shell's own
-# argv contains "s[i]ng-box", which that regex does not match.
 FOX_PATTERN='f[o]xcore-socks --selector'
 SB_PATTERN='s[i]ng-box run -c'
 
@@ -354,8 +211,6 @@ kill_arms() {
     local waited=0
     while [ "$waited" -lt 15 ]; do
         if [ -z "$(dsh "pgrep -f '$FOX_PATTERN' ; pgrep -f '$SB_PATTERN'")" ]; then
-            # A dead process can still hold the port for a moment; the next arm
-            # binds the same one, so wait for the socket, not just the pid.
             if ! dsh "cat /proc/net/tcp /proc/net/tcp6 2>/dev/null" | awk '{print $2}' \
                 | grep -qiE ":($(printf '%04X' "$AB_FOX_PORT")|$(printf '%04X' "$AB_SB_PORT"))\$"; then
                 return 0
@@ -365,9 +220,6 @@ kill_arms() {
     done
     dsh "for p in \$(pgrep -f '$FOX_PATTERN'; pgrep -f '$SB_PATTERN'); do kill -9 \$p 2>/dev/null; done" >/dev/null
     sleep 2
-    # A teardown that did not tear down must not be silent: the next arm would
-    # bind nothing, the generator would drive the corpse of the previous one,
-    # and the row would look perfectly normal.
     if [ -n "$(dsh "pgrep -f '$FOX_PATTERN'; pgrep -f '$SB_PATTERN'")" ]; then
         log "WARNING: an arm survived teardown; the next measurement is not trustworthy"
         return 1
@@ -375,10 +227,6 @@ kill_arms() {
     return 0
 }
 
-# A listener that is bound is not the same as a core that is ready, but it is
-# the only readiness signal both arms emit identically, so it is what both are
-# held to - and the handshake cost that follows lands in `connect_us`, where it
-# belongs, for both.
 await_listener() {
     local port_hex waited=0
     port_hex="$(printf '%04X' "$1")"
@@ -391,7 +239,6 @@ await_listener() {
     return 1
 }
 
-# arm=foxcore|singbox  node_id  selector  regime
 measure() {
     local arm="$1" node="$2" selector="$3" regime="$4"
     local port pid start_state end_state out_prefix
@@ -427,12 +274,6 @@ measure() {
 
     dspawn "sh ./proc-sampler.sh $pid $AB_SAMPLE_S $node.$arm.proc.jsonl" "$node.$arm.sampler.out"
 
-    # Repeats, because one window is not a measurement. The same node/arm was
-    # seen to swing 16.49 -> 10.78 MiB/s between two single 20s windows, which
-    # is wide enough that any single-window throughput claim is noise. The arm
-    # stays up across the repeats so what varies is the network, not process
-    # startup; the /proc sampler spans the whole set, so CPU-per-GiB is computed
-    # over total ticks and total bytes and is unaffected by the split.
     _rep=1
     while [ "$_rep" -le "${AB_REPEATS:-1}" ]; do
         dsh "cd $DEVDIR && ./foxcore-bench-client --proxy 127.0.0.1:$port --target '$AB_TARGET' --path '$AB_PATH' --concurrency $AB_CONCURRENCY --duration-s $AB_DURATION_S --timeout-s $AB_TIMEOUT_S --label $regime/$arm/$node/r$_rep --out $node.$arm.bench.$_rep.jsonl" \
@@ -469,9 +310,6 @@ run_regime() {
     local regime="${1:?run needs a regime label}"
     [ -s "$WORK/nodes/manifest.json" ] || die "run 'stage' first"
 
-    # Refuse rather than produce a number nobody can defend. An always-on VPN in
-    # lockdown mode pulls the shell uid into the tunnel, and then every byte of
-    # both arms is carried by a third proxy whose CPU is charged to neither.
     local egress
     egress="$(shell_egress_interface)"
     case "$egress" in
@@ -487,14 +325,6 @@ run_regime() {
     esac
 
     log "=== regime $regime : $(state_json) ==="
-    # One representative node per distinct shape by default: the owner's list
-    # carries ten identical gRPC nodes, and measuring all of them costs an hour
-    # to learn one fact. AB_ALL_NODES=1 measures every line.
-    # AB_ONLY_NODES narrows the run to named nodes. The battery regime needs
-    # windows of 20-30 minutes per arm to clear the fuel gauge's 16 mAh quantum,
-    # and at that length a full protocol sweep would take hours of the owner's
-    # phone. One node measured properly is worth more than six measured below
-    # the resolution of the instrument.
     python3 - "$WORK/nodes/manifest.json" "${AB_ALL_NODES:-0}" "${AB_ONLY_NODES:-}" <<'PY' > "$WORK/selected.txt"
 import json, sys
 manifest = json.load(open(sys.argv[1]))
@@ -510,24 +340,9 @@ for record in manifest:
     seen.add(record["shape"])
     print(record["node_id"], record["foxcore_selector"] or "", record["singbox_translatable"])
 PY
-    # The node list is read on fd 3, not stdin. `adb` drains its own stdin, so
-    # a plain `while read ... done < list` loses every line after the first:
-    # observed here as a regime that reported "complete" after one node of
-    # eight, which is the worst possible failure - it looks like a finished run.
     while read -r node selector translatable <&3; do
         [ -n "$node" ] || continue
-        # A node with no FoxCore selector prints an empty second field, which
-        # word-splitting collapses so `translatable` lands in `selector`. Left
-        # alone that produced "protocol selector is not supported: False",
-        # which reads as a FoxCore parser failure rather than "this scheme has
-        # no FoxCore arm".
         case "$selector" in True|False) selector="" ;; esac
-        # AB_ONLY_ARM re-takes a single arm. Needed because a battery window
-        # can be spoiled by the Doze state it happened to start in: the first
-        # FoxCore window spanned INACTIVE->IDLE while sing-box's sat entirely in
-        # IDLE, so FoxCore carried pre-Doze drain sing-box never saw. Re-taking
-        # one arm into the same steady state is the fix; re-running both would
-        # just move the mismatch to the other arm.
         case "${AB_ONLY_ARM:-both}" in
             foxcore) measure foxcore "$node" "$selector" "$regime" ;;
             singbox) measure singbox "$node" "$selector" "$regime" ;;
@@ -540,10 +355,6 @@ PY
     log "regime $regime complete; results in $WORK/results"
 }
 
-# --------------------------------------------------------------------------
-# The regime sequence the owner described, driven by notifications and by
-# polling real device state - never by a blind sleep.
-# --------------------------------------------------------------------------
 
 regimes() {
     run_regime "plugged-screen-on"
@@ -551,8 +362,6 @@ regimes() {
     await_state plugged unplugged ab_unplug "FoxCore A/B: unplug now" \
         "Please DISCONNECT the USB cable. The harness is polling and will continue by itself once the unplug registers." \
         || die "no unplug registered"
-    # adb over USB is gone at this point unless the owner has wireless adb on.
-    # Verify the transport survived before claiming a regime can run at all.
     if ! device shell true >/dev/null 2>&1; then
         log "adb transport lost with the cable; the unplugged regime needs wireless adb (adb tcpip)."
         await_state plugged plugged ab_replug "FoxCore A/B: reconnect" \

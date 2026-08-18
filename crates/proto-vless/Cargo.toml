@@ -26,10 +26,7 @@ tokio-util.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-# The reference BLAKE3, used only as the oracle for `src/encryption/blake3.rs`.
 blake3.workspace = true
 foxcore-link = { path = "../foxcore-link" }
-# The REALITY server harness. Dev-only: `testkit` is off by default and the
-# dependency above does not enable it, so a shipped build never contains it.
 proto-reality = { path = "../proto-reality", features = ["testkit"] }
 serde_json.workspace = true

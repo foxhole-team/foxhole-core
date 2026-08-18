@@ -35,8 +35,6 @@ import subprocess
 import sys
 from urllib.parse import parse_qs, unquote, urlparse
 
-# Same ceiling foxcore-link enforces. A body larger than this is a mistake,
-# not a subscription, and treating it as one only wastes the device's time.
 MAX_BODY_BYTES = 1024 * 1024
 MAX_PROFILES = 256
 
@@ -70,10 +68,6 @@ def load_body(path):
     if len(raw) > MAX_BODY_BYTES:
         die("subscription body exceeds 1 MiB")
     text = raw.decode("utf-8", "replace").strip()
-    # Do not trust content-type, and do not trust the absence of base64 either:
-    # this provider serves a plain URI list as text/html, and others serve the
-    # same list base64-wrapped. The only reliable probe is whether any line
-    # already looks like a URI.
     if "://" not in text:
         try:
             text = b64_any(text)
@@ -119,11 +113,6 @@ def tls_block(query, default_sni, host):
     if qs_get(query, "allowInsecure") in ("1", "true"):
         block["insecure"] = True
     if fingerprint:
-        # uTLS is what makes the two arms present the same ClientHello shape.
-        # sing-box's own accepted list does not include every value a panel
-        # will emit (`qq` is in this provider's list); an unknown value is
-        # reported rather than silently rewritten, because rewriting it would
-        # be the sing-box arm quietly getting a different handshake.
         block["utls"] = {"enabled": True, "fingerprint": fingerprint}
     if security == "reality":
         reality = {"enabled": True, "public_key": qs_get(query, "pbk")}
@@ -131,8 +120,6 @@ def tls_block(query, default_sni, host):
         if short_id:
             reality["short_id"] = short_id
         block["reality"] = reality
-        # REALITY is TLS 1.3 only and always authenticates by key, so an
-        # `insecure` flag inherited from the link would be meaningless here.
         block.pop("insecure", None)
     return block
 
@@ -208,10 +195,6 @@ def translate(link, tag):
         obfs_password = qs_get(query, "obfs-password")
         if qs_get(query, "obfs") == "salamander" and obfs_password:
             outbound["obfs"] = {"type": "salamander", "password": obfs_password}
-        # Deliberately no `up_mbps`/`down_mbps`: setting them switches Hysteria2
-        # from BBR to its Brutal congestion controller, which would make the
-        # sing-box arm run a different algorithm from the FoxCore arm and turn
-        # a core comparison into a congestion-control comparison.
         return outbound, "hysteria2", note
 
     if scheme == "trojan":
@@ -229,8 +212,6 @@ def translate(link, tag):
         return outbound, f"trojan-{kind}", note
 
     if scheme == "vmess":
-        # vmess:// is base64 of a JSON blob in the v2rayN dialect, not a URI
-        # with query parameters, so it is parsed on its own terms.
         try:
             blob = json.loads(b64_any(link[len("vmess://"):]))
         except Exception:
@@ -261,7 +242,6 @@ def translate(link, tag):
 
     if scheme == "ss":
         # Two encodings in the wild: base64("method:password")@host:port and
-        # the fully percent-encoded SIP002 userinfo.
         userinfo = url.username or ""
         method = password = ""
         if userinfo and not url.password:
@@ -274,7 +254,6 @@ def translate(link, tag):
             method = unquote(userinfo)
             password = unquote(url.password or "")
         if not method or not password:
-            # The whole authority may be base64 in the legacy form.
             return None, "shadowsocks", "unrecognised shadowsocks userinfo encoding"
         return (
             {
@@ -290,10 +269,6 @@ def translate(link, tag):
         )
 
     if scheme in ("naive+https", "naive+quic"):
-        # sing-box has no `naive` outbound. naiveproxy is CONNECT over TLS, so
-        # the closest honest expression is sing-box's http outbound with TLS.
-        # It is flagged, not silently equated: if it fails, the failure belongs
-        # in the table as "sing-box has no equivalent", not as a FoxCore win.
         return (
             {
                 "type": "http",
@@ -398,12 +373,6 @@ def main():
 
         emit_link = link
         if args.pin_server_ip and outbound is not None and scheme == "vmess":
-            # vmess:// is a base64 JSON blob rather than a query-string URI, so
-            # it needs its own pinning path. Skipping it was not neutral: the
-            # sing-box arm was left resolving a hostname it cannot resolve on
-            # Android and failed ~28k times instantly, which read as a FoxCore
-            # win in the table. foxcore-link reads `server_ip` out of the same
-            # blob, so injecting it there pins BOTH arms from one edit.
             try:
                 blob = json.loads(b64_any(link[len("vmess://"):]))
                 host = str(blob.get("add", ""))
@@ -438,8 +407,6 @@ def main():
                     record["note"] = (record["note"] + "; " if record["note"] else "") + \
                         "host did not resolve here; both arms left on the hostname"
 
-        # The link itself: one file, 0600, outside the repo. The FoxCore arm
-        # reads exactly this on stdin, so both arms provably use one source.
         link_path = os.path.join(out_dir, f"{node_id}.link")
         with open(os.open(link_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as handle:
             handle.write(emit_link + "\n")
@@ -447,9 +414,6 @@ def main():
         if outbound is not None:
             config = {
                 "log": {"level": "error", "timestamp": True, "output": args.log_path},
-                # A SOCKS5 inbound, not `mixed`: FoxCore's harness listener is
-                # SOCKS5 only, and giving sing-box an extra HTTP front end would
-                # be a feature difference charged to the data path.
                 "inbounds": [{
                     "type": "socks",
                     "tag": "in",
@@ -458,10 +422,6 @@ def main():
                 }],
                 "outbounds": [outbound],
                 "route": {"final": "proxy"},
-                # No `experimental.clash_api`: it would add an HTTP server and a
-                # stats path that the FoxCore arm does not run. Throughput is
-                # taken from the shared load generator instead, which is the
-                # only counter both arms can be held to.
             }
             config_path = os.path.join(out_dir, f"{node_id}.sb.json")
             with open(os.open(config_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as handle:

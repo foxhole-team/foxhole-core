@@ -12,9 +12,6 @@ bytes.workspace = true
 foxcore-api = { path = "../foxcore-api" }
 foxcore-dialer = { path = "../foxcore-dialer" }
 foxcore-transport = { path = "../foxcore-transport" }
-# The one diagnostic channel this workspace has. `foxcore-android`'s `logcat.rs`
-# forwards `warn` and above from every crate, including in release, which is
-# what makes a clamped heartbeat a recorded fact rather than a silent rewrite.
 log = "0.4.33"
 quinn.workspace = true
 quinn-proto.workspace = true
@@ -23,7 +20,5 @@ tokio-util.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
-# The QUIC Initial parser and its capture socket; see proto-hysteria2 for why
-# it is a feature-gated dev-dependency rather than part of the shipped graph.
 foxcore-transport = { path = "../foxcore-transport", features = ["fingerprinting"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

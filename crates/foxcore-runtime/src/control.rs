@@ -881,9 +881,8 @@ impl CoreRuntime {
     /// live flows on the other lanes are not disturbed.
     ///
     /// Zero means there was nothing worth attempting — every lane is up, an
-    /// attempt is already running, what is left cannot be fixed by trying again
-    /// (a malformed profile, a protocol this build does not carry), or the lane
-    /// is an overlay the traffic policy still has switched off.
+    /// attempt is already running, the failure is permanent, or policy gates
+    /// the lane off.
     pub fn retry_unavailable_outbounds(&self) -> usize {
         self.spawn_outbound_retry()
     }
@@ -891,10 +890,6 @@ impl CoreRuntime {
     /// Start a retry pass on the worker's executor. Returns how many entries it
     /// claimed — never blocks, and never runs on a flow path.
     fn spawn_outbound_retry(&self) -> usize {
-        // Read from the live policy, not from the config this generation
-        // started with: turning Tor back on is a reload, and the lane that was
-        // skipped at start has to become buildable at exactly that moment and
-        // at no other.
         let policy_gates = self.policy.gates();
         let gates = OverlayGates::new(policy_gates.tor_enabled(), policy_gates.i2p_enabled());
         let pending: Vec<_> = self

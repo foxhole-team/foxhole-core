@@ -10,8 +10,6 @@ mod buf_reader;
 mod reality;
 
 mod slide_buffer;
-/// A minimal REALITY server for integration tests. See the module docs; this
-/// is not part of the shipped surface and is compiled only with `testkit`.
 #[cfg(feature = "testkit")]
 pub mod testkit;
 

@@ -1,12 +1,3 @@
-//! The record layer that carries the inner VLESS protocol.
-//!
-//! Upstream's `CommonConn`. Records look exactly like TLS 1.3 application data
-//! — `23 03 03` and a big-endian length — and the header is the AEAD's
-//! additional data, so there is no separately encrypted length field the way
-//! Shadowsocks 2022 has one. That is where upstream's throughput claim comes
-//! from, and it is also why a wrong length simply fails to authenticate instead
-//! of being detected separately.
-
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -20,7 +11,6 @@ use super::aead::{Aead, MAX_RECORD_PLAINTEXT, TAG_LEN, decode_header, encode_hea
 use super::crypto::PFS_KEY_LEN;
 use super::xor::XorState;
 
-/// A 0-RTT ticket and the forward-secret key it stands for.
 #[derive(Clone)]
 pub struct CachedSession {
     pub expire: Instant,
@@ -28,9 +18,6 @@ pub struct CachedSession {
     pub ticket: [u8; 16],
 }
 
-/// Shared across every connection of one outbound, which is what makes 0-RTT
-/// possible: the first connection pays for the exchange and the rest reuse it
-/// until the server-chosen lifetime runs out.
 #[derive(Default)]
 pub struct SessionCache {
     inner: Mutex<Option<CachedSession>>,
@@ -49,11 +36,6 @@ impl SessionCache {
         }
     }
 
-    /// Drop the cached session if it is still the one `pfs_key` came from.
-    ///
-    /// Guarded on identity rather than cleared outright so a connection that
-    /// discovers an expired ticket cannot throw away a *newer* session another
-    /// connection has meanwhile negotiated.
     pub fn expire_if_matches(&self, pfs_key: &[u8; PFS_KEY_LEN]) {
         if let Ok(mut guard) = self.inner.lock()
             && guard.as_ref().is_some_and(|s| &s.pfs_key == pfs_key)
@@ -64,9 +46,7 @@ impl SessionCache {
 }
 
 enum ReadState {
-    /// 0-RTT: the server opens with 16 random bytes that key this direction.
     ServerRandom,
-    /// 1-RTT: the server's padding, which it is allowed to send slowly.
     Padding(usize),
     Header,
     Body([u8; 5], usize),
@@ -80,12 +60,7 @@ pub struct EncryptedStream {
     aead: Aead,
     peer_aead: Option<Aead>,
     xor: Option<XorState>,
-    /// Prepended to the first record. Upstream insists the handshake prefix and
-    /// the first data record leave in a single write, so their combined length
-    /// carries no fixed signature.
     pre_write: Option<Vec<u8>>,
-    /// Set while this connection is still the 0-RTT gamble; cleared once the
-    /// server has answered with something that authenticates.
     zero_rtt: Option<(Arc<SessionCache>, [u8; PFS_KEY_LEN])>,
 
     out: Vec<u8>,
@@ -138,8 +113,6 @@ impl EncryptedStream {
         }
     }
 
-    /// Read until `read_need` bytes are buffered, unmasking each chunk as it
-    /// arrives so the keystream advances in wire order.
     fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
         let Self {
             inner,
@@ -199,7 +172,6 @@ impl EncryptedStream {
         Poll::Ready(Ok(()))
     }
 
-    /// Frame one record and stage it for writing.
     fn frame(&mut self, plaintext: &[u8]) -> io::Result<()> {
         let mut record = vec![0_u8; 5 + plaintext.len() + TAG_LEN];
         let mut header = [0_u8; 5];
@@ -207,8 +179,6 @@ impl EncryptedStream {
         record[..5].copy_from_slice(&header);
         record[5..5 + plaintext.len()].copy_from_slice(plaintext);
 
-        // The rekey decision is taken before sealing, because sealing is what
-        // advances the counter past the wrap.
         let rekey = self.aead.at_max_nonce();
         let (head, body) = record.split_at_mut(5);
         self.aead.seal_in_place(head, body, plaintext.len())?;
@@ -267,11 +237,6 @@ impl AsyncRead for EncryptedStream {
                     header.copy_from_slice(&this.read_buf);
                     this.read_buf.clear();
                     let Some(length) = decode_header(&header) else {
-                        // A 0-RTT client whose ticket the server no longer
-                        // knows is answered with a stream of noise, on purpose:
-                        // there is nothing to distinguish and nothing to reply
-                        // to. Dropping the cached session turns the caller's
-                        // retry into a fresh 1-RTT exchange.
                         if let Some((cache, pfs_key)) = this.zero_rtt.take() {
                             cache.expire_if_matches(&pfs_key);
                             return Poll::Ready(Err(io::Error::new(
@@ -284,8 +249,6 @@ impl AsyncRead for EncryptedStream {
                             "VLESS encryption record header is not well formed",
                         )));
                     };
-                    // The server has authenticated itself from here on, so the
-                    // ticket is good and the gamble is over.
                     this.zero_rtt = None;
                     this.read_state = ReadState::Body(header, length);
                 }

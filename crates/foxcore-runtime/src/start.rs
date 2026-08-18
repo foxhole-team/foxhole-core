@@ -134,9 +134,6 @@ impl CoreRuntime {
             callbacks,
             Duration::from_millis(runtime_config.connect_timeout_ms),
         )
-        // The same budget `create_outbound` puts around the whole build, handed
-        // to the protocols that do their handshake *inside* it. It also reaches
-        // their reconnect loops, which no start-time timeout ever did.
         .with_handshake_timeout(Duration::from_millis(handshake_timeout_ms));
         dialer.set_network_handle(network_handle);
         let cancel = CancellationToken::new();
@@ -257,10 +254,6 @@ impl CoreRuntime {
                             named_outbounds,
                             thread_dialer.clone(),
                             runtime.handshake_timeout_ms,
-                            // Before the builds, not after them. `resolve_network_gates`
-                            // below answers the same question against the finished
-                            // registry, and by then a switched-off Tor lane has already
-                            // bootstrapped.
                             OverlayGates::from_traffic(&traffic),
                             &thread_events.sink(),
                             &continuity_sink,

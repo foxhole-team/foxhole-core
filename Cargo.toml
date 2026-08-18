@@ -49,9 +49,6 @@ async-trait = "0.1.89"
 aws-lc-rs = { version = "1.17.1", default-features = false, features = ["non-fips"] }
 base64 = "0.22.1"
 blake2 = "0.10.6"
-# Test-only. `proto-vless` implements BLAKE3 `derive_key` with byte-string
-# contexts, which this crate cannot express; the differential test holds that
-# implementation to this one. Already in the shipped graph via `shadowsocks`.
 blake3 = "1.8.5"
 bytes = "1.12.1"
 chacha20poly1305 = "0.10.1"

@@ -1,26 +1,3 @@
-//! BLAKE3 in `derive_key` mode, with a **byte-string** context.
-//!
-//! VLESS Encryption derives every symmetric key with BLAKE3's `derive_key`
-//! mode, and it passes raw binary as the context: a 16-byte IV, a 1216-byte
-//! ML-KEM encapsulation key, a whole TLS-shaped record. Upstream writes
-//! `blake3.DeriveKey(k, string(ctx), key)`, and Go's `string(bytes)` is a
-//! reinterpretation, not a validation.
-//!
-//! The `blake3` crate cannot express that. Both of its derive-key entry points
-//! (`derive_key` and `Hasher::new_derive_key`) take `&str`, and the only way to
-//! hand them non-UTF-8 bytes is `str::from_utf8_unchecked` — `unsafe`, which
-//! this crate forbids. `hazmat::Mode` has no `DeriveKeyContext` variant either,
-//! so the context hash cannot be assembled from the exposed tree primitives.
-//!
-//! So the compression function and tree hashing live here, transcribed from the
-//! BLAKE3 reference implementation (§2 of the specification). It is
-//! flag-parameterised rather than derive-key-only on purpose: that makes the
-//! *plain* and *keyed* modes reachable from tests, and those are exactly the two
-//! the `blake3` crate can be asked for. `tests/blake3_vector.rs` runs all three
-//! modes against that crate across every input length where the tree shape
-//! changes, so this file is pinned to the reference implementation rather than
-//! to its own output.
-
 const OUT_LEN: usize = 32;
 const BLOCK_LEN: usize = 64;
 const CHUNK_LEN: usize = 1024;
@@ -40,7 +17,6 @@ const IV: [u32; 8] = [
 
 const MSG_PERMUTATION: [usize; 16] = [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8];
 
-/// A chunk stack never needs more than one entry per bit of the chunk counter.
 const MAX_DEPTH: usize = 54;
 
 #[allow(clippy::too_many_arguments)]
@@ -56,12 +32,10 @@ fn g(state: &mut [u32; 16], a: usize, b: usize, c: usize, d: usize, mx: u32, my:
 }
 
 fn round(state: &mut [u32; 16], m: &[u32; 16]) {
-    // Columns.
     g(state, 0, 4, 8, 12, m[0], m[1]);
     g(state, 1, 5, 9, 13, m[2], m[3]);
     g(state, 2, 6, 10, 14, m[4], m[5]);
     g(state, 3, 7, 11, 15, m[6], m[7]);
-    // Diagonals.
     g(state, 0, 5, 10, 15, m[8], m[9]);
     g(state, 1, 6, 11, 12, m[10], m[11]);
     g(state, 2, 7, 8, 13, m[12], m[13]);
@@ -142,8 +116,6 @@ fn root_output_bytes(
     block_len: u32,
     flags: u32,
 ) -> [u8; OUT_LEN] {
-    // Only the first 32 output bytes are ever needed here, so this is the
-    // `counter = 0` block of the root XOF and nothing more.
     let words = compress(
         input_chaining_value,
         block_words,
@@ -215,7 +187,6 @@ impl ChunkState {
         }
     }
 
-    /// The chunk's output, as the pieces a root finalisation would need.
     fn output(&self) -> Output {
         Output {
             input_chaining_value: self.chaining_value,
@@ -274,8 +245,6 @@ fn parent_output(
     }
 }
 
-/// One pass of BLAKE3 over `input`, keyed by `key_words` and tagged with
-/// `flags`, producing the 32-byte root hash.
 fn hash_all(key_words: [u32; 8], flags: u32, input: &[u8]) -> [u8; OUT_LEN] {
     let mut chunk_state = ChunkState::new(key_words, 0, flags);
     let mut cv_stack = [[0_u32; 8]; MAX_DEPTH];
@@ -284,9 +253,6 @@ fn hash_all(key_words: [u32; 8], flags: u32, input: &[u8]) -> [u8; OUT_LEN] {
     let mut input = input;
     while !input.is_empty() {
         if chunk_state.len() == CHUNK_LEN {
-            // The finished chunk's CV is merged into the stack. The number of
-            // trailing 1-bits of the *new* chunk count says how many parent
-            // nodes are complete, which is what keeps the tree left-balanced.
             let chunk_cv = chunk_state.output().chaining_value();
             let total_chunks = chunk_state.chunk_counter + 1;
             let mut new_cv = chunk_cv;
@@ -307,8 +273,6 @@ fn hash_all(key_words: [u32; 8], flags: u32, input: &[u8]) -> [u8; OUT_LEN] {
         input = &input[take..];
     }
 
-    // Finalise: the current chunk is the rightmost subtree, folded into
-    // everything on the stack from the right.
     let mut output = chunk_state.output();
     let mut parent_nodes_remaining = cv_stack_len;
     while parent_nodes_remaining > 0 {
@@ -323,23 +287,15 @@ fn hash_all(key_words: [u32; 8], flags: u32, input: &[u8]) -> [u8; OUT_LEN] {
     output.root_output_bytes()
 }
 
-/// BLAKE3, plain hash mode. Used to bind each relay hop to the next, and the
-/// shape the differential test can compare against the reference crate.
 pub(crate) fn hash(input: &[u8]) -> [u8; OUT_LEN] {
     hash_all(IV, 0, input)
 }
 
-/// BLAKE3, keyed hash mode. Test-only for the same reason as [`hash`].
 #[cfg(test)]
 pub(crate) fn keyed_hash(key: &[u8; OUT_LEN], input: &[u8]) -> [u8; OUT_LEN] {
     hash_all(key_words_from_le_bytes(key), KEYED_HASH, input)
 }
 
-/// BLAKE3 `derive_key` mode with an arbitrary byte-string context.
-///
-/// Equivalent to `blake3::derive_key(context, key_material)` whenever `context`
-/// happens to be valid UTF-8, and defined for every other byte string as well —
-/// which is what this protocol needs.
 pub(crate) fn derive_key(context: &[u8], key_material: &[u8]) -> [u8; OUT_LEN] {
     let context_key = hash_all(IV, DERIVE_KEY_CONTEXT, context);
     hash_all(
@@ -351,17 +307,6 @@ pub(crate) fn derive_key(context: &[u8], key_material: &[u8]) -> [u8; OUT_LEN] {
 
 #[cfg(test)]
 mod tests {
-    //! Holds this implementation to the reference `blake3` crate.
-    //!
-    //! It exists only because that crate cannot hash a non-UTF-8 `derive_key`
-    //! context. Everything else about it — the compression function, the chunk
-    //! chaining, the tree merge — is meant to be the reference algorithm
-    //! exactly, so the reference crate is the oracle.
-    //!
-    //! The lengths sweep the points where the tree shape changes: block
-    //! boundaries, chunk boundaries, and the powers of two where a new parent
-    //! node is merged. A bug in the stack-merge logic hides at exactly those
-    //! sizes and nowhere else.
     fn interesting_lengths() -> Vec<usize> {
         let mut lengths = vec![0, 1, 2, 31, 32, 33, 63, 64, 65, 127, 128, 129];
         for chunks in 1..=9 {
@@ -375,8 +320,6 @@ mod tests {
     }
 
     fn pattern(len: usize) -> Vec<u8> {
-        // Not all-zero and not repeating with any power-of-two period, so a chunk
-        // that is fed into the tree at the wrong offset cannot coincidentally agree.
         (0..len)
             .map(|i| (i as u32).wrapping_mul(2654435761) as u8)
             .collect()
@@ -408,10 +351,6 @@ mod tests {
         }
     }
 
-    /// The mode the protocol actually uses. The reference crate can only be asked
-    /// for UTF-8 contexts, so this sweeps context *and* material lengths over
-    /// contexts that happen to be representable, which exercises the same code path
-    /// the binary contexts take.
     #[test]
     fn derive_key_matches_reference() {
         for context_len in [0, 1, 5, 63, 64, 65, 1023, 1024, 1025, 1216, 4096] {
@@ -427,8 +366,6 @@ mod tests {
         }
     }
 
-    /// Multi-byte UTF-8 keeps the context bytes non-ASCII while still being
-    /// expressible to the reference crate.
     #[test]
     fn derive_key_matches_reference_for_non_ascii_context() {
         for repeats in [1, 100, 500, 1000] {
@@ -442,25 +379,14 @@ mod tests {
         }
     }
 
-    /// Negative control for the three tests above.
-    ///
-    /// Each assertion is that two independent implementations agree. If the subject
-    /// silently ignored its input — or ignored the context, or the mode flags —
-    /// those assertions would still have to fail, and this test is what proves the
-    /// comparisons are load-bearing rather than vacuous.
     #[test]
     fn reference_disagrees_when_the_input_is_wrong() {
         let material = pattern(2000);
 
-        // A context that differs by one byte must produce a different key. If the
-        // context were being dropped, `derive_key` would be a plain keyed hash and
-        // this would pass trivially.
         let a = super::derive_key(b"context-a", &material);
         let b = super::derive_key(b"context-b", &material);
         assert_ne!(a, b, "derive_key ignores its context");
 
-        // The three modes must be distinct on identical input: the flag bytes are
-        // what separates them, and dropping them is a real and silent failure.
         let key = [0_u8; 32];
         assert_ne!(
             super::hash(&material),
@@ -473,8 +399,6 @@ mod tests {
             "keyed hash and derive_key are not separated"
         );
 
-        // And a truncated input must not agree, which is what catches a tree that
-        // stops merging early.
         assert_ne!(
             super::hash(&material),
             super::hash(&material[..material.len() - 1]),
@@ -482,17 +406,12 @@ mod tests {
         );
     }
 
-    /// The one derivation this whole layer is pinned to, taken from the reference
-    /// Go implementation rather than from either Rust crate:
-    /// `blake3.DeriveKey(k, "VLESS", []byte("material"))`.
     #[test]
     fn matches_recorded_go_output() {
         let expected =
             hex_literal("2bf7b4c8872dbfd2fedfb970ab8e0e4a1c00a187328b31174d0bba412131a74a");
         assert_eq!(super::derive_key(b"VLESS", b"material"), expected[..]);
 
-        // A binary context, which is the case neither Rust crate can express and
-        // the one the protocol actually relies on.
         let expected =
             hex_literal("2ba3b56c7d1770b4e0d60ecdb42fd8652fd5f69ef4e4a81b7c8c554484bfe542");
         assert_eq!(

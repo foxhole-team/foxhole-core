@@ -24,25 +24,9 @@ pub struct TlsConfig {
     pub min_version: Option<TlsVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_version: Option<TlsVersion>,
-    /// Key-exchange groups, most preferred first. A profile pins these to shape
-    /// its ClientHello; an empty list means hybrid-first, see
-    /// [`Self::allow_classical_only_key_exchange`].
+    /// Key-exchange groups in wire order; empty means hybrid-first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curve_preferences: Vec<CurveGroup>,
-    /// Permit a key exchange with no post-quantum group in it.
-    ///
-    /// `false`, and the default matters more than the flag. `curve_preferences`
-    /// *replaces* the provider's group list rather than reordering it, so a
-    /// profile that named `["x25519"]` to shape its hello used to silently drop
-    /// `X25519MLKEM768` and negotiate a classical-only key exchange. That is a
-    /// downgrade against a harvest-now-decrypt-later adversary, arriving as a
-    /// side effect of a cosmetic setting, which is the worst way for it to
-    /// arrive.
-    ///
-    /// So the hybrid is now prepended to any preference list that omits it, and
-    /// dropping it takes saying so here. A profile that sets this is making a
-    /// visible, reviewable choice; one that forgets the group keeps its
-    /// post-quantum protection.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_classical_only_key_exchange: bool,
     /// Encrypted Client Hello. Absent means the SNI travels in the clear, which
@@ -141,13 +125,6 @@ pub enum CurveGroup {
     X25519,
     Secp256r1,
     Secp384r1,
-    /// The post-quantum hybrid, draft-ietf-tls-ecdhe-mlkem.
-    ///
-    /// Nameable because `curve_preferences` *replaces* the provider's group
-    /// list rather than reordering it: without this variant, any profile that
-    /// set `curve_preferences` at all silently dropped the PQ group and sent a
-    /// classical-only hello. Chrome offers it first, so a profile that wants to
-    /// look like Chrome names it first.
     #[serde(rename = "x25519mlkem768", alias = "X25519MLKEM768")]
     X25519MlKem768,
 }

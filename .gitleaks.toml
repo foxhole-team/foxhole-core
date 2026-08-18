@@ -1,0 +1,13 @@
+title = "FoxCore gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "generated output and published deterministic cryptographic fixtures"
+condition = "OR"
+paths = [
+  '''(?:^|/)target(?:/.*)?$''',
+  '''(?:^|/)crates/proto-vless/src/encryption/params\.rs$''',
+  '''(?:^|/)fixtures/vless-encryption/vectors\.json$''',
+]

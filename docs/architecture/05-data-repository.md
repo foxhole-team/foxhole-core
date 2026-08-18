@@ -165,7 +165,7 @@ flowchart LR
     K4 --> K5["artifact structure re-parse"]
     K5 --> N["Rust core"]
     N --> N1["DNS: full re-verify, ruleset.rs:250"]
-    N --> N2["fingerprints: re-derive every digest, runtime_tables.rs:213"]
+    N --> N2["fingerprints: re-derive every digest, runtime_tables.rs:154-169"]
 ```
 
 Details of both stages are in [03 — Updates and data delivery](03-updates-and-data-delivery.md).

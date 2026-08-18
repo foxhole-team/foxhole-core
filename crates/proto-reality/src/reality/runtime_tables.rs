@@ -1,35 +1,3 @@
-//! The tap for the signed ClientHello table feed.
-//!
-//! [`fingerprint_vector`](super::fingerprint_vector) called this "the seam a
-//! signed fingerprint feed would later arrive through". This is that seam, from
-//! the other side: the same JSON the repository commits under `fingerprints/`,
-//! read at runtime and turned into the very same [`HelloProfile`] values the
-//! binary already carries.
-//!
-//! Three properties hold it in place, and none of them is a comment:
-//!
-//! * **The generator never crosses the network.** What arrives is a table of
-//!   code points, orders and constant bodies. Every one of them lands in a slot
-//!   this binary already knows how to encode; a byte the vocabulary below has no
-//!   variant for is a refusal, not an extension point.
-//! * **The feed cannot name a profile the binary does not implement.** Entries
-//!   are matched against [`RealityHelloProfile::ALL`] by name and anything else
-//!   is ignored. There is no path from a downloaded string to a new profile, a
-//!   new refusal, or a lifted one — those live in `foxcore-link` and in the
-//!   config enum, which this module cannot reach.
-//! * **A table is installed whole or not at all.** Parsing builds every profile
-//!   in the document before anything is published; the first malformed byte
-//!   drops the *entire* document and leaves whatever was in effect — in the
-//!   worst case the built-in tables, which are always a complete set. There is
-//!   no state in which a connection sends half a parrot.
-//!
-//! The digest each entry declares is re-derived here as well. It proves nothing
-//! against an attacker holding the signing key — the signature is checked before
-//! these bytes ever reach the core — but it does prove the table is the exact
-//! one the publishing pipeline hashed, rather than one assembled afterwards by
-//! someone with push access. A rewritten parrot is not a data error; it is a
-//! distinguishable client.
-
 use std::collections::BTreeMap;
 use std::io;
 use std::sync::RwLock;
@@ -45,42 +13,21 @@ use super::hello_profile::{
 use super::reality_key_exchange::NamedGroup;
 use super::reality_tls13_messages::INITIAL_RECORD_VERSION;
 
-/// The document schema this build reads. A feed that bumps it is telling us it
-/// changed shape, and the honest answer is the built-in tables until this
-/// binary is updated to match.
 const SUPPORTED_SCHEMA: u64 = 1;
 
-/// An installed document is held for the life of the process, so each distinct
-/// one costs memory that is never returned. Re-installing the *same* document
-/// is free (see [`install_fingerprint_tables`]); this caps how many genuinely
-/// different ones a single process will take, which turns an unbounded leak
-/// into a bounded one no realistic update cadence can reach.
 const MAX_DISTINCT_INSTALLS: usize = 32;
 
-/// What is currently in effect, indexed the way [`RealityHelloProfile::ALL`] is
-/// ordered. `None` in a slot means that profile keeps its built-in table.
 static INSTALLED: RwLock<Option<InstalledTables>> = RwLock::new(None);
 
 static DISTINCT_INSTALLS: AtomicUsize = AtomicUsize::new(0);
 
 struct InstalledTables {
-    /// SHA-256 of the whole document, so re-installing an identical one neither
-    /// leaks nor churns the lock.
     document_digest: [u8; 32],
     profiles: Vec<Option<&'static HelloProfile>>,
 }
 
-/// The table that writes this profile's bytes: the downloaded one when a
-/// verified document is in effect and carries it, the built-in one otherwise.
-///
-/// Deliberately infallible. Every path out of here returns a complete table,
-/// because the alternative a caller would have to handle — "no fingerprint" —
-/// is not a fallback, it is a connection that stands out from every browser on
-/// the network.
 pub(super) fn table_for(profile: RealityHelloProfile) -> &'static HelloProfile {
     let Ok(guard) = INSTALLED.read() else {
-        // A poisoned lock means some other thread panicked mid-install. The
-        // built-in set is always right, so it is also the right answer here.
         return profile.table();
     };
     guard
@@ -89,17 +36,6 @@ pub(super) fn table_for(profile: RealityHelloProfile) -> &'static HelloProfile {
         .unwrap_or_else(|| profile.table())
 }
 
-/// Install a table document that has already passed signature verification.
-///
-/// Returns how many of this build's profiles the document replaced. An error
-/// changes nothing: whatever was in effect stays in effect, and a process that
-/// has never installed anything keeps the built-in tables.
-///
-/// The caller is the only party that can establish *provenance* (who signed it)
-/// and *freshness* (that it is not a replayed older set). Everything else — the
-/// schema, the digests, the vocabulary, and whether each table can actually
-/// produce a hello — is re-established here, because "the app checked it" is not
-/// a property this crate can verify.
 pub fn install_fingerprint_tables(document: &[u8]) -> io::Result<usize> {
     let document_digest = sha256(document);
     if let Ok(guard) = INSTALLED.read()
@@ -117,8 +53,6 @@ pub fn install_fingerprint_tables(document: &[u8]) -> io::Result<usize> {
         ));
     }
 
-    // Counted before publishing so a burst of distinct documents cannot race
-    // past the cap; a rejected install has already returned above.
     if DISTINCT_INSTALLS.fetch_add(1, Ordering::SeqCst) >= MAX_DISTINCT_INSTALLS {
         DISTINCT_INSTALLS.fetch_sub(1, Ordering::SeqCst);
         return Err(refuse(
@@ -136,17 +70,12 @@ pub fn install_fingerprint_tables(document: &[u8]) -> io::Result<usize> {
     Ok(replaced)
 }
 
-/// Drop any installed document and go back to the built-in tables.
-///
-/// The app calls this when the feed is turned off or its stored document stops
-/// reading back cleanly. It cannot fail: the built-in set needs nothing.
 pub fn clear_fingerprint_tables() {
     if let Ok(mut guard) = INSTALLED.write() {
         *guard = None;
     }
 }
 
-/// Whether a downloaded document is currently writing the bytes.
 pub fn using_downloaded_fingerprint_tables() -> bool {
     INSTALLED
         .read()
@@ -161,9 +90,6 @@ fn slot_index(profile: RealityHelloProfile) -> Option<usize> {
         .position(|candidate| *candidate == profile)
 }
 
-// ----------------------------------------------------------------- document
-
-/// Parse the whole document, or fail without publishing anything.
 fn parse_document(document: &[u8]) -> io::Result<Vec<Option<&'static HelloProfile>>> {
     if document.len() > MAX_DOCUMENT_BYTES {
         return Err(refuse("is larger than any table document this build reads"));
@@ -202,8 +128,6 @@ fn parse_document(document: &[u8]) -> io::Result<Vec<Option<&'static HelloProfil
         if seen.insert(name, ()).is_some() {
             return Err(refuse(&format!("names the profile {name} twice")));
         }
-        // A name this build has no table for is data about some other build,
-        // not an instruction to grow one. Skipped, never invented.
         let Some(profile) = profile_named(name) else {
             continue;
         };
@@ -218,8 +142,6 @@ fn parse_document(document: &[u8]) -> io::Result<Vec<Option<&'static HelloProfil
     Ok(slots)
 }
 
-/// 4 MiB, the same ceiling the app's downloader enforces. The committed set is
-/// under 100 KiB; anything at this size is not a table.
 const MAX_DOCUMENT_BYTES: usize = 4 * 1024 * 1024;
 
 fn profile_named(name: &str) -> Option<RealityHelloProfile> {
@@ -249,13 +171,7 @@ fn verify_declared_digest(name: &str, declared: Option<&Value>, table: &Value) -
     Ok(())
 }
 
-// ------------------------------------------------------------------ profile
-
 fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'static HelloProfile> {
-    // The name is the *compiled* one, not a leaked copy of the document's
-    // string. Every error a hello raises therefore names a profile this build
-    // implements, and no downloaded byte can appear in a diagnostic as if it
-    // were one of ours.
     let name = profile.table().name;
     let table = table
         .as_object()
@@ -266,10 +182,6 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'st
             .ok_or_else(|| refuse(&format!("profile {name} carries no {key}")))
     };
 
-    // Fields the generator does not read from a table, and therefore may not be
-    // told to change. Refusing a document that disagrees is the difference
-    // between "the feed supplies values" and "the feed supplies values we
-    // silently ignore".
     require_frozen(name, "legacy_version", field("legacy_version")?, 0x0303)?;
     require_frozen(
         name,
@@ -336,8 +248,6 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'st
                     "profile {name} sends an ECH GREASE extension but declares no ech_grease shape"
                 )));
             }
-            // Unused by a profile with no ECH GREASE slot; the built-in tables
-            // carry the Chrome shape in the same position for the same reason.
             CHROME_ECH_GREASE
         }
         Some(shape) => build_ech_grease(name, shape)?,
@@ -352,16 +262,11 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'st
             .and_then(Value::as_bool)
             .ok_or_else(|| refuse(&format!("profile {name} does not say whether it permutes")))?,
         ech_grease,
-        // Presence *is* the statement: the field is an object explaining the
-        // rule, and no table has ever carried it set to false.
         reuse_classical_key_share: !matches!(
             table.get("key_share_reuse"),
             None | Some(Value::Null)
         ),
     };
-    // The same gate every built-in table passes on every hello. A downloaded
-    // table that cannot produce a hello must fail here, where the answer is
-    // "keep the built-in one", not at dial time where it is a dead connection.
     built.validate()?;
     Ok(Box::leak(Box::new(built)))
 }
@@ -439,8 +344,6 @@ fn build_versions(name: &str, value: &Value) -> io::Result<Vec<VersionSlot>> {
         .collect()
 }
 
-/// The extension list, in table order, with each slot resolved to the one thing
-/// this build knows how to encode there.
 fn build_extensions(
     name: &str,
     value: &Value,
@@ -498,9 +401,6 @@ fn build_extensions(
             },
             (ext::ENCRYPTED_CLIENT_HELLO, "per_connection_grease") => ExtensionSlot::EchGrease,
             (ext::PADDING, "conditional") => ExtensionSlot::Padding,
-            // Anything else has to be a constant blob, and a constant blob has
-            // to be hex. A body naming a rule this build does not implement is
-            // refused rather than approximated with the bytes next to it.
             (_, other) => ExtensionSlot::Constant {
                 extension_type,
                 body: leak(hex_body(name, other)?),
@@ -511,9 +411,7 @@ fn build_extensions(
     Ok(slots)
 }
 
-/// HPKE KDF id, RFC 9180 §7.2.
 const HPKE_KDF_HKDF_SHA256: u16 = 0x0001;
-/// HPKE AEAD ids, RFC 9180 §7.3.
 const HPKE_AEAD_AES_128_GCM: u16 = 0x0001;
 const HPKE_AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
@@ -592,11 +490,7 @@ fn build_ech_grease(name: &str, value: &Value) -> io::Result<EchGreaseShape> {
     })
 }
 
-/// No browser GREASEs an ECH payload anywhere near this; the bound is here so a
-/// table cannot ask for a hello megabytes long.
 const MAX_ECH_GREASE_PAYLOAD: u64 = 1024;
-
-// -------------------------------------------------------------------- bytes
 
 fn entries<'a>(name: &str, field: &str, value: &'a Value) -> io::Result<&'a Vec<Value>> {
     value
@@ -619,8 +513,6 @@ fn entry_code_point(name: &str, field: &str, entry: &Value) -> io::Result<u16> {
     hex16(name, text)
 }
 
-/// `signature_algorithms` and `compression_methods` are lists of code points,
-/// spelled either as bare strings or as `[value, name]` pairs.
 fn code_points(name: &str, field: &str, value: &Value) -> io::Result<Vec<u16>> {
     entries(name, field, value)?
         .iter()
@@ -638,8 +530,6 @@ fn code_points(name: &str, field: &str, value: &Value) -> io::Result<Vec<u16>> {
         .collect()
 }
 
-/// A `uint16` list length followed by the list, which is how both
-/// `signature_algorithms` and `delegated_credentials` are framed.
 fn length_prefixed(values: Vec<u16>) -> Vec<u8> {
     let mut out = Vec::with_capacity(2 + values.len() * 2);
     out.extend_from_slice(&((values.len() * 2) as u16).to_be_bytes());
@@ -661,7 +551,6 @@ fn require_frozen(name: &str, field: &str, value: &Value, expected: u16) -> io::
     Ok(())
 }
 
-/// `"0x1301"`, exactly as the files spell every code point.
 fn hex16(name: &str, text: &str) -> io::Result<u16> {
     let digits = text.strip_prefix("0x").ok_or_else(|| {
         refuse(&format!(
@@ -672,8 +561,6 @@ fn hex16(name: &str, text: &str) -> io::Result<u16> {
         .map_err(|_| refuse(&format!("profile {name} code point {text} is not hex")))
 }
 
-/// A constant extension body: hex pairs, with whitespace allowed between the
-/// groups a reviewer reads.
 fn hex_body(name: &str, text: &str) -> io::Result<Vec<u8>> {
     let digits: String = text
         .chars()
@@ -701,12 +588,8 @@ fn hex_body(name: &str, text: &str) -> io::Result<Vec<u8>> {
         .collect()
 }
 
-/// Chrome's longest constant body is under 40 bytes. The cap keeps a table from
-/// describing a hello no browser could send.
 const MAX_CONSTANT_BODY_BYTES: usize = 512;
 
-/// JSON with sorted keys and no whitespace: the convention the files document
-/// in `fingerprint_sha256_covers`, and the one the publishing pipeline hashes.
 fn canonical_json(value: &Value) -> String {
     let mut out = String::new();
     append_canonical(value, &mut out);
@@ -758,11 +641,6 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-/// Owned data promoted to the `'static` the table types require.
-///
-/// A table lives for the life of the process by construction — a connection
-/// holds `&'static HelloProfile` across await points — so the allocation is
-/// never returned. That is what [`MAX_DISTINCT_INSTALLS`] bounds.
 fn leak<T: 'static>(values: Vec<T>) -> &'static [T] {
     Box::leak(values.into_boxed_slice())
 }
@@ -788,11 +666,6 @@ mod tests {
             .join("fingerprints")
     }
 
-    /// Every committed vector, wrapped the way the signed feed carries them.
-    ///
-    /// Read from the directory rather than a hard-coded list so a profile added
-    /// to the repository is covered here the day it lands, instead of the day
-    /// someone remembers to extend a list.
     fn committed_document() -> Value {
         let mut files: Vec<PathBuf> = fs::read_dir(fingerprints_dir())
             .expect("fingerprints directory")
@@ -817,9 +690,6 @@ mod tests {
         })
     }
 
-    /// The profiles the committed set actually covers. A build can implement
-    /// more (a table landing before its vector does); those simply keep their
-    /// built-in table, which is the behaviour this module promises.
     fn committed_profiles(document: &Value) -> Vec<RealityHelloProfile> {
         document["profiles"]
             .as_array()
@@ -833,8 +703,6 @@ mod tests {
         parse_document(document.to_string().as_bytes())
     }
 
-    /// `HelloProfile` is deliberately not `Debug` — it is a table, not a
-    /// diagnostic — so a refusal is read for its message rather than unwrapped.
     fn refusal(document: &Value) -> String {
         match parse(document) {
             Ok(_) => panic!("document was accepted; it must be refused"),
@@ -849,8 +717,6 @@ mod tests {
         slots[slot_index(profile).expect("index")]
     }
 
-    /// Re-derive every profile digest, so a test can edit a table and still
-    /// present a self-consistent document.
     fn rehash(mut document: Value) -> Value {
         for entry in document["profiles"].as_array_mut().expect("profiles") {
             let canonical = canonical_json(&entry["fingerprint"]);
@@ -859,7 +725,6 @@ mod tests {
         document
     }
 
-    /// Edit one profile's table in place and re-hash the document around it.
     fn edited(name: &str, edit: impl Fn(&mut Value)) -> Value {
         let mut document = committed_document();
         let entry = document["profiles"]
@@ -872,8 +737,6 @@ mod tests {
         rehash(document)
     }
 
-    /// A profile the committed set covers, for the tests that need to point at
-    /// one without caring which build is current.
     fn a_covered_profile() -> (RealityHelloProfile, &'static str) {
         let document = committed_document();
         let profile = *committed_profiles(&document)
@@ -882,13 +745,6 @@ mod tests {
         (profile, profile.table().name)
     }
 
-    /// The load-bearing test: a table that arrived as bytes reproduces, slot for
-    /// slot, the table the binary was compiled with.
-    ///
-    /// This is what makes the feed safe to switch on. If the JSON and the Rust
-    /// ever disagree, the downloaded set would send a hello nobody sends —
-    /// which is the failure the whole mechanism exists to avoid, and it fails
-    /// here rather than on someone's connection.
     #[test]
     fn every_committed_table_loads_back_to_the_compiled_one() {
         let document = committed_document();
@@ -927,14 +783,10 @@ mod tests {
         }
     }
 
-    /// A table really does supply the bytes: change one and the loaded profile
-    /// changes with it.
     #[test]
     fn a_changed_body_reaches_the_loaded_table() {
         let (profile, name) = a_covered_profile();
         let document = edited(name, |fingerprint| {
-            // `renegotiation_info` is one byte in every table, and none of the
-            // structural checks depend on its value.
             let slot = fingerprint["extension_order"]
                 .as_array_mut()
                 .expect("extension_order")
@@ -1047,8 +899,6 @@ mod tests {
 
     #[test]
     fn a_table_that_cannot_produce_a_hello_is_refused() {
-        // One key_share extension is a ClientHello; zero is not, and
-        // `HelloProfile::validate` is what says so.
         let (_, name) = a_covered_profile();
         let document = edited(name, |fingerprint| {
             let slots = fingerprint["extension_order"]
@@ -1063,9 +913,6 @@ mod tests {
         assert!(error.contains("key_share"), "{error}");
     }
 
-    /// A cipher suite the build cannot negotiate, offered as if it could. The
-    /// hello would complete and then fail on the ServerHello; refusing the
-    /// table says so at load time instead.
     #[test]
     fn a_table_offering_an_unimplemented_suite_as_negotiable_is_refused() {
         let (_, name) = a_covered_profile();
@@ -1084,8 +931,6 @@ mod tests {
         assert!(error.contains("does not implement it"), "{error}");
     }
 
-    /// An extension body that is neither hex nor a rule this build implements.
-    /// Approximating it with the bytes next to it would be a silent lie.
     #[test]
     fn an_unreadable_extension_body_is_refused() {
         let (_, name) = a_covered_profile();
@@ -1114,7 +959,6 @@ mod tests {
             let _ = refusal(&document);
         }
         assert!(parse_document(b"not json at all").is_err());
-        // Truncation: the front half of a valid document.
         let document = committed_document().to_string();
         assert!(parse_document(&document.as_bytes()[..document.len() / 2]).is_err());
     }
@@ -1136,8 +980,6 @@ mod tests {
         assert!(error.contains("no table for any profile"), "{error}");
     }
 
-    /// Installing the committed set changes no bytes — it is the same table —
-    /// so this is safe to run beside every other test in the binary.
     #[test]
     fn installing_the_committed_document_is_a_no_op_on_the_bytes() {
         let document = committed_document();
@@ -1150,7 +992,6 @@ mod tests {
             assert_eq!(in_effect.extensions, profile.table().extensions);
             assert_eq!(in_effect.cipher_suites, profile.table().cipher_suites);
         }
-        // Re-installing the identical document must not leak a second copy.
         let before = DISTINCT_INSTALLS.load(Ordering::SeqCst);
         install_fingerprint_tables(document.as_bytes()).expect("re-install");
         assert_eq!(DISTINCT_INSTALLS.load(Ordering::SeqCst), before);

@@ -95,9 +95,6 @@ impl Hysteria2Conn {
         let connecting = endpoint
             .connect(server_addr, sni)
             .map_err(|e| other(format!("quic connect config: {e}")))?;
-        // The profile's budget, not a constant in this file. Its default is the
-        // 15 seconds that used to be hardcoded here, so a profile that says
-        // nothing behaves exactly as it did.
         let conn = tokio::time::timeout(dialer.handshake_timeout(), connecting)
             .await
             .map_err(|_| {
@@ -465,14 +462,10 @@ fn build_client_config(cfg: &Hysteria2Config) -> io::Result<quinn::ClientConfig>
 /// The handshake-shaping knobs both QUIC outbounds set the same way.
 ///
 /// The values are [`foxcore_transport::quic`]'s, so hysteria2 and TUIC cannot
-/// drift apart; only the three lines that hand them to quinn live per crate,
-/// because `foxcore-transport` deliberately does not depend on quinn.
 pub(crate) mod quic_shape {
     use foxcore_transport::quic;
     use quinn_proto::{ConnectionId, ConnectionIdGenerator, RandomConnectionIdGenerator};
 
-    /// An 8-byte random DCID for the first Initial, rather than quinn's
-    /// 20-byte default. See [`quic::INITIAL_DESTINATION_CONNECTION_ID_BYTES`].
     pub(crate) fn initial_destination_connection_id() -> ConnectionId {
         RandomConnectionIdGenerator::new(quic::INITIAL_DESTINATION_CONNECTION_ID_BYTES)
             .generate_cid()
@@ -483,9 +476,6 @@ pub(crate) mod quic_shape {
         transport.stream_receive_window(quic::STREAM_RECEIVE_WINDOW_BYTES.into());
     }
 
-    /// Endpoint-level shaping. Kept separate from the transport config because
-    /// hysteria2 already builds an [`quinn::EndpointConfig`] for Salamander's
-    /// payload ceiling and TUIC has to start building one.
     pub(crate) fn apply_endpoint_shape(endpoint: &mut quinn::EndpointConfig) {
         endpoint.grease_quic_bit(quic::GREASE_QUIC_BIT);
     }
@@ -570,8 +560,6 @@ mod tests {
         }
     }
 
-    /// The QUIC PING spacing is what costs a sleeping handset its radio, so it
-    /// has to come from the profile rather than a constant in this file.
     #[test]
     fn quic_timing_follows_the_profile() {
         let (idle, keepalive) = quic_timing(&timing_config(45_000, 120_000)).unwrap();
@@ -582,12 +570,6 @@ mod tests {
         );
     }
 
-    /// The handshake budget is the profile's, not a constant in this file.
-    ///
-    /// Dialled at a socket that is bound and never answers, so the QUIC
-    /// handshake can only end by expiring. The elapsed bound is the assertion
-    /// with teeth: with the old hardcoded 15 seconds this would still return
-    /// `TimedOut`, thirty times later.
     #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
     #[tokio::test]
     async fn the_quic_handshake_budget_comes_from_the_profile() {
@@ -613,8 +595,6 @@ mod tests {
         );
     }
 
-    /// And the default is exactly what was hardcoded, so a profile that says
-    /// nothing about it behaves as it always did.
     #[test]
     fn the_default_handshake_budget_is_the_fifteen_seconds_that_was_hardcoded() {
         assert_eq!(

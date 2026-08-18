@@ -1,13 +1,3 @@
-//! The `encryption=` grammar lives in `foxcore-api`.
-//!
-//! It has to: `foxcore-link` refuses unsupported variants by name at import
-//! time and cannot depend on a protocol crate, while this crate needs the same
-//! parse to drive the handshake. `foxcore-api` is the only thing both see.
-//!
-//! The names are prefixed there because that crate has a flat public namespace;
-//! they are aliased back to short ones here, where the module already says what
-//! they are about.
-
 pub use foxcore_api::{
     VLESS_ENCRYPTION_ML_KEM_768_CIPHERTEXT_LEN as ML_KEM_768_CIPHERTEXT_LEN,
     VLESS_ENCRYPTION_ML_KEM_768_KEY_LEN as ML_KEM_768_ENCAPSULATION_KEY_LEN,

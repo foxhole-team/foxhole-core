@@ -352,38 +352,9 @@ struct TlsCapabilities {
     /// Protocols in this build that refuse `tls.ech` at config time, so an app
     /// can grey the switch out instead of offering one that fails on load.
     ech_refused_by: &'static [&'static str],
-    /// The REALITY ClientHello tables this build actually writes.
-    ///
-    /// The `unsupported` entry `reality_other_fingerprints` says what is *not*
-    /// implemented and stays there because it is still true. It cannot say what
-    /// happens to a link that asks for one, and that is the question a UI has:
-    /// the answer is not "the node is refused".
     reality_fingerprints_implemented: &'static [&'static str],
-    /// `fp=` values a link may carry that are accepted and answered with
-    /// [`Self::reality_fingerprint_substitute`] instead of the parrot named.
-    ///
-    /// The import succeeds and reports a dropped option; the node works. An app
-    /// should surface the substitution rather than the word "unsupported",
-    /// because the user's node is not broken — its hello is Chrome's.
-    ///
-    /// A name outside this list and outside the implemented set is not a uTLS
-    /// parrot at all, and is refused as malformed rather than substituted.
     reality_fingerprints_substituted: &'static [&'static str],
-    /// What the names above are answered with.
     reality_fingerprint_substitute: &'static str,
-    /// uTLS parrot names this build refuses on a REALITY link, rather than
-    /// substituting. Two reasons, and a UI should say which:
-    ///
-    /// * `360` and `android` are TLS 1.2 parrots. They send no `key_share`
-    ///   extension, and REALITY derives its authentication key from the
-    ///   client's x25519 share, so no REALITY handshake is possible with that
-    ///   hello. Substituting would give the user a working node wearing a
-    ///   fingerprint they did not ask for; refusing says why.
-    ///
-    /// `randomized` used to be here for a second reason — it names a uTLS
-    /// *generator*, not a profile, and a fixed table under that name would be
-    /// a constant fingerprint pretending to vary. The generator is now ported,
-    /// so it moved to `reality_fingerprints_implemented`.
     reality_fingerprints_refused: &'static [&'static str],
 }
 
@@ -776,13 +747,6 @@ pub(crate) fn capabilities_json() -> &'static str {
                         // through a path that cannot frame it.
                         "vision_udp443",
                         "websocket_early_data",
-                        // Still true, and now much narrower than it was: the
-                        // implemented set covers Chrome, Edge, Safari, iOS, QQ
-                        // and Firefox, so what is left unimplemented is the
-                        // TLS 1.2 parrots `360` and `android`. They send no
-                        // `key_share`, which REALITY needs, so a link naming
-                        // one is refused rather than substituted — see
-                        // `reality_fingerprints_refused`.
                         "reality_other_fingerprints",
                         "reality_mldsa65",
                         "reality_crawler_fallback",
@@ -1020,11 +984,6 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "i1_i5_init_packets",
                         "init_packet_timestamp_tag",
                         "conf_file_import",
-                        // AWG 2.0 ranged headers. This was declared *unsupported* while
-                        // `AmneziaHeaderRange`, `parse_amnezia_header_range` and
-                        // `HeaderRange::pick` all implemented it — a capability document that
-                        // denies what the parser accepts makes a fail-closed app refuse a
-                        // profile the core would have carried.
                         "h1_h4_ranges",
                     ],
                     unsupported: &["endpoint_roaming", "server_role", "vpn_container_link"],
@@ -1140,10 +1099,6 @@ pub(crate) fn capabilities_json() -> &'static str {
                 ech_grease: true,
                 ech_from_https_rr: false,
                 ech_refused_by: &["hysteria2", "tuic", "shadowtls"],
-                // Nine real tables, each pinned by a committed vector in
-                // `fingerprints/`. Seven are transcribed from uTLS; `chrome_151`
-                // and `firefox_153` are transcribed from a first-party capture,
-                // because uTLS has no table for either shipping build.
                 reality_fingerprints_implemented: &[
                     "chrome_151",
                     "chrome_133",
@@ -1154,21 +1109,9 @@ pub(crate) fn capabilities_json() -> &'static str {
                     "qq_11_1",
                     "firefox_153",
                     "firefox_148",
-                    // Not a table: one of the modern profiles above, drawn once
-                    // per process, the way sing-box does it.
                     "random",
-                    // Not a table either, and not one of the above: uTLS'
-                    // `generateRandomizedSpec`, drawn afresh per connection. It
-                    // is the one name here whose JA4 is not stable between
-                    // connections, which a UI offering it should say.
                     "randomized",
                 ],
-                // Kept in step with `UTLS_PARROT_NAMES` in `foxcore-link` by
-                // `the_substituted_fingerprints_are_the_ones_the_parser_accepts`.
-                // Nothing is substituted any more: every name that has a uTLS
-                // table here has a real one. The two keys stay because ABI v1
-                // consumers already read them, and because a future
-                // not-yet-transcribed parrot would use them again.
                 reality_fingerprints_substituted: &[],
                 reality_fingerprint_substitute: "chrome_151",
                 reality_fingerprints_refused: &["360", "android"],
@@ -1481,16 +1424,8 @@ mod schema {
 mod tests {
     use super::*;
 
-    /// The ABI-v1 capabilities document, exactly as it was frozen.
     const ABI_V1_FIXTURE: &str = include_str!("../../../fixtures/abi/v1/capabilities.json");
 
-    /// `reality_other_fingerprints` stays in `unsupported` because it is still
-    /// true — `360` and `android` have no hello table here and are refused.
-    /// What was missing is that a link naming any other parrot still imports,
-    /// and the `tls` keys below are where that is said.
-    ///
-    /// The two lists have to agree with the parser or the document is a second
-    /// opinion about the parser's behaviour rather than a report of it.
     #[test]
     fn the_substituted_fingerprints_are_the_ones_the_parser_accepts() {
         let document: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
@@ -1516,11 +1451,6 @@ mod tests {
             .map(|value| value.as_str().unwrap())
             .collect();
 
-        // Every parrot name the parser knows is accounted for exactly once, as
-        // implemented, substituted or refused. The build-version suffixes
-        // (`chrome_133`, `edge_85`, ...) are this document's own spelling of
-        // the short names the links use, so they are mapped back before the
-        // comparison; `""` and `"chrome"` are aliases of the default table.
         fn short(name: &str) -> &str {
             match name {
                 "chrome_151" | "chrome_133" | "chrome_131" => "chrome",
@@ -1549,7 +1479,6 @@ mod tests {
             "the capabilities document and foxcore-link disagree about uTLS parrot names"
         );
 
-        // A name cannot be in two groups at once.
         for name in &refused {
             assert!(
                 !substituted.contains(name),
@@ -1561,14 +1490,11 @@ mod tests {
             );
         }
 
-        // The substitute has to be a table this build really writes.
         assert!(
             implemented.contains(&tls["reality_fingerprint_substitute"].as_str().unwrap()),
             "the substitute hello is not one of the implemented tables"
         );
 
-        // And the honest `unsupported` entry is still there: none of the
-        // substituted names is actually implemented.
         let vless = document["protocols"]
             .as_array()
             .unwrap()
@@ -1586,12 +1512,6 @@ mod tests {
         );
     }
 
-    /// The frozen document must still be readable: every key and every list
-    /// entry ABI v1 published is still present, and no `true` became `false`.
-    ///
-    /// This is the same rule `scripts/abi-compare-json.py` applies in the ABI
-    /// gate, run here so a capabilities edit cannot break v1 without a test
-    /// failing on a developer's machine first.
     #[test]
     fn the_frozen_abi_v1_document_is_still_readable() {
         let old: serde_json::Value = serde_json::from_str(ABI_V1_FIXTURE).unwrap();
@@ -1601,9 +1521,6 @@ mod tests {
         assert!(problems.is_empty(), "ABI v1 regressions: {problems:#?}");
     }
 
-    /// Additive-only comparison. Keys and list entries may appear, never
-    /// vanish; `unsupported` is the documented inverse, because losing an entry
-    /// there means something became supported.
     fn compare_abi(
         path: &str,
         old: &serde_json::Value,
@@ -1644,10 +1561,7 @@ mod tests {
             (Value::Bool(true), Value::Bool(false)) => {
                 problems.push(format!("{path}: true -> false"));
             }
-            _ => {
-                // `core_version` is expected to move; the three pinned version
-                // numbers are checked by `capability_document_is_versioned_and_truthful`.
-            }
+            _ => {}
         }
     }
 

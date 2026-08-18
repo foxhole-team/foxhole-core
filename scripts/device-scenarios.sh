@@ -1,25 +1,4 @@
 #!/usr/bin/env bash
-# Drive the on-device harness and render a verdict per scenario.
-#
-#   scripts/device-scenarios.sh <serial> install <apk>
-#   scripts/device-scenarios.sh <serial> push <config-dir>
-#   scripts/device-scenarios.sh <serial> baseline
-#   scripts/device-scenarios.sh <serial> protocol <name> [soak-seconds]
-#   scripts/device-scenarios.sh <serial> matrix <name> [name...]
-#   scripts/device-scenarios.sh <serial> lifecycle <cycles>
-#   scripts/device-scenarios.sh <serial> policy <policy-name>
-#   scripts/device-scenarios.sh <serial> soak <name> <minutes> [interval-s]
-#   scripts/device-scenarios.sh <serial> tor <config> <host.onion> [off-pol] [on-pol]
-#   scripts/device-scenarios.sh <serial> netchange
-#
-# Config files are named by protocol and live in the app's own files directory;
-# only the *name* ever travels through `am start`, never the config body — a
-# profile on a command line ends up in `ps`, in the shell history and in the
-# activity manager's own log.
-#
-# Nothing here decides whether a run passed. The verdict comes from logcat lines
-# the harness prints, so a scenario that silently did nothing reads as missing
-# evidence rather than as a pass.
 set -euo pipefail
 
 ADB="${ADB:-$HOME/Library/Android/sdk/platform-tools/adb}"
@@ -40,7 +19,6 @@ start() {
     device shell am start -n "$ACTIVITY" "$@" >/dev/null
 }
 
-# Everything the harness logged since the marker, protocol output only.
 harvest() {
     device logcat -d -s "$TAG"
 }
@@ -63,8 +41,6 @@ case "$command" in
     install)
         apk="${1:?install needs an apk path}"
         device install -r -g "$apk"
-        # Without this the first `am start` raises the consent dialog and, with
-        # no one to tap it, the run dies as "VPN permission denied".
         device shell appops set "$PKG" ACTIVATE_VPN allow
         device shell "run-as $PKG mkdir -p files"
         echo "installed on $serial"
@@ -91,10 +67,6 @@ case "$command" in
     protocol)
         name="${1:?protocol needs a config name}"
         soak="${2:-20}"
-        # Force-stop first. A VpnService that has already run keeps its process
-        # and its foreground notification alive, and the next `am start` was
-        # observed to be swallowed rather than delivered — the run then produced
-        # no log lines at all, which reads exactly like a protocol that failed.
         device shell am force-stop "$PKG"
         sleep 2
         device logcat -c
@@ -119,9 +91,6 @@ case "$command" in
     lifecycle)
         cycles="${1:-10}"
         device logcat -c
-        # The first config in the directory is as good as any: this scenario is
-        # about fds, threads and RSS returning to where they started, not about
-        # which protocol carried the bytes.
         name="${FOXCORE_DEVICE_PROFILE:-vless}"
         start --es cmd lifecycle --es cfg "$FILES/$name.json" --ez with_network true \
             --ei cycles "$cycles"
@@ -153,10 +122,6 @@ case "$command" in
         harvest | rg 'NETCHANGE|STATS AFTER_NETCHANGE' | tail -4
         ;;
 
-    # D13: the stop path under abandoned platform work. Start/stop cycles never
-    # reproduced it — each new flow costs one attribution call whose timeout
-    # cancels the future but not the blocking call under it, so the queue only
-    # builds under flow churn.
     churn)
         name="${1:?churn needs a config name}"
         flows="${2:-300}"
@@ -171,9 +136,6 @@ case "$command" in
         device shell am force-stop "$PKG"
         ;;
 
-    # Continuity: a lane held blocked across an interruption, released only by an
-    # explicit confirmation. The negative half is the point — held must mean
-    # blocked, not quietly direct.
     continuity)
         name="${1:?continuity needs a config name}"
         policy="${2:-pol-hold-netswitch}"
@@ -193,7 +155,6 @@ case "$command" in
         device shell am force-stop "$PKG"
         ;;
 
-    # The kill switch has to reach a transfer that is already running.
     killdl)
         name="${1:?killdl needs a config name}"
         policy="${2:-pol-kill-on}"
@@ -211,8 +172,6 @@ case "$command" in
         device shell am force-stop "$PKG"
         ;;
 
-    # `.i2p` through the loopback contract. The stub is not i2pd and cannot reach
-    # an eepsite; it proves the core's half — fake-IP gate, route, fail-closed.
     i2p)
         name="${1:-overlays}"
         device shell am force-stop "$PKG"
@@ -236,15 +195,6 @@ case "$command" in
         device shell am force-stop "$PKG"
         ;;
 
-    # A live `.onion` through the Tor lane, then the gate shut and reopened on
-    # the same tunnel. `CONNECTED` on its own proves nothing here — the local
-    # stack completes the handshake — so the verdict comes from the lane
-    # counters, and the half that matters is the closed gate: the flow must be
-    # blocked, not quietly sent to the clearnet.
-    #
-    # The chmod is not tidiness. Arti checks the permissions of the whole
-    # directory chain, and an app files/ dir left group- or world-writable makes
-    # bootstrap fail with a filesystem error nobody would connect to Tor.
     tor)
         name="${1:-ov-tor}"
         onion="${2:?tor needs an .onion host}"
@@ -255,13 +205,8 @@ case "$command" in
         device shell "run-as $PKG sh -c 'mkdir -p files/tor/state files/tor/cache;
             chmod 700 files files/tor files/tor/state files/tor/cache'"
         device logcat -c
-        # Arti's first bootstrap runs minutes; with saved state it is seconds.
         start --es cmd start --es cfg "$FILES/$name.json" --ez with_network true \
             --ei soak 600
-        # Generous on purpose: this returns the moment either pattern shows, and
-        # a first Arti bootstrap on a slow link runs well past the few minutes a
-        # cached one takes. A wait shorter than the config's own bootstrap budget
-        # reports "did not come up" while the core is still legitimately working.
         wait_for 'EXIT_SET phase=tunnel|RESULT start_failed|CMD start failed' 960 ||
             echo "engine did not come up" >&2
         harvest | rg 'START handle|RESULT start_failed|CMD start failed' | tail -3
@@ -286,9 +231,6 @@ case "$command" in
         device shell am force-stop "$PKG"
         ;;
 
-    # One large upload in one flow. Three of three of these died at 0.4-1.4 MiB
-    # on a clean link, back when the backlog ceiling was a volume
-    # verdict. The verdict here is written == offered, not the HTTP status.
     upload)
         name="${1:-vless}"
         mib="${2:-32}"
@@ -306,17 +248,6 @@ case "$command" in
         device shell am force-stop "$PKG"
         ;;
 
-    # A push channel: silent for longer than the old 300 s TCP timeout, then it
-    # has to still be there. IMAP/143 is the sink because RFC 3501 forbids the
-    # server hanging up first inside 30 minutes, so a death at six is ours.
-    #
-    # Exchange rather than Gmail: Gmail refuses 143 outright (TLS-only on 993),
-    # which would have made this row a probe of the sink rather than of the core.
-    #
-    # `pushchan`, not `push`: `push` is already the config-upload command above,
-    # and a second case with the same label is dead code the shell never reaches.
-    # It cost this row one run — the scenario reported nothing at all, which read
-    # as a harness that had not been built rather than as a name collision.
     pushchan)
         name="${1:-vless}"
         idle="${2:-360}"

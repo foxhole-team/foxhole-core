@@ -34,31 +34,6 @@ description = "JNI boundary for FoxCore"
 # still what decides.
 default = ["shipped"]
 
-# What the shipped library contains.
-#
-# `tor` is in here by decision, not by drift: the product is a privacy product,
-# and Tor being a build flag meant a release either had it or did not depending
-# on who typed the build command. The price is known and accepted — Arti carries
-# a static SQLite and roughly doubles the artifact; the public README records
-# the feature decision while release artifacts make the size measurable.
-#
-# Everything that follows from putting it here is followed through rather than
-# left implied: scripts/tor-rsa-gate.sh moved out of the supply-chain job into
-# the main gate, because RUSTSEC-2023-0071 is now an advisory about code in
-# every shipped .so; and deny.toml — the policy for the graph that ships — now
-# carries Arti's findings itself instead of borrowing them from a second file.
-#
-# `onion-service` is also deliberate: public-beta file sharing publishes only
-# through Tor and has no clearnet fallback. proto-tor forces Arti's primary
-# keystore to the in-memory ephemeral implementation, so stopping the engine
-# destroys the onion identity together with the share capability. The wider
-# dependency/licence graph is checked by the ordinary shipped-graph policy.
-#
-# Nothing may be dropped from this list without the app losing a feature it
-# already offers: `fixtures/abi/v1/capabilities.json` freezes `compiled: true`
-# for every protocol here, and scripts/abi-compare-json.py treats a `true` that
-# became `false` as an incompatible change for exactly that reason — an
-# installed app would keep offering a button the core can no longer answer.
 shipped = [
     "vless",
     "vmess",
@@ -92,38 +67,6 @@ anytls = ["foxcore-runtime/anytls"]
 shadowtls = ["foxcore-runtime/shadowtls"]
 wireguard = ["foxcore-runtime/wireguard"]
 
-# The component and share JNI surface: `FoxholeNativeComponents_*` (leases, web
-# apps, file-share registration, component events, authorization) and
-# `FoxholeNativeShares_*` (the vault, create/publish/export/revoke/withdraw and
-# the invitation writer). Nineteen exports, in `src/ecosystem.rs`.
-#
-# Deliberately absent from `shipped`, and therefore from every release artifact.
-# Not because the code is wrong — it is groundwork for a later release and stays
-# in the repository — but because the Java classes it is named for
-# (`com.foxhole.core.component.FoxholeNativeComponents` and `FoxholeNativeShares`)
-# do not exist in the app. Every one of those nineteen symbols is currently an
-# entry point with no possible caller, and an unreachable export is an audited,
-# fuzzable, attacker-visible surface that delivers nothing.
-#
-# A feature rather than a comment block, because the difference is whether the
-# code still has to be correct. Behind a feature it is compiled, type-checked and
-# tested (`cargo test -p foxcore-android --features mini-platform`); commented out
-# it rots silently and the next release discovers that during a merge.
-#
-# Two things enforce the arrangement rather than describing it, both in
-# `scripts/android-elf-gate.sh`: these exports must be *absent* from a release
-# `.so`, and this feature must not appear in `shipped` above. Turning it on for a
-# release build fails the gate rather than shipping quietly.
-#
-# What leaves the artifact with these symbols is the ability to *publish* a share
-# as an onion service. Tor as a transport is untouched — there is no `nativeTor*`
-# entry point at all; Tor is an outbound and a route inside the engine config,
-# reached through `nativeStart*`, `nativeReloadPolicy` and `nativeStats`, none of
-# which is gated. `onion-service` therefore stays in `shipped`: it is what
-# `capabilities.rs` reports as `share.onion_publication`, and the capability
-# document must keep describing the runtime it is compiled against.
-mini-platform = []
-
 [lib]
 name = "foxhole_native"
 crate-type = ["cdylib"]
@@ -140,14 +83,6 @@ libc.workspace = true
 # connection tuples, and this removes them from the shipped artifact rather than
 # trusting a runtime filter to hide them.
 log = { version = "0.4.33", features = ["release_max_level_warn"] }
-# The ClientHello table registry behind `nativeInstallTlsFingerprintTables`.
-#
-# Not optional, and not behind `vless`, even though REALITY only exists under
-# VLESS in this build. The Java class declares its native methods
-# unconditionally, so a feature that removed the symbol would turn a smaller
-# core into an `UnsatisfiedLinkError` on a phone rather than a smaller core. The
-# same reasoning `shipped` records for the capability fixtures applies here: the
-# ABI is the thing that must not move.
 proto-reality = { path = "../proto-reality" }
 serde.workspace = true
 serde_json.workspace = true

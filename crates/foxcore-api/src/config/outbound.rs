@@ -334,11 +334,6 @@ impl OutboundConfig {
                             "VLESS Reality and ordinary TLS are mutually exclusive".into(),
                         ));
                     }
-                    // REALITY is a security layer, not a carrier: it takes the
-                    // place of `tls`, and whatever stream transport the profile
-                    // names then rides inside its record layer. Every transport
-                    // in the schema is a byte stream, so there is nothing here
-                    // to gate on.
                     reality.validate()?;
                 }
                 validate_vless(config)
@@ -461,7 +456,6 @@ impl OutboundConfig {
                     ));
                 }
                 if let Some(amnezia) = &config.amnezia {
-                    // The MTU goes in because `Jmax` is only judgeable against it.
                     amnezia.validate(config.mtu)?;
                 }
                 Ok(())

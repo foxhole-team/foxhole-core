@@ -92,8 +92,8 @@ TUN → flow engine → routing policy → outbound
 | **Firewall** | Block priority, kill switch, quarantine, TTL rules |
 | **Traffic map** | live flows, per-app/per-lane accounting, route/outbound state |
 | **Core events** | bounded native event stream with an explicit `dropped` counter |
-| **Web Apps / leases** | isolated Web App identity, routable leases, origin-bound notifications |
-| **File sharing (in development)** | native XChaCha20-Poly1305 vault, capability-based access, and onion-publication primitives; not a released FoxHole Guard feature |
+| **Web Apps / leases (ABI only)** | identity, lease and notification primitives retained in JNI for v0.0.1 compatibility; FoxHole Guard has no product caller |
+| **File sharing (ABI only)** | XChaCha20-Poly1305 vault and onion-publication primitives retained in JNI; FoxHole Guard has no user flow |
 | **Proxy server** | SOCKS5 / HTTP CONNECT, mandatory authentication, network binding, JNI entry points |
 | **Android / Native ABI** | versioned C/JNI ABI, capabilities JSON, safe handles |
 
@@ -333,7 +333,9 @@ outbound_unavailable
 outbound_restored
 ```
 
-Two additional bounded streams exist with their own `dropped` counters: traffic-map open/close events and component events.
+The shipped ABI also exposes traffic-map open/close events with its own `dropped` counter.
+Component/share event streams remain exported for v0.0.1 ABI compatibility, but the current Guard
+does not subscribe to them.
 
 FoxHole Core does not maintain a persistent security journal and does not contain
 FoxHole Sentinel. FoxHole Sentinel and the long-term FoxHole Guard journal live in
@@ -343,6 +345,10 @@ application may use for journaling, traffic mapping and local correlation.
 ---
 
 ## 🧩 Extensions and system components
+
+The component, lease and vault model below is implemented in the core. Its 19 Android JNI exports
+remain in release libraries because v0.0.1 shipped them; the current Guard has no product call
+sites. The Engine surface separately includes LAN proxy and loopback-inbound operations.
 
 At the FoxHole Core level, every component has a bounded ASCII identifier. A Web
 App also has a separately validated canonical HTTPS origin, which is its origin
@@ -359,10 +365,9 @@ Operations are authorized through leases. A lease is not a permanent grant: it m
 | File sharing (in development) | always Tor; no clearnet fallback |
 | Proxy server | no component lease route; its preset selects VPN/Tor upstreams |
 
-File-sharing vault and onion-publication primitives are compiled into the shipped
-core, but the feature remains **in development**: it has not completed external
-end-to-end release acceptance and is not exposed by the public FoxHole Guard
-application. `share.compiled` reports code presence, not product readiness.
+The shipped core contains the vault implementation, onion-service support and the compatibility
+JNI exports, so `share.compiled` reports code presence. FoxHole Guard has no product call site for
+this **in-development** surface.
 
 ---
 
@@ -404,6 +409,16 @@ FoxHole Core exposes a versioned C/JNI ABI.
 
 The Android application queries runtime capabilities.
 
+The release library has 33 `FoxholeNativeEngine` exports and Guard declares 32; only the legacy
+start without an Android `Network` handle is intentionally omitted. Signed DNS starts and
+`nativeTrafficMap` are used in production. Link-import and continuity declarations are retained as
+compatibility-only ABI, with no Kotlin product wrapper. Signed DNS downloads are persisted first,
+then installed live into a stable engine; enabling filtering or changing trust uses an atomic
+replacement start, and an inactive engine consumes the bundle at its next start.
+
+Release ELF files also retain the 19 v0.0.1 component/share exports. They are compatibility ABI,
+not released Guard functionality.
+
 Capabilities include:
 
 - compiled protocols;
@@ -430,7 +445,7 @@ Native build gates:
 - non-executable stack;
 - 16 KiB page alignment;
 - `libandroid.so`;
-- frozen ABI-v1 C/JNI exports and capabilities/config compatibility; the release ELF export set is checked for both shipped ABIs.
+- frozen ABI-v1 C/JNI exports and capabilities/config compatibility; the ELF export set is checked for every built ABI.
 
 ---
 

@@ -39,9 +39,6 @@ pub struct VlessOutbound {
     /// `flow=xtls-rprx-vision`. Vision replaces the whole stream setup, so it is
     /// resolved once here instead of being re-parsed per connection.
     vision: bool,
-    /// VLESS Encryption, when the profile carries `encryption=`. Shared across
-    /// connections because the 0-RTT ticket it caches is what makes the second
-    /// and later connections skip the key exchange.
     encryption: Option<Arc<ClientInstance>>,
 }
 
@@ -49,11 +46,8 @@ struct PreparedReality {
     public_key: [u8; 32],
     short_id: [u8; 8],
     server_name: String,
-    /// Which ClientHello the transport writes. Resolved once here so the
-    /// config name and the profile table are reconciled at outbound
-    /// construction rather than per connection. `Randomized` is the one value
-    /// that resolves to no table at all: it names uTLS' generator, which draws
-    /// a fresh hello inside every connection.
+    /// Resolved once at construction; `Randomized` intentionally has no static
+    /// table and draws a fresh hello per connection.
     hello: RealityHello,
     handshake_timeout: Duration,
 }
@@ -73,8 +67,6 @@ impl VlessOutbound {
                         "VLESS Reality and ordinary TLS are mutually exclusive",
                     ));
                 }
-                // No transport gate: REALITY stands where TLS would stand, and
-                // the stream transport is composed above it by `connect`.
                 Ok(Arc::new(PreparedReality {
                     public_key: decode_public_key(reality.public_key.expose())?,
                     short_id: decode_short_id(reality.short_id.expose())?,
@@ -117,18 +109,11 @@ impl VlessOutbound {
                 ));
             }
         }
-        // The encryption layer sits between the transport and the inner VLESS
-        // protocol, so it is orthogonal to `tls`/`reality` and composes with
-        // any of them. Parsed once here: a profile that names a variant this
-        // build cannot execute must fail at construction, not per connection.
         let encryption = config
             .encryption
             .as_ref()
             .map(|spec| {
                 if vision {
-                    // Upstream pairs XTLS with this layer deliberately, but the
-                    // handover needs a splice point the record layer does not
-                    // expose yet.
                     return Err(invalid(
                         "VLESS Vision over VLESS encryption is not implemented",
                     ));
@@ -309,12 +294,6 @@ impl VlessOutbound {
             .dialer
             .connect_tcp_server(&self.config.server, self.config.port, self.config.server_ip)
             .await?;
-        // Reality takes the place of TLS, not of the carrier: the handshake
-        // runs on the TCP socket, and gRPC/WebSocket/HTTP2 are composed above
-        // its record layer by the same `wrap_stream_transport` that
-        // `establish_stream` calls after a TLS handshake. `tls: true` there is
-        // the scheme the transport announces (`wss://`, `https://`), which is
-        // what the peer expects behind a TLS-shaped handshake.
         let mut stream: BoxStream = if let Some(reality) = &self.reality {
             let secured = wrap_reality(
                 tcp,

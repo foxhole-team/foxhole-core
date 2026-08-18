@@ -1,10 +1,3 @@
-//! What TUIC's QUIC client actually puts on the wire.
-//!
-//! Same instrument as `proto-hysteria2`'s file of this name: the client dials a
-//! loopback socket that never answers and its first flight is decrypted the way
-//! an observer on the path would decrypt it. Nothing here needs a server, a
-//! credential, or a packet leaving the machine.
-
 use std::time::Duration;
 
 use foxcore_api::{SecretString, TlsConfig, TuicConfig};
@@ -71,14 +64,6 @@ fn parameter_ids(flight: &CapturedFlight) -> Vec<u64> {
         .collect()
 }
 
-/// The defect this file found.
-///
-/// A profile that named no ALPN fell through to the shared TLS default, which
-/// is `h2, http/1.1`. Both are *TCP* protocol identifiers: `h2` is HTTP/2 over
-/// TLS over TCP, and there is no such thing as `h2` over QUIC. A QUIC
-/// ClientHello offering them describes a client that cannot exist, it is
-/// visible in the clear inside the Initial packet, and it put `h2` into this
-/// outbound's JA4 where every browser and the reference TUIC client have `h3`.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_alpn_is_h3_and_not_the_tcp_default() {
     let flight = capture().await;
@@ -94,8 +79,6 @@ async fn the_alpn_is_h3_and_not_the_tcp_default() {
     );
 }
 
-/// Negative control for the ALPN: the shared TLS default is still what it was,
-/// so the assertion above is doing work rather than agreeing with everything.
 #[test]
 fn the_shared_tls_default_alpn_is_still_the_tcp_pair() {
     let config = foxcore_transport::rustls_client_config(&TlsConfig::default())
@@ -148,16 +131,6 @@ async fn grease_quic_bit_is_not_advertised() {
     assert!(!parameter_ids(&flight).contains(&transport_parameter::GREASE_QUIC_BIT));
 }
 
-/// Two stream limits are deliberately *not* moved to the browser's values, and
-/// this records why so a later reading of the comparison table does not treat
-/// them as an oversight.
-///
-/// `initial_max_streams_bidi` is absent because this outbound sets it to zero:
-/// a TUIC server has no reason to open a bidirectional stream to its client,
-/// and advertising Chromium's 100 would hand a compromised or hostile server a
-/// hundred inbound streams for the sake of one parameter in a list.
-/// `initial_max_streams_uni` is 256 because the protocol's own packet-relay
-/// mode needs them; Chromium's 103 would throttle UDP relay to look tidier.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_stream_limits_stay_where_the_protocol_needs_them() {
     let flight = capture().await;

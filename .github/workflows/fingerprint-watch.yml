@@ -1,20 +1,7 @@
-# Watches uTLS for movement under `fingerprints/*.json`.
-#
-# The ClientHello this core sends is a parrot, and `scripts/fingerprint-from-utls.py`
-# is the check that the committed tables still agree with the population the parrot
-# hides in. That script is deliberately never run from the build: a network fetch must
-# not be able to change what the binary sends. This workflow does not change that. It
-# fetches uTLS on a schedule and *reports*, so that Chrome moving is noticed in days
-# rather than at the next release.
-#
-# It therefore never fails. A divergence from uTLS is news about the outside world, not
-# a defect in this tree, and a red X on an untouched commit teaches people to ignore the
-# gate. The notification is an issue instead, which someone reads and decides about.
+# Scheduled reporting only: fetched tables never alter build inputs, and drift opens
+# an issue instead of failing an unchanged commit.
 name: fingerprint-watch
 
-# Weekly, and on demand. Not on push: the committed tables are the source of truth for
-# the build, `cargo test -p proto-reality` already checks them against `hello_profile.rs`,
-# and re-asking upstream on every commit only adds a rate-limited fetch to the gate.
 on:
   schedule:
     - cron: "23 5 * * 1"
@@ -29,21 +16,15 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  # The title is the issue's identity for a human; the marker below is its identity for
-  # this workflow. Changing either one orphans the currently open issue.
   ISSUE_TITLE: "fingerprints/ has diverged from uTLS"
   ISSUE_MARKER: "<!-- fingerprint-watch -->"
 
 jobs:
   watch:
-    # Scheduled workflows keep running in forks, where they would either fail on a
-    # missing token or file issues nobody asked for.
     if: github.repository_owner == 'foxhole-team'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
-      # The only write this workflow performs: opening, updating and closing its own
-      # divergence issue.
       issues: write
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -54,8 +35,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # The script uses only the standard library, on purpose — nothing is installed
-      # here, so no dependency of this check can be substituted from a package index.
       - name: Compare fingerprints/ against uTLS
         id: compare
         run: |
@@ -72,8 +51,6 @@ jobs:
           esac
           printf 'status=%s\n' "$status" | tee -a "$GITHUB_OUTPUT"
 
-          # The diff is the whole point of the run, so it is readable from the run page
-          # even when no issue is touched.
           {
             printf '## fingerprint-watch: %s\n\n' "$status"
             printf '```text\n'
@@ -82,7 +59,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           cat "$RUNNER_TEMP/report.txt"
-          # Never propagate the script's exit code. See the header.
+          # Upstream drift is reported through the issue, never as a build failure.
           exit 0
 
       - name: Open, update or close the divergence issue
@@ -93,17 +70,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Upstream being unreachable is not a divergence. Say so in the log and leave
-          # whatever issue state exists alone, so a GitHub outage cannot close a real
-          # divergence report or open a false one.
           if [[ "$STATUS" == "unavailable" ]]; then
             printf 'Could not fetch or parse uTLS; no issue touched.\n' >&2
             exit 0
           fi
 
-          # The marker, not the title, is what makes this idempotent: the issue is found
-          # by a string this workflow wrote, so a human retitling it does not cause a
-          # second one to be opened next week.
           existing="$(gh issue list --state open --limit 100 --json number,body \
             --jq "map(select(.body // \"\" | contains(\"$ISSUE_MARKER\"))) | .[0].number // empty")"
 
@@ -116,9 +87,6 @@ jobs:
             exit 0
           fi
 
-          # A digest of the diff itself. A divergence that persists week after week is
-          # the same news every week, so an unchanged digest updates nothing: the issue
-          # stays open, silent, until the diff actually changes.
           digest="$(sha256sum "$REPORT" | cut -d' ' -f1)"
 
           body_file="$RUNNER_TEMP/issue-body.md"

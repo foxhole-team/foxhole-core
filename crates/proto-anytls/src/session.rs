@@ -541,11 +541,6 @@ async fn run_session(
     let mut streams = HashMap::<u32, StreamState>::new();
     let mut pending = HashMap::<u32, oneshot::Sender<io::Result<()>>>::new();
     let mut packet_index = 1usize;
-    // A CSPRNG, not the fast non-cryptographic generator this used before: it feeds padding
-    // lengths *and* the padding bytes themselves. xoshiro state is recoverable from a modest
-    // run of its own output, so a predictable generator would let an observer predict the whole
-    // padding sequence — the one thing padding exists to prevent. One small draw per packet, so
-    // the cost is nothing.
     let mut rng = StdRng::from_os_rng();
     let mut negotiated_v2 = false;
     let result: io::Result<()> = async {
@@ -744,11 +739,6 @@ async fn write_authentication<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    // A CSPRNG, not the fast non-cryptographic generator this used before: it feeds padding
-    // lengths *and* the padding bytes themselves. xoshiro state is recoverable from a modest
-    // run of its own output, so a predictable generator would let an observer predict the whole
-    // padding sequence — the one thing padding exists to prevent. One small draw per packet, so
-    // the cost is nothing.
     let mut rng = StdRng::from_os_rng();
     let padding_length = scheme.auth_padding_length(&mut rng);
     let mut packet = BytesMut::with_capacity(34 + padding_length);

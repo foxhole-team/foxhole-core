@@ -1,15 +1,3 @@
-//! The AEAD layer: BLAKE3-derived keys, an implicit counter nonce, and rekeying
-//! when that counter wraps.
-//!
-//! Two things here are easy to get subtly wrong and both are load-bearing for
-//! interoperability:
-//!
-//! * the nonce is incremented *before* every operation, so the first record on
-//!   a key uses `00..01` and never `00..00`;
-//! * one message in the handshake — the server's forward-secret public key — is
-//!   sealed under the all-`FF` nonce instead, which is what keeps the server's
-//!   use of `nfsKey` from colliding with the client's counter on the same key.
-
 use std::io;
 
 use aes_gcm::Aes256Gcm;
@@ -21,8 +9,6 @@ use super::blake3;
 pub const TAG_LEN: usize = 16;
 pub const NONCE_LEN: usize = 12;
 
-/// The nonce the sender is required to use for a message that must not share
-/// the counter sequence.
 pub const MAX_NONCE: [u8; NONCE_LEN] = [0xFF; NONCE_LEN];
 
 enum Cipher {
@@ -36,10 +22,6 @@ pub struct Aead {
 }
 
 impl Aead {
-    /// `NewAEAD`: the working key is `BLAKE3::derive_key(context = ctx, key)`.
-    ///
-    /// `ctx` is arbitrary binary — an IV, a public key, a whole record — which
-    /// is why [`super::blake3`] exists.
     pub fn new(ctx: &[u8], key: &[u8], use_aes: bool) -> Self {
         let derived = blake3::derive_key(ctx, key);
         let cipher = if use_aes {
@@ -53,8 +35,6 @@ impl Aead {
         }
     }
 
-    /// True when the next counter step wraps to zero, which is the point at
-    /// which both sides re-derive from the record just processed.
     pub fn at_max_nonce(&self) -> bool {
         self.nonce == MAX_NONCE
     }
@@ -86,8 +66,6 @@ impl Aead {
         Ok(tag.into())
     }
 
-    /// Seal `plaintext_len` bytes in place at the front of `buffer`, appending
-    /// the tag. `buffer` must be exactly `plaintext_len + TAG_LEN` long.
     pub fn seal_in_place(
         &mut self,
         aad: &[u8],
@@ -135,8 +113,6 @@ impl Aead {
         })
     }
 
-    /// Open `buffer` in place. On success the plaintext occupies
-    /// `buffer[..buffer.len() - TAG_LEN]`.
     pub fn open_in_place(&mut self, aad: &[u8], buffer: &mut [u8]) -> io::Result<usize> {
         let nonce = self.advance();
         self.open_in_place_with_nonce(&nonce, aad, buffer)
@@ -161,9 +137,6 @@ impl Aead {
     }
 }
 
-/// TLS 1.3's application-data record header, which every data record wears so
-/// that a connection handed over to XTLS looks the same before and after the
-/// handover.
 pub fn encode_header(header: &mut [u8; 5], length: usize) {
     header[0] = 23;
     header[1] = 3;
@@ -172,22 +145,10 @@ pub fn encode_header(header: &mut [u8; 5], length: usize) {
     header[4] = length as u8;
 }
 
-/// Smallest record body: an empty payload plus its tag, plus the one byte that
-/// upstream's `< 17` bound implies.
 pub const MIN_RECORD_BODY: usize = 17;
-/// TLS 1.3's maximum record: 16384 plus the 256 bytes RFC 8446 §5.2 allows for
-/// expansion.
 pub const MAX_RECORD_BODY: usize = 16640;
-/// Largest plaintext upstream will put in one record. Chosen so the peer can
-/// decrypt straight into the caller's buffer without a second copy.
 pub const MAX_RECORD_PLAINTEXT: usize = 8192;
 
-/// `DecodeHeader`'s length *without* the range check. A header whose magic
-/// bytes are wrong decodes to zero.
-///
-/// The masking layer uses this rather than [`decode_header`] because upstream's
-/// `XorConn` discards the error and walks on with whatever length came back;
-/// diverging here would desynchronise the keystream instead of failing loudly.
 pub fn decode_header_raw(header: &[u8; 5]) -> usize {
     if header[0] != 23 || header[1] != 3 || header[2] != 3 {
         return 0;
