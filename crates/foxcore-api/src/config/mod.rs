@@ -12,6 +12,7 @@ mod tls;
 mod transport;
 mod validate;
 mod vless;
+mod vless_encryption;
 mod wireguard;
 
 #[cfg(test)]
@@ -31,4 +32,5 @@ pub use tls::*;
 pub use transport::*;
 pub use validate::*;
 pub use vless::*;
+pub use vless_encryption::*;
 pub use wireguard::*;

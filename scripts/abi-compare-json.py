@@ -124,10 +124,47 @@ def walk(path: str, old, new) -> None:
         problems.append(f"{path}: was true, now false — a capability was removed")
 
 
+def check_self_consistency(path: str, node) -> None:
+    """Flag a name declared both supported and unsupported in the same entry.
+
+    This is a property of one document, not of a diff, so it is checked here rather than in
+    `walk`: an entry that contradicts itself is wrong on its first publication, and the diff
+    rules cannot see it — an addition to `unsupported` is deliberately only a note, on the
+    reasoning that it clarifies a name no positive list claimed. That reasoning is sound and
+    is exactly what let `amneziawg` ship `h1_h4_ranges` as unsupported while the parser,
+    the config model and the importer all implemented it. A capability document that lies to
+    the app is worse than one that omits, because the app fails closed on what it is told.
+    """
+    if isinstance(node, dict):
+        denied = node.get("unsupported")
+        if isinstance(denied, list):
+            claimed = {
+                item
+                for key, value in node.items()
+                if key != "unsupported" and isinstance(value, list)
+                for item in value
+                if isinstance(item, str)
+            }
+            for item in denied:
+                if isinstance(item, str) and item in claimed:
+                    problems.append(
+                        f"{path}: {item!r} is listed as unsupported and also claimed as a capability"
+                    )
+        for key, value in node.items():
+            check_self_consistency(f"{path}.{key}" if path else key, value)
+        return
+    if isinstance(node, list):
+        for item in node:
+            identifier = item.get("id") if isinstance(item, dict) else None
+            child = f"{path}[id={identifier}]" if identifier else path
+            check_self_consistency(child, item)
+
+
 def compare(old, new) -> tuple[list[str], list[str]]:
     problems.clear()
     notes.clear()
     walk("", old, new)
+    check_self_consistency("", new)
     return list(problems), list(notes)
 
 

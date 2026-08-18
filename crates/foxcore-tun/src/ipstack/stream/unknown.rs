@@ -133,7 +133,7 @@ impl IpStackUnknownTransport {
                     payload: Some(p),
                 })
             }
-            _ => unreachable!(),
+            _ => Err(IpStackError::InvalidPacket.into()),
         }
     }
 }

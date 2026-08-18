@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use foxcore_api::{ContinuityPermit, Hysteria2Config};
 use foxcore_dialer::ProtectedDialer;
+use foxcore_transport::backoff::ReconnectBackoff;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -153,7 +154,7 @@ async fn reconnect(
             }
         }
         let reconnect_epoch = session.reconnect_epoch.load(Ordering::Acquire);
-        let mut backoff = BACKOFF_MIN;
+        let mut backoff = ReconnectBackoff::new(BACKOFF_MIN, BACKOFF_MAX);
         loop {
             if cancel.is_cancelled() {
                 return false;
@@ -195,9 +196,8 @@ async fn reconnect(
                     tokio::select! {
                         _ = cancel.cancelled() => return false,
                         _ = reconnect_now => continue 'permission,
-                        _ = tokio::time::sleep(backoff) => {}
+                        _ = tokio::time::sleep(backoff.next_delay()) => {}
                     }
-                    backoff = (backoff * 2).min(BACKOFF_MAX);
                 }
             }
         }
@@ -221,4 +221,18 @@ async fn connect_server(
     Err(last_error.unwrap_or_else(|| {
         io::Error::new(io::ErrorKind::NotFound, "Hysteria2 server has no address")
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_reconnect_window_keeps_the_bounds_the_ladder_had() {
+        let mut backoff = ReconnectBackoff::new(BACKOFF_MIN, BACKOFF_MAX);
+        for _ in 0..64 {
+            let delay = backoff.next_delay();
+            assert!((BACKOFF_MIN..=BACKOFF_MAX).contains(&delay), "{delay:?}");
+        }
+    }
 }

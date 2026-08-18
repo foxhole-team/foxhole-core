@@ -12,8 +12,13 @@ bytes.workspace = true
 foxcore-api = { path = "../foxcore-api" }
 foxcore-dialer = { path = "../foxcore-dialer" }
 foxcore-transport = { path = "../foxcore-transport" }
+log = "0.4.33"
 quinn.workspace = true
 quinn-proto.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 zeroize.workspace = true
+
+[dev-dependencies]
+foxcore-transport = { path = "../foxcore-transport", features = ["fingerprinting"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

@@ -352,6 +352,10 @@ struct TlsCapabilities {
     /// Protocols in this build that refuse `tls.ech` at config time, so an app
     /// can grey the switch out instead of offering one that fails on load.
     ech_refused_by: &'static [&'static str],
+    reality_fingerprints_implemented: &'static [&'static str],
+    reality_fingerprints_substituted: &'static [&'static str],
+    reality_fingerprint_substitute: &'static str,
+    reality_fingerprints_refused: &'static [&'static str],
 }
 
 #[derive(Serialize)]
@@ -717,6 +721,7 @@ pub(crate) fn capabilities_json() -> &'static str {
                         // literal" — the names below say what the table now
                         // actually contains.
                         "reality_chrome_static",
+                        "reality_chrome_151",
                         "reality_chrome_133",
                         "reality_chrome_131",
                         // The REALITY hello's own extension 0xfe0d, not the
@@ -742,9 +747,6 @@ pub(crate) fn capabilities_json() -> &'static str {
                         // through a path that cannot frame it.
                         "vision_udp443",
                         "websocket_early_data",
-                        // Still true, and now narrower: the profile table has
-                        // two Chrome builds in it and nothing else. Firefox,
-                        // Safari and iOS parrots are not implemented.
                         "reality_other_fingerprints",
                         "reality_mldsa65",
                         "reality_crawler_fallback",
@@ -982,13 +984,9 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "i1_i5_init_packets",
                         "init_packet_timestamp_tag",
                         "conf_file_import",
-                    ],
-                    unsupported: &[
                         "h1_h4_ranges",
-                        "endpoint_roaming",
-                        "server_role",
-                        "vpn_container_link",
                     ],
+                    unsupported: &["endpoint_roaming", "server_role", "vpn_container_link"],
                 },
                 ProtocolCapability {
                     id: "naive",
@@ -1101,6 +1099,22 @@ pub(crate) fn capabilities_json() -> &'static str {
                 ech_grease: true,
                 ech_from_https_rr: false,
                 ech_refused_by: &["hysteria2", "tuic", "shadowtls"],
+                reality_fingerprints_implemented: &[
+                    "chrome_151",
+                    "chrome_133",
+                    "chrome_131",
+                    "edge_85",
+                    "safari_26_3",
+                    "ios_14",
+                    "qq_11_1",
+                    "firefox_153",
+                    "firefox_148",
+                    "random",
+                    "randomized",
+                ],
+                reality_fingerprints_substituted: &[],
+                reality_fingerprint_substitute: "chrome_151",
+                reality_fingerprints_refused: &["360", "android"],
             },
             dns: DnsCapabilities {
                 udp: true,
@@ -1409,6 +1423,147 @@ mod schema {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const ABI_V1_FIXTURE: &str = include_str!("../../../fixtures/abi/v1/capabilities.json");
+
+    #[test]
+    fn the_substituted_fingerprints_are_the_ones_the_parser_accepts() {
+        let document: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
+        let tls = &document["tls"];
+
+        let implemented: Vec<&str> = tls["reality_fingerprints_implemented"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        let substituted: Vec<&str> = tls["reality_fingerprints_substituted"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+
+        let refused: Vec<&str> = tls["reality_fingerprints_refused"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+
+        fn short(name: &str) -> &str {
+            match name {
+                "chrome_151" | "chrome_133" | "chrome_131" => "chrome",
+                "edge_85" => "edge",
+                "safari_26_3" => "safari",
+                "ios_14" => "ios",
+                "qq_11_1" => "qq",
+                "firefox_153" | "firefox_148" => "firefox",
+                other => other,
+            }
+        }
+        let mut accounted: Vec<&str> = implemented
+            .iter()
+            .chain(substituted.iter())
+            .chain(refused.iter())
+            .map(|name| short(name))
+            .chain(["", "chrome_131", "chrome_133"])
+            .collect();
+        accounted.sort_unstable();
+        accounted.dedup();
+        let mut known: Vec<&str> = foxcore_link::UTLS_PARROT_NAMES.to_vec();
+        known.sort_unstable();
+        known.dedup();
+        assert_eq!(
+            accounted, known,
+            "the capabilities document and foxcore-link disagree about uTLS parrot names"
+        );
+
+        for name in &refused {
+            assert!(
+                !substituted.contains(name),
+                "{name} is both refused and substituted"
+            );
+            assert!(
+                !implemented.contains(name),
+                "{name} is both refused and implemented"
+            );
+        }
+
+        assert!(
+            implemented.contains(&tls["reality_fingerprint_substitute"].as_str().unwrap()),
+            "the substitute hello is not one of the implemented tables"
+        );
+
+        let vless = document["protocols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == "vless")
+            .expect("vless is in the document");
+        assert!(
+            vless["unsupported"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry == "reality_other_fingerprints"),
+            "reality_other_fingerprints was removed from unsupported, but \
+             360/android are still refused"
+        );
+    }
+
+    #[test]
+    fn the_frozen_abi_v1_document_is_still_readable() {
+        let old: serde_json::Value = serde_json::from_str(ABI_V1_FIXTURE).unwrap();
+        let new: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
+        let mut problems = Vec::new();
+        compare_abi("", &old, &new, &mut problems);
+        assert!(problems.is_empty(), "ABI v1 regressions: {problems:#?}");
+    }
+
+    fn compare_abi(
+        path: &str,
+        old: &serde_json::Value,
+        new: &serde_json::Value,
+        problems: &mut Vec<String>,
+    ) {
+        use serde_json::Value;
+        match (old, new) {
+            (Value::Object(old_map), Value::Object(new_map)) => {
+                for (key, value) in old_map {
+                    let where_ = if path.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    match new_map.get(key) {
+                        None => problems.push(format!("{where_}: removed")),
+                        Some(next) => compare_abi(&where_, value, next, problems),
+                    }
+                }
+            }
+            (Value::Array(old_items), Value::Array(new_items)) => {
+                if path.ends_with("unsupported") {
+                    return; // shrinking is a capability gain
+                }
+                for item in old_items {
+                    let still_there = match item.get("id") {
+                        Some(id) => new_items
+                            .iter()
+                            .any(|candidate| candidate.get("id") == Some(id)),
+                        None => new_items.contains(item),
+                    };
+                    if !still_there {
+                        problems.push(format!("{path}: entry {item} disappeared"));
+                    }
+                }
+            }
+            (Value::Bool(true), Value::Bool(false)) => {
+                problems.push(format!("{path}: true -> false"));
+            }
+            _ => {}
+        }
+    }
 
     #[test]
     fn capability_document_is_versioned_and_truthful() {

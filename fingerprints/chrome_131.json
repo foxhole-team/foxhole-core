@@ -42,20 +42,25 @@
     {
       "what": "ECH GREASE construction",
       "source": "draft-ietf-tls-esni",
-      "section": "§6.2",
+      "section": "\u00a76.2",
       "url": "https://datatracker.ietf.org/doc/draft-ietf-tls-esni/"
     },
     {
       "what": "X25519MLKEM768 share layout and shared-secret order",
       "source": "draft-ietf-tls-ecdhe-mlkem-01",
-      "section": "§3.1, §3.2, §5",
+      "section": "\u00a73.1, \u00a73.2, \u00a75",
       "url": "https://datatracker.ietf.org/doc/draft-ietf-tls-ecdhe-mlkem/"
     }
   ],
-  "fingerprint_sha256": "fa8543a791980bad86d5d15e4f0b6fcb0b98d2dd3777fa2c1fc46f163c948450",
-  "fingerprint_sha256_covers": "SHA-256 over the 'fingerprint' object serialised as JSON with sorted keys and no whitespace. Provenance and citations are excluded on purpose, so editing prose does not invalidate the vector.",
+  "fingerprint_sha256": "067eaf2f3cc80e2c631e2d4cf9f8b6d0121979fcdd59f221fdc51ac28948be91",
+  "fingerprint_sha256_covers": "SHA-256 over the 'fingerprint' object serialised as JSON with sorted keys, no whitespace, and ASCII-only content, so the digest is reproducible from any language without agreeing on a non-ASCII escaping rule. Provenance and citations are excluded on purpose, so editing prose does not invalidate the vector.",
   "fingerprint": {
     "legacy_version": "0x0303",
+    "record_layer_version": {
+      "initial_client_hello": "0x0301",
+      "subsequent_records": "0x0303",
+      "why": "BoringSSL tls_record_version() returns TLS1_VERSION while ssl->s3->version == 0; Go crypto/tls writeRecordLocked, which uTLS inherits and Xray and sing-box run, sets vers = VersionTLS10 on the first record. RFC 8446 5.1 permits either value, so this is a parroting requirement and not a correctness one."
+    },
     "legacy_session_id_bytes": 32,
     "compression_methods": [
       "0x00"
@@ -378,12 +383,10 @@
       "why": "the ML-KEM key share puts the hello well past 0x1ff"
     },
     "ech_grease": {
-      "spec": "draft-ietf-tls-esni-22 §6.2",
+      "spec": "draft-ietf-tls-esni-22 section 6.2",
       "kdf": "HKDF-SHA256",
-      "aead_candidates": [
-        "AES-128-GCM",
-        "ChaCha20-Poly1305"
-      ],
+      "aead": "AES-128-GCM",
+      "aead_note": "One suite, fixed. BoringSSL setup_ech_grease() picks aes_128_gcm when EVP_has_aes_hardware() and chacha20_poly1305 otherwise, so a given install always sends the same id; uTLS BoringGREASEECH() offers only {HKDF_SHA256, AES_128_GCM}. Choosing per connection would itself be a fingerprint.",
       "payload_lengths": [
         128,
         160,

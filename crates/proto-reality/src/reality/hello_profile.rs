@@ -14,10 +14,9 @@
 //!
 //! # Sources
 //!
-//! The Chrome tables are transcribed from uTLS' maintained parrots
-//! (`refraction-networking/utls`, `u_parrots.go`, `HelloChrome_133` and
-//! `HelloChrome_131`), which are in turn derived from BoringSSL's own
-//! ClientHello construction. Specific rules and their sources:
+//! Versioned tables come from uTLS; current Chrome and Firefox tables use
+//! first-party captures until upstream catches up. The import script verifies
+//! every uTLS-derived profile.
 //!
 //! * **GREASE values** — BoringSSL's `ssl_get_grease_value`: a seed byte is
 //!   masked to `(byte & 0xf0) | 0x0a` and then repeated into both halves of the
@@ -59,17 +58,43 @@ use super::reality_key_exchange::NamedGroup;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RealityHelloProfile {
     #[default]
+    Chrome151,
     Chrome133,
     Chrome131,
+    Edge85,
+    Safari263,
+    Ios14,
+    Qq111,
+    Firefox153,
+    Firefox148,
 }
 
 impl RealityHelloProfile {
     pub fn table(self) -> &'static HelloProfile {
         match self {
+            Self::Chrome151 => &CHROME_151,
             Self::Chrome133 => &CHROME_133,
             Self::Chrome131 => &CHROME_131,
+            Self::Edge85 => &EDGE_85,
+            Self::Safari263 => &SAFARI_26_3,
+            Self::Ios14 => &IOS_14,
+            Self::Qq111 => &QQ_11_1,
+            Self::Firefox153 => &FIREFOX_153,
+            Self::Firefox148 => &FIREFOX_148,
         }
     }
+
+    pub const ALL: &'static [Self] = &[
+        Self::Chrome151,
+        Self::Chrome133,
+        Self::Chrome131,
+        Self::Edge85,
+        Self::Safari263,
+        Self::Ios14,
+        Self::Qq111,
+        Self::Firefox153,
+        Self::Firefox148,
+    ];
 }
 
 // ---------------------------------------------------------------- GREASE
@@ -194,35 +219,40 @@ pub enum VersionSlot {
 
 pub const TLS_1_3: u16 = 0x0304;
 pub const TLS_1_2: u16 = 0x0303;
+pub const TLS_1_1: u16 = 0x0302;
+pub const TLS_1_0: u16 = 0x0301;
 
-/// One extension slot: a constant blob, or something the session decides.
+/// Extension body borrowed from a static table or a per-connection randomized
+/// profile; generic encoders must preserve this lifetime.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum ExtensionSlot {
+pub enum ExtensionSlotData<'a> {
     /// Bytes that are the same on every connection from every client running
     /// this profile. Type and body are both frozen.
     Constant {
         extension_type: u16,
-        body: &'static [u8],
+        body: &'a [u8],
     },
     /// A GREASE extension. The type is the connection's GREASE value for the
     /// slot; the body is frozen (empty for the first, one zero byte for the
     /// last).
     Grease {
         slot: GreaseSlot,
-        body: &'static [u8],
+        body: &'a [u8],
     },
     ServerName,
-    SupportedGroups(&'static [GroupSlot]),
-    KeyShare(&'static [KeyShareSlot]),
+    SupportedGroups(&'a [GroupSlot]),
+    KeyShare(&'a [KeyShareSlot]),
     Alpn,
-    SupportedVersions(&'static [VersionSlot]),
+    SupportedVersions(&'a [VersionSlot]),
     EchGrease,
     /// RFC 7685. Emits nothing unless the finished hello lands in the window
     /// BoringSSL pads; see [`boring_padding`].
     Padding,
 }
 
-impl ExtensionSlot {
+pub type ExtensionSlot = ExtensionSlotData<'static>;
+
+impl ExtensionSlotData<'_> {
     /// Chrome permutes its extensions per connection. GREASE keeps its position
     /// (first and last), padding must be last because its length depends on
     /// everything before it, and `pre_shared_key` — which this client never
@@ -235,16 +265,23 @@ impl ExtensionSlot {
 // ----------------------------------------------------------------- profile
 
 /// An ordered ClientHello shape.
-pub struct HelloProfile {
+///
+/// See [`ExtensionSlotData`] for why this carries a lifetime: the transcribed
+/// tables are all `'static` and use the [`HelloProfile`] alias, while the
+pub struct HelloProfileData<'a> {
     /// Name used in errors, so a refusal says which table produced the hello.
-    pub name: &'static str,
-    pub cipher_suites: &'static [CipherSuiteSlot],
-    pub extensions: &'static [ExtensionSlot],
+    pub name: &'a str,
+    pub cipher_suites: &'a [CipherSuiteSlot],
+    pub extensions: &'a [ExtensionSlotData<'a>],
     /// Chrome 110+ shuffles the non-pinned extensions on every connection.
     pub permute_extensions: bool,
+    pub ech_grease: EchGreaseShape,
+    pub reuse_classical_key_share: bool,
 }
 
-impl HelloProfile {
+pub type HelloProfile = HelloProfileData<'static>;
+
+impl HelloProfileData<'_> {
     /// The TLS 1.3 suites this profile may actually negotiate.
     ///
     /// This is the list a ServerHello is checked against. It is derived from
@@ -265,7 +302,7 @@ impl HelloProfile {
         self.extensions
             .iter()
             .filter_map(|slot| match slot {
-                ExtensionSlot::KeyShare(entries) => Some(entries),
+                ExtensionSlotData::KeyShare(entries) => Some(entries),
                 _ => None,
             })
             .flat_map(|entries| entries.iter())
@@ -323,7 +360,7 @@ impl HelloProfile {
         let mut grease_extension_slots = Vec::new();
         for (position, slot) in self.extensions.iter().enumerate() {
             match slot {
-                ExtensionSlot::Padding => {
+                ExtensionSlotData::Padding => {
                     padding_slots += 1;
                     if position + 1 != self.extensions.len() {
                         return refuse(
@@ -333,9 +370,9 @@ impl HelloProfile {
                         );
                     }
                 }
-                ExtensionSlot::Grease { slot, .. } => grease_extension_slots.push(*slot),
-                ExtensionSlot::SupportedGroups(groups) => supported_groups = Some(groups),
-                ExtensionSlot::KeyShare(entries) => {
+                ExtensionSlotData::Grease { slot, .. } => grease_extension_slots.push(*slot),
+                ExtensionSlotData::SupportedGroups(groups) => supported_groups = Some(groups),
+                ExtensionSlotData::KeyShare(entries) => {
                     key_share_extensions += 1;
                     for entry in *entries {
                         if let KeyShareSlot::Group(group) = entry
@@ -359,9 +396,15 @@ impl HelloProfile {
                 "has {key_share_extensions} key_share extensions; exactly one is a ClientHello"
             ));
         }
-        if grease_extension_slots != [GreaseSlot::Extension1, GreaseSlot::Extension2] {
+        // Two GREASE extensions, or none at all. Chrome, Edge, Safari, iOS and
+        // QQ all bracket their extension list with a pair; Firefox GREASEs
+        // nothing. One is neither, and would be a client that exists nowhere.
+        if !grease_extension_slots.is_empty()
+            && grease_extension_slots != [GreaseSlot::Extension1, GreaseSlot::Extension2]
+        {
             return refuse(
-                "must carry exactly two GREASE extensions, extension1 first and extension2 last"
+                "must carry either no GREASE extension or exactly two, extension1 first and \
+                 extension2 last"
                     .to_owned(),
             );
         }
@@ -386,19 +429,34 @@ impl HelloProfile {
 
 /// HPKE KDF id, RFC 9180 §7.2.
 const HPKE_KDF_HKDF_SHA256: u16 = 0x0001;
-/// HPKE AEAD ids, RFC 9180 §7.3.
+/// HPKE AEAD id, RFC 9180 §7.3.
 const HPKE_AEAD_AES_128_GCM: u16 = 0x0001;
+
+/// The HPKE suite the ECH GREASE extension advertises.
+///
+/// One suite, not a random pick between two. BoringSSL's `setup_ech_grease`
+const ECH_GREASE_SUITE: (u16, u16) = (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_AES_128_GCM);
+
 const HPKE_AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
-/// The suites BoringSSL picks between when it GREASEs ECH.
-const ECH_GREASE_SUITES: [(u16, u16); 2] = [
-    (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_AES_128_GCM),
-    (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_CHACHA20_POLY1305),
-];
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct EchGreaseShape {
+    pub suites: &'static [(u16, u16)],
+    pub payload_lens: &'static [usize],
+}
 
-/// Candidate `EncodedClientHelloInner` sizes; the payload is this plus the
-/// AEAD's 16-byte expansion.
-const ECH_GREASE_PAYLOAD_LENS: [usize; 4] = [128, 160, 192, 224];
+pub const CHROME_ECH_GREASE: EchGreaseShape = EchGreaseShape {
+    suites: &[ECH_GREASE_SUITE],
+    payload_lens: &[128, 160, 192, 224],
+};
+
+pub const FIREFOX_ECH_GREASE: EchGreaseShape = EchGreaseShape {
+    suites: &[
+        (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_AES_128_GCM),
+        (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_CHACHA20_POLY1305),
+    ],
+    payload_lens: &[223],
+};
 
 /// AEAD ciphertext expansion for both candidate suites.
 const ECH_GREASE_TAG_LEN: usize = 16;
@@ -417,6 +475,7 @@ const MAX_ECH_GREASE_PAYLOAD: usize = 224 + ECH_GREASE_TAG_LEN;
 pub struct EchGreaseParams {
     pub enc: [u8; 32],
     config_id: u8,
+    shape: EchGreaseShape,
     suite: usize,
     payload_len: usize,
     payload: [u8; MAX_ECH_GREASE_PAYLOAD],
@@ -424,6 +483,10 @@ pub struct EchGreaseParams {
 
 impl EchGreaseParams {
     pub fn new(enc: [u8; 32], rng: &mut impl RngCore) -> Self {
+        Self::with_shape(enc, CHROME_ECH_GREASE, rng)
+    }
+
+    pub fn with_shape(enc: [u8; 32], shape: EchGreaseShape, rng: &mut impl RngCore) -> Self {
         let mut chooser = [0_u8; 3];
         rng.fill_bytes(&mut chooser);
         let mut payload = [0_u8; MAX_ECH_GREASE_PAYLOAD];
@@ -431,15 +494,16 @@ impl EchGreaseParams {
         Self {
             enc,
             config_id: chooser[0],
-            suite: usize::from(chooser[1]) % ECH_GREASE_SUITES.len(),
-            payload_len: usize::from(chooser[2]) % ECH_GREASE_PAYLOAD_LENS.len(),
+            suite: usize::from(chooser[1]) % shape.suites.len(),
+            payload_len: usize::from(chooser[2]) % shape.payload_lens.len(),
+            shape,
             payload,
         }
     }
 
     fn write_body(&self, out: &mut Vec<u8>) {
-        let (kdf, aead) = ECH_GREASE_SUITES[self.suite];
-        let payload_len = ECH_GREASE_PAYLOAD_LENS[self.payload_len] + ECH_GREASE_TAG_LEN;
+        let (kdf, aead) = self.shape.suites[self.suite];
+        let payload_len = self.shape.payload_lens[self.payload_len] + ECH_GREASE_TAG_LEN;
         // draft-ietf-tls-esni: ECHClientHello with type = outer(0).
         out.push(0x00);
         out.extend_from_slice(&kdf.to_be_bytes());
@@ -490,7 +554,7 @@ impl HelloSession<'_> {
 // ---------------------------------------------------------------- encoding
 
 /// Extension code points this profile writes. TLS 1.3 registry values.
-mod ext {
+pub(super) mod ext {
     pub const SERVER_NAME: u16 = 0x0000;
     pub const STATUS_REQUEST: u16 = 0x0005;
     pub const SUPPORTED_GROUPS: u16 = 0x000a;
@@ -500,6 +564,8 @@ mod ext {
     pub const SIGNED_CERTIFICATE_TIMESTAMP: u16 = 0x0012;
     pub const PADDING: u16 = 0x0015;
     pub const EXTENDED_MASTER_SECRET: u16 = 0x0017;
+    pub const RECORD_SIZE_LIMIT: u16 = 0x001c;
+    pub const DELEGATED_CREDENTIALS: u16 = 0x0022;
     pub const COMPRESS_CERTIFICATE: u16 = 0x001b;
     pub const SESSION_TICKET: u16 = 0x0023;
     pub const SUPPORTED_VERSIONS: u16 = 0x002b;
@@ -526,7 +592,7 @@ fn write_extension(out: &mut Vec<u8>, extension_type: u16, body: &[u8]) -> io::R
     Ok(())
 }
 
-impl ExtensionSlot {
+impl ExtensionSlotData<'_> {
     /// Append this slot's wire bytes. Padding writes nothing here: its length
     /// depends on the finished hello, so the executor emits it separately.
     pub fn encode(&self, session: &HelloSession<'_>, out: &mut Vec<u8>) -> io::Result<()> {
@@ -678,7 +744,7 @@ pub fn write_padding(out: &mut Vec<u8>, unpadded_len: usize) -> io::Result<()> {
 /// Returns indices into `extensions`. Pinned slots keep their position; the
 /// rest are permuted with a seeded Fisher-Yates so the result is reproducible
 /// from the session.
-pub fn extension_order(profile: &HelloProfile, seed: u64) -> Vec<usize> {
+pub fn extension_order(profile: &HelloProfileData<'_>, seed: u64) -> Vec<usize> {
     let mut order: Vec<usize> = (0..profile.extensions.len()).collect();
     if !profile.permute_extensions {
         return order;
@@ -732,14 +798,30 @@ const CHROME_SIGNATURE_ALGORITHMS: &[u8] = &[
     0x06, 0x01, // rsa_pkcs1_sha512
 ];
 
+const CHROME_151_SIGNATURE_ALGORITHMS: &[u8] = &[
+    0x00, 0x16, // list length
+    0x09, 0x04, // mldsa44
+    0x09, 0x05, // mldsa65
+    0x09, 0x06, // mldsa87
+    0x04, 0x03, // ecdsa_secp256r1_sha256
+    0x08, 0x04, // rsa_pss_rsae_sha256
+    0x04, 0x01, // rsa_pkcs1_sha256
+    0x05, 0x03, // ecdsa_secp384r1_sha384
+    0x08, 0x05, // rsa_pss_rsae_sha384
+    0x05, 0x01, // rsa_pkcs1_sha384
+    0x08, 0x06, // rsa_pss_rsae_sha512
+    0x06, 0x01, // rsa_pkcs1_sha512
+];
+
+// Shared with the randomized generator to keep extension bytes identical.
 /// `status_request`: OCSP, empty responder list, empty request extensions.
-const STATUS_REQUEST_BODY: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
+pub(super) const STATUS_REQUEST_BODY: &[u8] = &[0x01, 0x00, 0x00, 0x00, 0x00];
 /// `ec_point_formats`: uncompressed only.
-const EC_POINT_FORMATS_BODY: &[u8] = &[0x01, 0x00];
+pub(super) const EC_POINT_FORMATS_BODY: &[u8] = &[0x01, 0x00];
 /// `renegotiation_info`: an empty `renegotiated_connection`.
-const RENEGOTIATION_INFO_BODY: &[u8] = &[0x00];
+pub(super) const RENEGOTIATION_INFO_BODY: &[u8] = &[0x00];
 /// `psk_key_exchange_modes`: `psk_dhe_ke` only.
-const PSK_KEY_EXCHANGE_MODES_BODY: &[u8] = &[0x01, 0x01];
+pub(super) const PSK_KEY_EXCHANGE_MODES_BODY: &[u8] = &[0x01, 0x01];
 /// `compress_certificate`: brotli (2) only.
 ///
 /// Offered because Chrome offers it. This client does not implement RFC 8879,
@@ -747,7 +829,38 @@ const PSK_KEY_EXCHANGE_MODES_BODY: &[u8] = &[0x01, 0x01];
 /// the handshake reader rather than silently mis-parsed.
 const COMPRESS_CERTIFICATE_BODY: &[u8] = &[0x02, 0x00, 0x02];
 /// `application_settings`: one protocol, `h2`.
-const APPLICATION_SETTINGS_BODY: &[u8] = &[0x00, 0x03, 0x02, b'h', b'2'];
+pub(super) const APPLICATION_SETTINGS_BODY: &[u8] = &[0x00, 0x03, 0x02, b'h', b'2'];
+
+const APPLE_SIGNATURE_ALGORITHMS: &[u8] = &[
+    0x00, 0x14, // list length
+    0x04, 0x03, // ecdsa_secp256r1_sha256
+    0x08, 0x04, // rsa_pss_rsae_sha256
+    0x04, 0x01, // rsa_pkcs1_sha256
+    0x05, 0x03, // ecdsa_secp384r1_sha384
+    0x08, 0x05, // rsa_pss_rsae_sha384
+    0x08, 0x05, // rsa_pss_rsae_sha384 (again -- see above)
+    0x05, 0x01, // rsa_pkcs1_sha384
+    0x08, 0x06, // rsa_pss_rsae_sha512
+    0x06, 0x01, // rsa_pkcs1_sha512
+    0x02, 0x01, // rsa_pkcs1_sha1
+];
+
+const IOS_SIGNATURE_ALGORITHMS: &[u8] = &[
+    0x00, 0x16, // list length
+    0x04, 0x03, // ecdsa_secp256r1_sha256
+    0x08, 0x04, // rsa_pss_rsae_sha256
+    0x04, 0x01, // rsa_pkcs1_sha256
+    0x05, 0x03, // ecdsa_secp384r1_sha384
+    0x02, 0x03, // ecdsa_sha1
+    0x08, 0x05, // rsa_pss_rsae_sha384
+    0x08, 0x05, // rsa_pss_rsae_sha384 (again)
+    0x05, 0x01, // rsa_pkcs1_sha384
+    0x08, 0x06, // rsa_pss_rsae_sha512
+    0x06, 0x01, // rsa_pkcs1_sha512
+    0x02, 0x01, // rsa_pkcs1_sha1
+];
+
+const COMPRESS_CERTIFICATE_ZLIB_BODY: &[u8] = &[0x02, 0x00, 0x01];
 
 const CHROME_CIPHER_SUITES: &[CipherSuiteSlot] = &[
     CipherSuiteSlot::Grease,
@@ -792,11 +905,8 @@ const CHROME_SUPPORTED_VERSIONS: &[VersionSlot] = &[
     VersionSlot::Version(TLS_1_2),
 ];
 
-/// The extension table shared by both Chrome profiles, parameterised only by
-/// the `application_settings` code point — which is the single thing that moved
-/// between Chrome 131 and Chrome 133.
 macro_rules! chrome_extensions {
-    ($application_settings:expr) => {
+    ($application_settings:expr, $signature_algorithms:expr) => {
         &[
             ExtensionSlot::Grease {
                 slot: GreaseSlot::Extension1,
@@ -827,7 +937,7 @@ macro_rules! chrome_extensions {
             },
             ExtensionSlot::Constant {
                 extension_type: ext::SIGNATURE_ALGORITHMS,
-                body: CHROME_SIGNATURE_ALGORITHMS,
+                body: $signature_algorithms,
             },
             ExtensionSlot::Constant {
                 extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
@@ -857,21 +967,566 @@ macro_rules! chrome_extensions {
     };
 }
 
+pub static CHROME_151: HelloProfile = HelloProfile {
+    name: "chrome_151",
+    cipher_suites: CHROME_CIPHER_SUITES,
+    extensions: chrome_extensions!(ext::APPLICATION_SETTINGS, CHROME_151_SIGNATURE_ALGORITHMS),
+    permute_extensions: true,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
+};
+
 pub static CHROME_133: HelloProfile = HelloProfile {
     name: "chrome_133",
     cipher_suites: CHROME_CIPHER_SUITES,
-    extensions: chrome_extensions!(ext::APPLICATION_SETTINGS),
+    extensions: chrome_extensions!(ext::APPLICATION_SETTINGS, CHROME_SIGNATURE_ALGORITHMS),
     permute_extensions: true,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
 };
 
 pub static CHROME_131: HelloProfile = HelloProfile {
     name: "chrome_131",
     cipher_suites: CHROME_CIPHER_SUITES,
-    extensions: chrome_extensions!(ext::APPLICATION_SETTINGS_OLD),
+    extensions: chrome_extensions!(ext::APPLICATION_SETTINGS_OLD, CHROME_SIGNATURE_ALGORITHMS),
     permute_extensions: true,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
 };
 
-/// The ALPN list both Chrome profiles send.
+const CHROMIUM_FORK_CIPHER_SUITES: &[CipherSuiteSlot] = CHROME_CIPHER_SUITES;
+
+const CHROMIUM_FORK_SUPPORTED_GROUPS: &[GroupSlot] = &[
+    GroupSlot::Grease,
+    GroupSlot::Group(NamedGroup::X25519),
+    GroupSlot::Group(NamedGroup::Secp256r1),
+    GroupSlot::Group(NamedGroup::Secp384r1),
+];
+
+const CHROMIUM_FORK_KEY_SHARES: &[KeyShareSlot] = &[
+    KeyShareSlot::Grease,
+    KeyShareSlot::Group(NamedGroup::X25519),
+];
+
+const CHROMIUM_FORK_SUPPORTED_VERSIONS: &[VersionSlot] = &[
+    VersionSlot::Grease,
+    VersionSlot::Version(TLS_1_3),
+    VersionSlot::Version(TLS_1_2),
+    VersionSlot::Version(TLS_1_1),
+    VersionSlot::Version(TLS_1_0),
+];
+
+pub static EDGE_85: HelloProfile = HelloProfile {
+    name: "edge_85",
+    cipher_suites: CHROMIUM_FORK_CIPHER_SUITES,
+    extensions: &[
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension1,
+            body: &[],
+        },
+        ExtensionSlot::ServerName,
+        ExtensionSlot::Constant {
+            extension_type: ext::EXTENDED_MASTER_SECRET,
+            body: &[],
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RENEGOTIATION_INFO,
+            body: RENEGOTIATION_INFO_BODY,
+        },
+        ExtensionSlot::SupportedGroups(CHROMIUM_FORK_SUPPORTED_GROUPS),
+        ExtensionSlot::Constant {
+            extension_type: ext::EC_POINT_FORMATS,
+            body: EC_POINT_FORMATS_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SESSION_TICKET,
+            body: &[],
+        },
+        ExtensionSlot::Alpn,
+        ExtensionSlot::Constant {
+            extension_type: ext::STATUS_REQUEST,
+            body: STATUS_REQUEST_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNATURE_ALGORITHMS,
+            body: CHROME_SIGNATURE_ALGORITHMS,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
+            body: &[],
+        },
+        ExtensionSlot::KeyShare(CHROMIUM_FORK_KEY_SHARES),
+        ExtensionSlot::Constant {
+            extension_type: ext::PSK_KEY_EXCHANGE_MODES,
+            body: PSK_KEY_EXCHANGE_MODES_BODY,
+        },
+        ExtensionSlot::SupportedVersions(CHROMIUM_FORK_SUPPORTED_VERSIONS),
+        ExtensionSlot::Constant {
+            extension_type: ext::COMPRESS_CERTIFICATE,
+            body: COMPRESS_CERTIFICATE_BODY,
+        },
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension2,
+            body: &[0x00],
+        },
+        ExtensionSlot::Padding,
+    ],
+    permute_extensions: false,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
+};
+
+pub static QQ_11_1: HelloProfile = HelloProfile {
+    name: "qq_11_1",
+    cipher_suites: CHROMIUM_FORK_CIPHER_SUITES,
+    extensions: &[
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension1,
+            body: &[],
+        },
+        ExtensionSlot::ServerName,
+        ExtensionSlot::Constant {
+            extension_type: ext::EXTENDED_MASTER_SECRET,
+            body: &[],
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RENEGOTIATION_INFO,
+            body: RENEGOTIATION_INFO_BODY,
+        },
+        ExtensionSlot::SupportedGroups(CHROMIUM_FORK_SUPPORTED_GROUPS),
+        ExtensionSlot::Constant {
+            extension_type: ext::EC_POINT_FORMATS,
+            body: EC_POINT_FORMATS_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SESSION_TICKET,
+            body: &[],
+        },
+        ExtensionSlot::Alpn,
+        ExtensionSlot::Constant {
+            extension_type: ext::STATUS_REQUEST,
+            body: STATUS_REQUEST_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNATURE_ALGORITHMS,
+            body: CHROME_SIGNATURE_ALGORITHMS,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
+            body: &[],
+        },
+        ExtensionSlot::KeyShare(CHROMIUM_FORK_KEY_SHARES),
+        ExtensionSlot::Constant {
+            extension_type: ext::PSK_KEY_EXCHANGE_MODES,
+            body: PSK_KEY_EXCHANGE_MODES_BODY,
+        },
+        ExtensionSlot::SupportedVersions(CHROMIUM_FORK_SUPPORTED_VERSIONS),
+        ExtensionSlot::Constant {
+            extension_type: ext::COMPRESS_CERTIFICATE,
+            body: COMPRESS_CERTIFICATE_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::APPLICATION_SETTINGS_OLD,
+            body: APPLICATION_SETTINGS_BODY,
+        },
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension2,
+            body: &[0x00],
+        },
+        ExtensionSlot::Padding,
+    ],
+    permute_extensions: false,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
+};
+
+const SAFARI_CIPHER_SUITES: &[CipherSuiteSlot] = &[
+    CipherSuiteSlot::Grease,
+    CipherSuiteSlot::Negotiable(0x1302), // TLS_AES_256_GCM_SHA384
+    CipherSuiteSlot::Negotiable(0x1303), // TLS_CHACHA20_POLY1305_SHA256
+    CipherSuiteSlot::Negotiable(0x1301), // TLS_AES_128_GCM_SHA256
+    CipherSuiteSlot::Decorative(0xc02c),
+    CipherSuiteSlot::Decorative(0xc02b),
+    CipherSuiteSlot::Decorative(0xcca9),
+    CipherSuiteSlot::Decorative(0xc030),
+    CipherSuiteSlot::Decorative(0xc02f),
+    CipherSuiteSlot::Decorative(0xcca8),
+    CipherSuiteSlot::Decorative(0xc00a),
+    CipherSuiteSlot::Decorative(0xc009),
+    CipherSuiteSlot::Decorative(0xc014),
+    CipherSuiteSlot::Decorative(0xc013),
+    CipherSuiteSlot::Decorative(0x009d),
+    CipherSuiteSlot::Decorative(0x009c),
+    CipherSuiteSlot::Decorative(0x0035),
+    CipherSuiteSlot::Decorative(0x002f),
+    CipherSuiteSlot::Decorative(0xc008), // ECDHE_ECDSA_3DES_EDE_CBC_SHA
+    CipherSuiteSlot::Decorative(0xc012), // ECDHE_RSA_3DES_EDE_CBC_SHA
+    CipherSuiteSlot::Decorative(0x000a), // RSA_3DES_EDE_CBC_SHA
+];
+
+const APPLE_SUPPORTED_GROUPS: &[GroupSlot] = &[
+    GroupSlot::Grease,
+    GroupSlot::Group(NamedGroup::X25519MlKem768),
+    GroupSlot::Group(NamedGroup::X25519),
+    GroupSlot::Group(NamedGroup::Secp256r1),
+    GroupSlot::Group(NamedGroup::Secp384r1),
+    GroupSlot::Group(NamedGroup::Secp521r1),
+];
+
+const SAFARI_KEY_SHARES: &[KeyShareSlot] = &[
+    KeyShareSlot::Grease,
+    KeyShareSlot::Group(NamedGroup::X25519MlKem768),
+    KeyShareSlot::Group(NamedGroup::X25519),
+];
+
+const SAFARI_SUPPORTED_VERSIONS: &[VersionSlot] = &[
+    VersionSlot::Grease,
+    VersionSlot::Version(TLS_1_3),
+    VersionSlot::Version(TLS_1_2),
+];
+
+pub static SAFARI_26_3: HelloProfile = HelloProfile {
+    name: "safari_26_3",
+    cipher_suites: SAFARI_CIPHER_SUITES,
+    extensions: &[
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension1,
+            body: &[],
+        },
+        ExtensionSlot::ServerName,
+        ExtensionSlot::Constant {
+            extension_type: ext::EXTENDED_MASTER_SECRET,
+            body: &[],
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RENEGOTIATION_INFO,
+            body: RENEGOTIATION_INFO_BODY,
+        },
+        ExtensionSlot::SupportedGroups(APPLE_SUPPORTED_GROUPS),
+        ExtensionSlot::Constant {
+            extension_type: ext::EC_POINT_FORMATS,
+            body: EC_POINT_FORMATS_BODY,
+        },
+        ExtensionSlot::Alpn,
+        ExtensionSlot::Constant {
+            extension_type: ext::STATUS_REQUEST,
+            body: STATUS_REQUEST_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNATURE_ALGORITHMS,
+            body: APPLE_SIGNATURE_ALGORITHMS,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
+            body: &[],
+        },
+        ExtensionSlot::KeyShare(SAFARI_KEY_SHARES),
+        ExtensionSlot::Constant {
+            extension_type: ext::PSK_KEY_EXCHANGE_MODES,
+            body: PSK_KEY_EXCHANGE_MODES_BODY,
+        },
+        ExtensionSlot::SupportedVersions(SAFARI_SUPPORTED_VERSIONS),
+        ExtensionSlot::Constant {
+            extension_type: ext::COMPRESS_CERTIFICATE,
+            body: COMPRESS_CERTIFICATE_ZLIB_BODY,
+        },
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension2,
+            body: &[0x00],
+        },
+    ],
+    permute_extensions: false,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
+};
+
+const IOS_CIPHER_SUITES: &[CipherSuiteSlot] = &[
+    CipherSuiteSlot::Grease,
+    CipherSuiteSlot::Negotiable(0x1301),
+    CipherSuiteSlot::Negotiable(0x1302),
+    CipherSuiteSlot::Negotiable(0x1303),
+    CipherSuiteSlot::Decorative(0xc02c),
+    CipherSuiteSlot::Decorative(0xc02b),
+    CipherSuiteSlot::Decorative(0xcca9),
+    CipherSuiteSlot::Decorative(0xc030),
+    CipherSuiteSlot::Decorative(0xc02f),
+    CipherSuiteSlot::Decorative(0xcca8),
+    CipherSuiteSlot::Decorative(0xc024),
+    CipherSuiteSlot::Decorative(0xc023),
+    CipherSuiteSlot::Decorative(0xc00a),
+    CipherSuiteSlot::Decorative(0xc009),
+    CipherSuiteSlot::Decorative(0xc028),
+    CipherSuiteSlot::Decorative(0xc027),
+    CipherSuiteSlot::Decorative(0xc014),
+    CipherSuiteSlot::Decorative(0xc013),
+    CipherSuiteSlot::Decorative(0x009d),
+    CipherSuiteSlot::Decorative(0x009c),
+    CipherSuiteSlot::Decorative(0x003d),
+    CipherSuiteSlot::Decorative(0x003c),
+    CipherSuiteSlot::Decorative(0x0035),
+    CipherSuiteSlot::Decorative(0x002f),
+    CipherSuiteSlot::Decorative(0xc008),
+    CipherSuiteSlot::Decorative(0xc012),
+    CipherSuiteSlot::Decorative(0x000a),
+];
+
+const IOS_SUPPORTED_GROUPS: &[GroupSlot] = &[
+    GroupSlot::Grease,
+    GroupSlot::Group(NamedGroup::X25519),
+    GroupSlot::Group(NamedGroup::Secp256r1),
+    GroupSlot::Group(NamedGroup::Secp384r1),
+    GroupSlot::Group(NamedGroup::Secp521r1),
+];
+
+pub static IOS_14: HelloProfile = HelloProfile {
+    name: "ios_14",
+    cipher_suites: IOS_CIPHER_SUITES,
+    extensions: &[
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension1,
+            body: &[],
+        },
+        ExtensionSlot::ServerName,
+        ExtensionSlot::Constant {
+            extension_type: ext::EXTENDED_MASTER_SECRET,
+            body: &[],
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RENEGOTIATION_INFO,
+            body: RENEGOTIATION_INFO_BODY,
+        },
+        ExtensionSlot::SupportedGroups(IOS_SUPPORTED_GROUPS),
+        ExtensionSlot::Constant {
+            extension_type: ext::EC_POINT_FORMATS,
+            body: EC_POINT_FORMATS_BODY,
+        },
+        ExtensionSlot::Alpn,
+        ExtensionSlot::Constant {
+            extension_type: ext::STATUS_REQUEST,
+            body: STATUS_REQUEST_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNATURE_ALGORITHMS,
+            body: IOS_SIGNATURE_ALGORITHMS,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
+            body: &[],
+        },
+        ExtensionSlot::KeyShare(CHROMIUM_FORK_KEY_SHARES),
+        ExtensionSlot::Constant {
+            extension_type: ext::PSK_KEY_EXCHANGE_MODES,
+            body: PSK_KEY_EXCHANGE_MODES_BODY,
+        },
+        ExtensionSlot::SupportedVersions(CHROMIUM_FORK_SUPPORTED_VERSIONS),
+        ExtensionSlot::Grease {
+            slot: GreaseSlot::Extension2,
+            body: &[0x00],
+        },
+        ExtensionSlot::Padding,
+    ],
+    permute_extensions: false,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
+};
+
+const FIREFOX_CIPHER_SUITES: &[CipherSuiteSlot] = &[
+    CipherSuiteSlot::Negotiable(0x1301), // TLS_AES_128_GCM_SHA256
+    CipherSuiteSlot::Negotiable(0x1303), // TLS_CHACHA20_POLY1305_SHA256
+    CipherSuiteSlot::Negotiable(0x1302), // TLS_AES_256_GCM_SHA384
+    CipherSuiteSlot::Decorative(0xc02b),
+    CipherSuiteSlot::Decorative(0xc02f),
+    CipherSuiteSlot::Decorative(0xcca9),
+    CipherSuiteSlot::Decorative(0xcca8),
+    CipherSuiteSlot::Decorative(0xc02c),
+    CipherSuiteSlot::Decorative(0xc030),
+    CipherSuiteSlot::Decorative(0xc00a),
+    CipherSuiteSlot::Decorative(0xc009),
+    CipherSuiteSlot::Decorative(0xc013),
+    CipherSuiteSlot::Decorative(0xc014),
+    CipherSuiteSlot::Decorative(0x009c),
+    CipherSuiteSlot::Decorative(0x009d),
+    CipherSuiteSlot::Decorative(0x002f),
+    CipherSuiteSlot::Decorative(0x0035),
+];
+
+const FIREFOX_SUPPORTED_GROUPS: &[GroupSlot] = &[
+    GroupSlot::Group(NamedGroup::X25519MlKem768),
+    GroupSlot::Group(NamedGroup::X25519),
+    GroupSlot::Group(NamedGroup::Secp256r1),
+    GroupSlot::Group(NamedGroup::Secp384r1),
+    GroupSlot::Group(NamedGroup::Secp521r1),
+    GroupSlot::Group(NamedGroup::Ffdhe2048),
+    GroupSlot::Group(NamedGroup::Ffdhe3072),
+];
+
+const FIREFOX_KEY_SHARES: &[KeyShareSlot] = &[
+    KeyShareSlot::Group(NamedGroup::X25519MlKem768),
+    KeyShareSlot::Group(NamedGroup::X25519),
+    KeyShareSlot::Group(NamedGroup::Secp256r1),
+];
+
+const FIREFOX_SUPPORTED_VERSIONS: &[VersionSlot] =
+    &[VersionSlot::Version(TLS_1_3), VersionSlot::Version(TLS_1_2)];
+
+const FIREFOX_SIGNATURE_ALGORITHMS: &[u8] = &[
+    0x00, 0x16, // list length
+    0x04, 0x03, // ecdsa_secp256r1_sha256
+    0x05, 0x03, // ecdsa_secp384r1_sha384
+    0x06, 0x03, // ecdsa_secp521r1_sha512
+    0x08, 0x04, // rsa_pss_rsae_sha256
+    0x08, 0x05, // rsa_pss_rsae_sha384
+    0x08, 0x06, // rsa_pss_rsae_sha512
+    0x04, 0x01, // rsa_pkcs1_sha256
+    0x05, 0x01, // rsa_pkcs1_sha384
+    0x06, 0x01, // rsa_pkcs1_sha512
+    0x02, 0x03, // ecdsa_sha1
+    0x02, 0x01, // rsa_pkcs1_sha1
+];
+
+const FIREFOX_DELEGATED_CREDENTIALS_BODY: &[u8] = &[
+    0x00, 0x08, // list length
+    0x04, 0x03, // ecdsa_secp256r1_sha256
+    0x05, 0x03, // ecdsa_secp384r1_sha384
+    0x06, 0x03, // ecdsa_secp521r1_sha512
+    0x02, 0x03, // ecdsa_sha1
+];
+
+const FIREFOX_RECORD_SIZE_LIMIT_BODY: &[u8] = &[0x40, 0x01];
+
+const FIREFOX_COMPRESS_CERTIFICATE_BODY: &[u8] = &[0x06, 0x00, 0x01, 0x00, 0x02, 0x00, 0x03];
+
+pub static FIREFOX_148: HelloProfile = HelloProfile {
+    name: "firefox_148",
+    cipher_suites: FIREFOX_CIPHER_SUITES,
+    extensions: &[
+        ExtensionSlot::ServerName,
+        ExtensionSlot::Constant {
+            extension_type: ext::EXTENDED_MASTER_SECRET,
+            body: &[],
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RENEGOTIATION_INFO,
+            body: RENEGOTIATION_INFO_BODY,
+        },
+        ExtensionSlot::SupportedGroups(FIREFOX_SUPPORTED_GROUPS),
+        ExtensionSlot::Constant {
+            extension_type: ext::EC_POINT_FORMATS,
+            body: EC_POINT_FORMATS_BODY,
+        },
+        ExtensionSlot::Alpn,
+        ExtensionSlot::Constant {
+            extension_type: ext::STATUS_REQUEST,
+            body: STATUS_REQUEST_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::DELEGATED_CREDENTIALS,
+            body: FIREFOX_DELEGATED_CREDENTIALS_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
+            body: &[],
+        },
+        ExtensionSlot::KeyShare(FIREFOX_KEY_SHARES),
+        ExtensionSlot::SupportedVersions(FIREFOX_SUPPORTED_VERSIONS),
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNATURE_ALGORITHMS,
+            body: FIREFOX_SIGNATURE_ALGORITHMS,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RECORD_SIZE_LIMIT,
+            body: FIREFOX_RECORD_SIZE_LIMIT_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::COMPRESS_CERTIFICATE,
+            body: FIREFOX_COMPRESS_CERTIFICATE_BODY,
+        },
+        ExtensionSlot::EchGrease,
+    ],
+    permute_extensions: false,
+    ech_grease: FIREFOX_ECH_GREASE,
+    reuse_classical_key_share: true,
+};
+
+const FIREFOX_153_CIPHER_SUITES: &[CipherSuiteSlot] = &[
+    CipherSuiteSlot::Negotiable(0x1301), // TLS_AES_128_GCM_SHA256
+    CipherSuiteSlot::Negotiable(0x1303), // TLS_CHACHA20_POLY1305_SHA256
+    CipherSuiteSlot::Negotiable(0x1302), // TLS_AES_256_GCM_SHA384
+    CipherSuiteSlot::Decorative(0xc02b),
+    CipherSuiteSlot::Decorative(0xc02f),
+    CipherSuiteSlot::Decorative(0xcca9),
+    CipherSuiteSlot::Decorative(0xcca8),
+    CipherSuiteSlot::Decorative(0xc02c),
+    CipherSuiteSlot::Decorative(0xc030),
+    CipherSuiteSlot::Decorative(0xc00a),
+    CipherSuiteSlot::Decorative(0xc013),
+    CipherSuiteSlot::Decorative(0xc014),
+    CipherSuiteSlot::Decorative(0x009c),
+    CipherSuiteSlot::Decorative(0x009d),
+    CipherSuiteSlot::Decorative(0x002f),
+    CipherSuiteSlot::Decorative(0x0035),
+];
+
+pub static FIREFOX_153: HelloProfile = HelloProfile {
+    name: "firefox_153",
+    cipher_suites: FIREFOX_153_CIPHER_SUITES,
+    extensions: &[
+        ExtensionSlot::ServerName,
+        ExtensionSlot::Constant {
+            extension_type: ext::EXTENDED_MASTER_SECRET,
+            body: &[],
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RENEGOTIATION_INFO,
+            body: RENEGOTIATION_INFO_BODY,
+        },
+        ExtensionSlot::SupportedGroups(FIREFOX_SUPPORTED_GROUPS),
+        ExtensionSlot::Constant {
+            extension_type: ext::EC_POINT_FORMATS,
+            body: EC_POINT_FORMATS_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SESSION_TICKET,
+            body: &[],
+        },
+        ExtensionSlot::Alpn,
+        ExtensionSlot::Constant {
+            extension_type: ext::STATUS_REQUEST,
+            body: STATUS_REQUEST_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::DELEGATED_CREDENTIALS,
+            body: FIREFOX_DELEGATED_CREDENTIALS_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
+            body: &[],
+        },
+        ExtensionSlot::KeyShare(FIREFOX_KEY_SHARES),
+        ExtensionSlot::SupportedVersions(FIREFOX_SUPPORTED_VERSIONS),
+        ExtensionSlot::Constant {
+            extension_type: ext::SIGNATURE_ALGORITHMS,
+            body: FIREFOX_SIGNATURE_ALGORITHMS,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::PSK_KEY_EXCHANGE_MODES,
+            body: PSK_KEY_EXCHANGE_MODES_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::RECORD_SIZE_LIMIT,
+            body: FIREFOX_RECORD_SIZE_LIMIT_BODY,
+        },
+        ExtensionSlot::Constant {
+            extension_type: ext::COMPRESS_CERTIFICATE,
+            body: FIREFOX_COMPRESS_CERTIFICATE_BODY,
+        },
+        ExtensionSlot::EchGrease,
+    ],
+    permute_extensions: false,
+    ech_grease: FIREFOX_ECH_GREASE,
+    reuse_classical_key_share: true,
+};
+
 pub const CHROME_ALPN_PROTOCOLS: &[&str] = &["h2", "http/1.1"];
 
 /// Legacy `compression_methods`: null only.
@@ -955,6 +1610,8 @@ mod tests {
             cipher_suites: &[CipherSuiteSlot::Negotiable(0x1304)],
             extensions: &[],
             permute_extensions: false,
+            ech_grease: CHROME_ECH_GREASE,
+            reuse_classical_key_share: false,
         };
         let error = BAD.validate().expect_err("0x1304 is not implemented");
         assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
@@ -968,6 +1625,8 @@ mod tests {
             ],
             extensions: &[],
             permute_extensions: false,
+            ech_grease: CHROME_ECH_GREASE,
+            reuse_classical_key_share: false,
         };
         let error = ALSO_BAD
             .validate()
@@ -984,6 +1643,8 @@ mod tests {
                 NamedGroup::Secp384r1,
             )])],
             permute_extensions: false,
+            ech_grease: CHROME_ECH_GREASE,
+            reuse_classical_key_share: false,
         };
         let error = BAD.validate().expect_err("secp384r1 shares are not sent");
         assert!(error.to_string().contains("secp384r1"), "{error}");
@@ -1058,14 +1719,14 @@ mod tests {
         assert_eq!(body[0], 0x00, "ECHClientHello.type = outer");
         let kdf = u16::from_be_bytes([body[1], body[2]]);
         let aead = u16::from_be_bytes([body[3], body[4]]);
-        assert_eq!(kdf, HPKE_KDF_HKDF_SHA256);
-        assert!(ECH_GREASE_SUITES.contains(&(kdf, aead)), "aead {aead:#06x}");
+        assert_eq!((kdf, aead), ECH_GREASE_SUITE);
         let enc_len = u16::from_be_bytes([body[6], body[7]]) as usize;
         assert_eq!(enc_len, 32);
         assert_eq!(&body[8..8 + 32], &[0x5a_u8; 32]);
         let payload_len = u16::from_be_bytes([body[40], body[41]]) as usize;
         assert!(
-            ECH_GREASE_PAYLOAD_LENS
+            CHROME_ECH_GREASE
+                .payload_lens
                 .iter()
                 .any(|candidate| candidate + ECH_GREASE_TAG_LEN == payload_len),
             "payload {payload_len} is not a candidate length plus the AEAD tag"

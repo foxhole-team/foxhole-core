@@ -379,6 +379,75 @@ async fn onion_query_is_never_sent_without_a_tor_outbound() {
         .await
         .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        error
+            .to_string()
+            .contains("requires a registered Tor outbound"),
+        "{error}"
+    );
+}
+
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test]
+async fn a_gated_off_tor_lane_refuses_onion_as_disabled_rather_than_as_missing() {
+    let config = DnsConfig {
+        mode: DnsMode::FakeIp,
+        upstreams: vec![DnsUpstream::Udp {
+            address: "127.0.0.1:9".into(),
+        }],
+        ..Default::default()
+    };
+    let cache = Arc::new(DnsCache::new(8));
+    let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+    let gated = foxcore_outbound::DeferredOutbound::gated_off(
+        "tor",
+        foxcore_outbound::OutboundKind::Tor,
+        OutboundConfig::Tor(foxcore_api::TorConfig {
+            state_dir: "/nonexistent/state".into(),
+            cache_dir: "/nonexistent/cache".into(),
+            upstream: None,
+            bootstrap_timeout_s: 1,
+            stream_connect_timeout_s: 1,
+            isolate_streams: true,
+            circuit: foxcore_api::TorCircuitConfig::default(),
+            bridges: Vec::new(),
+            transports: Vec::new(),
+        }),
+    );
+    let outbounds = Arc::new(
+        OutboundRegistry::new(
+            direct.clone(),
+            std::collections::HashMap::from([(
+                "tor".to_owned(),
+                Arc::new(Outbound::Deferred(gated)),
+            )]),
+        )
+        .unwrap(),
+    );
+    let proxy = DnsProxy::new_with_gates(
+        1,
+        config,
+        cache,
+        outbounds,
+        direct,
+        false,
+        true,
+        Arc::new(FlowMetrics::default()),
+        EventSink::none(),
+    )
+    .unwrap();
+
+    let error = proxy
+        .exchange(&dns_query_for(8, "hidden.onion"), None)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+    assert!(
+        error
+            .to_string()
+            .contains("disabled by the active traffic policy"),
+        "{error}"
+    );
 }
 
 /// The journal records *which rule set* refused a name, and the UI groups by

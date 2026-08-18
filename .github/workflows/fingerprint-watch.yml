@@ -1,0 +1,132 @@
+# Scheduled reporting only: fetched tables never alter build inputs, and drift opens
+# an issue instead of failing an unchanged commit.
+name: fingerprint-watch
+
+on:
+  schedule:
+    - cron: "23 5 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: fingerprint-watch
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  ISSUE_TITLE: "fingerprints/ has diverged from uTLS"
+  ISSUE_MARKER: "<!-- fingerprint-watch -->"
+
+jobs:
+  watch:
+    if: github.repository_owner == 'foxhole-team'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.12"
+
+      - name: Compare fingerprints/ against uTLS
+        id: compare
+        run: |
+          set -uo pipefail
+          set +e
+          python3 scripts/fingerprint-from-utls.py > "$RUNNER_TEMP/report.txt" 2>&1
+          code=$?
+          set -e
+
+          case "$code" in
+            0) status=agree ;;
+            1) status=diverged ;;
+            *) status=unavailable ;;
+          esac
+          printf 'status=%s\n' "$status" | tee -a "$GITHUB_OUTPUT"
+
+          {
+            printf '## fingerprint-watch: %s\n\n' "$status"
+            printf '```text\n'
+            cat "$RUNNER_TEMP/report.txt"
+            printf '\n```\n'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat "$RUNNER_TEMP/report.txt"
+          # Upstream drift is reported through the issue, never as a build failure.
+          exit 0
+
+      - name: Open, update or close the divergence issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS: ${{ steps.compare.outputs.status }}
+          REPORT: ${{ runner.temp }}/report.txt
+        run: |
+          set -euo pipefail
+
+          if [[ "$STATUS" == "unavailable" ]]; then
+            printf 'Could not fetch or parse uTLS; no issue touched.\n' >&2
+            exit 0
+          fi
+
+          existing="$(gh issue list --state open --limit 100 --json number,body \
+            --jq "map(select(.body // \"\" | contains(\"$ISSUE_MARKER\"))) | .[0].number // empty")"
+
+          if [[ "$STATUS" == "agree" ]]; then
+            if [[ -n "$existing" ]]; then
+              gh issue comment "$existing" --body \
+                "fingerprints/ agrees with uTLS again as of $GITHUB_SHA. Closing."
+              gh issue close "$existing" --reason completed
+            fi
+            exit 0
+          fi
+
+          digest="$(sha256sum "$REPORT" | cut -d' ' -f1)"
+
+          body_file="$RUNNER_TEMP/issue-body.md"
+          {
+            printf '%s\n' "$ISSUE_MARKER"
+            printf '<!-- fingerprint-watch:digest=%s -->\n\n' "$digest"
+            cat <<'PROSE'
+          The committed tables in `fingerprints/` no longer match the uTLS Chrome parrot tables.
+
+          This is a report, not a build failure. Decide deliberately: either uTLS tracked a
+          Chrome change and the committed table should follow, or the divergence is intentional
+          and belongs in the table's notes. Re-hash with the fingerprint digest convention
+          after any edit; `cargo test -p proto-reality` enforces it.
+
+          Field-level diff, from `scripts/fingerprint-from-utls.py`:
+
+          ```text
+          PROSE
+            cat "$REPORT"
+            cat <<'FENCE'
+
+          ```
+          FENCE
+            printf -- '\n- checked at: %s\n' "$GITHUB_SHA"
+            printf -- '- run: %s/%s/actions/runs/%s\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID"
+          } > "$body_file"
+
+          if [[ -z "$existing" ]]; then
+            gh issue create --title "$ISSUE_TITLE" --body-file "$body_file"
+            exit 0
+          fi
+
+          previous="$(gh issue view "$existing" --json body \
+            --jq '.body // "" | capture("fingerprint-watch:digest=(?<d>[0-9a-f]{64})").d // empty' 2>/dev/null || true)"
+          if [[ "$previous" == "$digest" ]]; then
+            printf 'Issue #%s already reports this exact diff; nothing to do.\n' "$existing"
+            exit 0
+          fi
+
+          gh issue edit "$existing" --body-file "$body_file"
+          gh issue comment "$existing" --body \
+            "The divergence changed as of $GITHUB_SHA; the issue body now carries the current diff."

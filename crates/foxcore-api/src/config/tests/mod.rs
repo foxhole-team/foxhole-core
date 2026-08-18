@@ -64,6 +64,25 @@ fn wireguard_json(private_key: &str, address: &str, allowed_ips: &str) -> String
     )
 }
 
+fn amnezia_json_with_mtu(mtu: u16, amnezia: &str) -> String {
+    format!(
+        r#"{{
+                "schema_version":1,
+                "outbound":{{
+                    "type":"wireguard",
+                    "server":"example.com","port":51820,
+                    "private_key":"{WG_PRIVATE_KEY}",
+                    "peer_public_key":"{WG_PEER_PUBLIC_KEY}",
+                    "address":["10.8.0.2/32"],
+                    "allowed_ips":["0.0.0.0/0"],
+                    "mtu":{mtu},
+                    "amnezia":{amnezia}
+                }},
+                "tun":{{"mtu":1400,"ipv4":"10.0.0.1"}}
+            }}"#
+    )
+}
+
 fn amnezia_json(amnezia: &str) -> String {
     format!(
         r#"{{

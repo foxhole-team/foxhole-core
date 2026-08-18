@@ -334,14 +334,9 @@ impl OutboundConfig {
                             "VLESS Reality and ordinary TLS are mutually exclusive".into(),
                         ));
                     }
-                    if !matches!(config.transport, StreamTransportConfig::Raw) {
-                        return Err(ConfigError::Invalid(
-                            "VLESS Reality currently requires raw TCP transport".into(),
-                        ));
-                    }
                     reality.validate()?;
                 }
-                validate_vless_flow(config)
+                validate_vless(config)
             }
             Self::Vmess(config) => {
                 validate_server(&config.server, config.port)?;
@@ -371,6 +366,7 @@ impl OutboundConfig {
                     ));
                 }
                 validate_hysteria2_hopping(config)?;
+                validate_hysteria2_timing(config)?;
                 config.tls.reject_ech(ECH_NOT_OVER_QUIC)?;
                 config.tls.validate()
             }
@@ -460,7 +456,7 @@ impl OutboundConfig {
                     ));
                 }
                 if let Some(amnezia) = &config.amnezia {
-                    amnezia.validate()?;
+                    amnezia.validate(config.mtu)?;
                 }
                 Ok(())
             }

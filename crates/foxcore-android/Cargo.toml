@@ -34,31 +34,6 @@ description = "JNI boundary for FoxCore"
 # still what decides.
 default = ["shipped"]
 
-# What the shipped library contains.
-#
-# `tor` is in here by decision, not by drift: the product is a privacy product,
-# and Tor being a build flag meant a release either had it or did not depending
-# on who typed the build command. The price is known and accepted — Arti carries
-# a static SQLite and roughly doubles the artifact; the public README records
-# the feature decision while release artifacts make the size measurable.
-#
-# Everything that follows from putting it here is followed through rather than
-# left implied: scripts/tor-rsa-gate.sh moved out of the supply-chain job into
-# the main gate, because RUSTSEC-2023-0071 is now an advisory about code in
-# every shipped .so; and deny.toml — the policy for the graph that ships — now
-# carries Arti's findings itself instead of borrowing them from a second file.
-#
-# `onion-service` is also deliberate: public-beta file sharing publishes only
-# through Tor and has no clearnet fallback. proto-tor forces Arti's primary
-# keystore to the in-memory ephemeral implementation, so stopping the engine
-# destroys the onion identity together with the share capability. The wider
-# dependency/licence graph is checked by the ordinary shipped-graph policy.
-#
-# Nothing may be dropped from this list without the app losing a feature it
-# already offers: `fixtures/abi/v1/capabilities.json` freezes `compiled: true`
-# for every protocol here, and scripts/abi-compare-json.py treats a `true` that
-# became `false` as an incompatible change for exactly that reason — an
-# installed app would keep offering a button the core can no longer answer.
 shipped = [
     "vless",
     "vmess",
@@ -108,6 +83,7 @@ libc.workspace = true
 # connection tuples, and this removes them from the shipped artifact rather than
 # trusting a runtime filter to hide them.
 log = { version = "0.4.33", features = ["release_max_level_warn"] }
+proto-reality = { path = "../proto-reality" }
 serde.workspace = true
 serde_json.workspace = true
 # The LAN binding the app confirms is identified by a 32-byte hash, exactly as

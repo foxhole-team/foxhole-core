@@ -317,6 +317,10 @@ fn build_client_config(
         .with_no_client_auth();
     config.alpn_protocols = match alpn_override {
         Some(protocols) => protocols.iter().map(|p| p.as_bytes().to_vec()).collect(),
+        None if tls.alpn.is_empty() => DEFAULT_ALPN
+            .iter()
+            .map(|protocol| protocol.as_bytes().to_vec())
+            .collect(),
         None => tls
             .alpn
             .iter()
@@ -460,15 +464,28 @@ fn protocol_versions(tls: &TlsConfig) -> Vec<&'static rustls::SupportedProtocolV
 /// rather than one outbound at a time.
 fn crypto_provider(tls: &TlsConfig) -> io::Result<Arc<rustls::crypto::CryptoProvider>> {
     let base = rustls::crypto::aws_lc_rs::default_provider();
-    if tls.curve_preferences.is_empty() {
-        return Ok(Arc::new(base));
+
+    let mut wanted: Vec<CurveGroup> = tls.curve_preferences.clone();
+    if wanted.is_empty() {
+        wanted = vec![
+            CurveGroup::X25519MlKem768,
+            CurveGroup::X25519,
+            CurveGroup::Secp256r1,
+            CurveGroup::Secp384r1,
+        ];
+    } else if !wanted.contains(&CurveGroup::X25519MlKem768)
+        && !tls.allow_classical_only_key_exchange
+    {
+        wanted.insert(0, CurveGroup::X25519MlKem768);
     }
-    let mut kx_groups = Vec::with_capacity(tls.curve_preferences.len());
-    for curve in &tls.curve_preferences {
+
+    let mut kx_groups = Vec::with_capacity(wanted.len());
+    for curve in &wanted {
         let named = match curve {
             CurveGroup::X25519 => rustls::NamedGroup::X25519,
             CurveGroup::Secp256r1 => rustls::NamedGroup::secp256r1,
             CurveGroup::Secp384r1 => rustls::NamedGroup::secp384r1,
+            CurveGroup::X25519MlKem768 => rustls::NamedGroup::X25519MLKEM768,
         };
         let group = base
             .kx_groups
@@ -487,6 +504,8 @@ fn crypto_provider(tls: &TlsConfig) -> io::Result<Arc<rustls::crypto::CryptoProv
         ..base
     }))
 }
+
+const DEFAULT_ALPN: [&str; 2] = ["h2", "http/1.1"];
 
 fn decode_pin(encoded: &str) -> io::Result<[u8; 32]> {
     let bytes = STANDARD
@@ -687,8 +706,8 @@ mod tests {
 
     #[test]
     fn pinned_curves_reach_the_client_hello_in_the_order_asked_for() {
-        // The order is the point: a profile pins curves to shape its
-        // ClientHello, and reordering them changes the fingerprint it produces.
+        // Wire order is pinned; the hybrid group is prepended unless explicitly
+        // disabled by policy.
         let config = tls(|config| {
             config.curve_preferences = vec![CurveGroup::Secp256r1, CurveGroup::X25519];
         });
@@ -699,7 +718,11 @@ mod tests {
                 .iter()
                 .map(|group| group.name())
                 .collect::<Vec<_>>(),
-            vec![rustls::NamedGroup::secp256r1, rustls::NamedGroup::X25519]
+            vec![
+                rustls::NamedGroup::X25519MLKEM768,
+                rustls::NamedGroup::secp256r1,
+                rustls::NamedGroup::X25519
+            ]
         );
 
         let untouched = crypto_provider(&tls(|_| {})).unwrap();
@@ -833,6 +856,9 @@ mod tests {
         let forced = rustls_client_config_alpn(&tls, Some(&["h2"])).unwrap();
         assert_eq!(forced.alpn_protocols, vec![b"h2".to_vec()]);
         let normal = rustls_client_config_alpn(&tls, None).unwrap();
-        assert!(normal.alpn_protocols.is_empty());
+        assert_eq!(
+            normal.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        );
     }
 }

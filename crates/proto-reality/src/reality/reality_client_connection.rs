@@ -17,9 +17,12 @@ use super::common::{
     TLS_RECORD_HEADER_SIZE,
 };
 use super::hello_profile::{
-    CHROME_ALPN_PROTOCOLS, EchGreaseParams, GreaseValues, HelloSession, RealityHelloProfile,
-    TLS_1_3,
+    CHROME_ALPN_PROTOCOLS, EchGreaseParams, GreaseValues, HelloProfileData, HelloSession,
+    RealityHelloProfile, TLS_1_3,
 };
+use super::randomized_hello::RandomizedHello;
+#[cfg(any(test, feature = "testkit"))]
+use super::randomized_hello::SeededDraws;
 use super::reality_aead::{AeadKey, decrypt_handshake_message};
 use super::reality_auth::{derive_auth_key, encrypt_session_id, perform_ecdh};
 use super::reality_cipher_suite::CipherSuite;
@@ -35,12 +38,13 @@ use super::reality_tls13_keys::{
     derive_traffic_keys,
 };
 use super::reality_tls13_messages::{
-    construct_client_hello, construct_finished, write_record_header,
+    INITIAL_RECORD_VERSION, construct_client_hello, construct_finished, write_record_header,
 };
 use super::reality_util::{
     extract_server_cipher_suite, extract_server_key_share, extract_server_selected_group,
     extract_server_selected_version,
 };
+use super::runtime_tables;
 use crate::slide_buffer::SlideBuffer;
 
 /// The state machine reached a place its own construction says is impossible.
@@ -71,7 +75,32 @@ pub struct RealityClientConfig {
     /// there is no second place to say which suites are offered — the set the
     /// hello advertises and the set a ServerHello is checked against are read
     /// off the same table.
-    pub hello_profile: RealityHelloProfile,
+    pub hello: RealityHello,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RealityHello {
+    Parrot(RealityHelloProfile),
+    Randomized,
+    #[cfg(any(test, feature = "testkit"))]
+    RandomizedSeeded(u64),
+}
+
+impl Default for RealityHello {
+    fn default() -> Self {
+        Self::Parrot(RealityHelloProfile::default())
+    }
+}
+
+impl From<RealityHelloProfile> for RealityHello {
+    fn from(profile: RealityHelloProfile) -> Self {
+        Self::Parrot(profile)
+    }
+}
+
+enum HelloSource {
+    Parrot(RealityHelloProfile),
+    Randomized(RandomizedHello),
 }
 
 /// Handshake state machine for REALITY client
@@ -145,6 +174,8 @@ pub struct RealityClientConnection {
     // Configuration
     config: RealityClientConfig,
 
+    hello: HelloSource,
+
     // Handshake state
     handshake_state: HandshakeState,
 
@@ -193,8 +224,19 @@ impl RealityClientConnection {
         // that every later match has to unwrap. It is replaced before `new`
         // returns.
         let placeholder = ClientKeyExchange::generate(&[NamedGroup::X25519])?;
+        let hello = match config.hello {
+            RealityHello::Parrot(profile) => HelloSource::Parrot(profile),
+            RealityHello::Randomized => {
+                HelloSource::Randomized(RandomizedHello::draw(&mut rand::rng()))
+            }
+            #[cfg(any(test, feature = "testkit"))]
+            RealityHello::RandomizedSeeded(seed) => {
+                HelloSource::Randomized(RandomizedHello::draw(&mut SeededDraws::new(seed)))
+            }
+        };
         let mut conn = RealityClientConnection {
             config,
+            hello,
             handshake_state: HandshakeState::AwaitingServerHello {
                 client_hello_bytes: Vec::new(),
                 key_exchange: placeholder,
@@ -221,93 +263,19 @@ impl RealityClientConnection {
         Ok(conn)
     }
 
+    fn with_hello_profile<R>(&self, body: impl FnOnce(&HelloProfileData<'_>) -> R) -> R {
+        match &self.hello {
+            // Not `profile.table()`: a verified downloaded document, when one
+            // is installed, supplies this profile's values. It never supplies
+            HelloSource::Parrot(profile) => body(runtime_tables::table_for(*profile)),
+            HelloSource::Randomized(drawn) => drawn.with_profile(body),
+        }
+    }
+
     /// Generate and buffer ClientHello
     fn generate_client_hello(&mut self) -> io::Result<()> {
-        let mut rng = rand::rng();
-        let profile = self.config.hello_profile.table();
-
-        let groups = profile.key_share_groups();
-        let key_exchange = ClientKeyExchange::generate(&groups)?;
-        let mut key_shares: Vec<(NamedGroup, Vec<u8>)> = Vec::with_capacity(groups.len());
-        for group in groups {
-            let share = key_exchange.share_bytes(group).ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "REALITY key exchange produced no {} share for the hello profile",
-                        group.name()
-                    ),
-                )
-            })?;
-            key_shares.push((group, share));
-        }
-
-        let mut client_random = [0u8; 32];
-        rng.fill_bytes(&mut client_random);
-
-        // REALITY's own ECDH: the client's plain x25519 share against the
-        // server's REALITY public key. Independent of whichever group TLS ends
-        // up negotiating — the server reads this share straight out of the
-        // ClientHello, before any of that is decided.
-        let shared_secret =
-            perform_ecdh(key_exchange.reality_private_key(), &self.config.public_key)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-        // Use slice directly from client_random to avoid copying
-        let auth_key = derive_auth_key(&shared_secret, &client_random[0..20], b"REALITY")
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-        // Create session ID with REALITY metadata
-        let timestamp = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_err(|_| io::Error::other("System time error"))?
-            .as_secs();
-
-        let mut session_id_plaintext = [0u8; 16];
-        session_id_plaintext[0] = 1; // Protocol version major
-        session_id_plaintext[1] = 8; // Protocol version minor
-        session_id_plaintext[2] = 0; // Protocol version patch
-        session_id_plaintext[3] = 0; // Padding byte
-        // Timestamp (4 bytes as uint32, in seconds)
-        session_id_plaintext[4..8].copy_from_slice(&(timestamp as u32).to_be_bytes());
-        // Short ID (8 bytes)
-        session_id_plaintext[8..16].copy_from_slice(&self.config.short_id);
-
-        // Create a 32-byte SessionId (16 bytes plaintext + 16 bytes zeros for padding)
-        let mut session_id_for_hello = [0u8; HELLO_SESSION_ID_LEN];
-        session_id_for_hello[0..16].copy_from_slice(&session_id_plaintext);
-
-        let session = HelloSession {
-            client_random: &client_random,
-            session_id: &session_id_for_hello,
-            server_name: &self.config.server_name,
-            alpn_protocols: CHROME_ALPN_PROTOCOLS,
-            key_shares: &key_shares,
-            grease: GreaseValues::random(&mut rng),
-            ech_grease: EchGreaseParams::new(random_x25519_public_key()?, &mut rng),
-            permutation_seed: rng.next_u64(),
-        };
-        let mut client_hello = construct_client_hello(profile, &session)?;
-
-        // Now encrypt the SessionId using the ClientHello with zeroed SessionId as AAD
-        // Use slice directly from client_random to avoid copying
-        let nonce = &client_random[20..32];
-
-        // Zero the SessionId to form the AAD, which is the same window the
-        // server zeroes. `construct_client_hello` has already asserted the
-        // constant against the bytes it produced, so this cannot address the
-        // wrong 32 bytes without that assertion firing first.
-        let session_id_window =
-            HELLO_SESSION_ID_OFFSET..HELLO_SESSION_ID_OFFSET + HELLO_SESSION_ID_LEN;
-        client_hello[session_id_window.clone()].fill(0);
-
-        let encrypted_session_id =
-            encrypt_session_id(&session_id_plaintext, &auth_key, nonce, &client_hello)
-                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-        // Restore the encrypted SessionId before writing or storing ClientHello.
-        // REALITY transcripts use the wire ClientHello, not the zeroed AAD form.
-        client_hello[session_id_window].copy_from_slice(&encrypted_session_id);
+        let (client_hello, key_exchange, auth_key) =
+            self.with_hello_profile(|profile| build_client_hello(&self.config, profile))?;
 
         let hello_len = u16::try_from(client_hello.len()).map_err(|_| {
             io::Error::new(
@@ -315,7 +283,8 @@ impl RealityClientConnection {
                 "REALITY ClientHello does not fit in one TLS record",
             )
         })?;
-        let mut record = write_record_header(CONTENT_TYPE_HANDSHAKE, hello_len);
+        let mut record =
+            write_record_header(CONTENT_TYPE_HANDSHAKE, INITIAL_RECORD_VERSION, hello_len);
         record.extend_from_slice(&client_hello);
         self.ciphertext_write_buf.extend_from_slice(&record);
 
@@ -329,7 +298,88 @@ impl RealityClientConnection {
 
         Ok(())
     }
+}
 
+fn build_client_hello(
+    config: &RealityClientConfig,
+    profile: &HelloProfileData<'_>,
+) -> io::Result<(Vec<u8>, ClientKeyExchange, [u8; 32])> {
+    let mut rng = rand::rng();
+
+    let groups = profile.key_share_groups();
+    let key_exchange =
+        ClientKeyExchange::generate_with_reuse(&groups, profile.reuse_classical_key_share)?;
+    let mut key_shares: Vec<(NamedGroup, Vec<u8>)> = Vec::with_capacity(groups.len());
+    for group in groups {
+        let share = key_exchange.share_bytes(group).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "REALITY key exchange produced no {} share for the hello profile",
+                    group.name()
+                ),
+            )
+        })?;
+        key_shares.push((group, share));
+    }
+
+    let mut client_random = [0u8; 32];
+    rng.fill_bytes(&mut client_random);
+
+    // REALITY's own ECDH: the client's plain x25519 share against the
+    let shared_secret = perform_ecdh(key_exchange.reality_private_key(), &config.public_key)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+
+    let auth_key = derive_auth_key(&shared_secret, &client_random[0..20], b"REALITY")
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| io::Error::other("System time error"))?
+        .as_secs();
+
+    let mut session_id_plaintext = [0u8; 16];
+    session_id_plaintext[0] = 1; // Protocol version major
+    session_id_plaintext[1] = 8; // Protocol version minor
+    session_id_plaintext[2] = 0; // Protocol version patch
+    session_id_plaintext[3] = 0; // Padding byte
+    session_id_plaintext[4..8].copy_from_slice(&(timestamp as u32).to_be_bytes());
+    session_id_plaintext[8..16].copy_from_slice(&config.short_id);
+
+    let mut session_id_for_hello = [0u8; HELLO_SESSION_ID_LEN];
+    session_id_for_hello[0..16].copy_from_slice(&session_id_plaintext);
+
+    let session = HelloSession {
+        client_random: &client_random,
+        session_id: &session_id_for_hello,
+        server_name: &config.server_name,
+        alpn_protocols: CHROME_ALPN_PROTOCOLS,
+        key_shares: &key_shares,
+        grease: GreaseValues::random(&mut rng),
+        ech_grease: EchGreaseParams::with_shape(
+            random_x25519_public_key()?,
+            profile.ech_grease,
+            &mut rng,
+        ),
+        permutation_seed: rng.next_u64(),
+    };
+    let mut client_hello = construct_client_hello(profile, &session)?;
+
+    let nonce = &client_random[20..32];
+
+    let session_id_window = HELLO_SESSION_ID_OFFSET..HELLO_SESSION_ID_OFFSET + HELLO_SESSION_ID_LEN;
+    client_hello[session_id_window.clone()].fill(0);
+
+    let encrypted_session_id =
+        encrypt_session_id(&session_id_plaintext, &auth_key, nonce, &client_hello)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
+
+    client_hello[session_id_window].copy_from_slice(&encrypted_session_id);
+
+    Ok((client_hello, key_exchange, auth_key))
+}
+
+impl RealityClientConnection {
     /// Read TLS messages from the provided reader into internal buffer
     ///
     /// Uses pre-allocated buffer to avoid allocation on every call.
@@ -445,8 +495,14 @@ impl RealityClientConnection {
         self.ciphertext_read_buf.consume(total_record_len);
         let server_hello = &record[TLS_RECORD_HEADER_SIZE..]; // Skip TLS record header (includes handshake header)
 
-        let profile = self.config.hello_profile.table();
-        validate_server_hello(server_hello, &client_hello_bytes)?;
+        let (key_share_groups, negotiable, profile_name) = self.with_hello_profile(|profile| {
+            (
+                profile.key_share_groups(),
+                profile.negotiable_cipher_suites(),
+                profile.name.to_owned(),
+            )
+        });
+        validate_server_hello(server_hello, &client_hello_bytes, &key_share_groups)?;
 
         let cipher_suite_id = extract_server_cipher_suite(server_hello)?;
         let cipher_suite = CipherSuite::from_id(cipher_suite_id).ok_or_else(|| {
@@ -461,17 +517,12 @@ impl RealityClientConnection {
         // The offered list and the implemented list are the same table: a suite
         // the profile marks negotiable is one `CipherSuite::from_id` resolves,
         // and `HelloProfile::validate` refused the hello otherwise.
-        if !profile
-            .negotiable_cipher_suites()
-            .iter()
-            .any(|suite| suite.id() == cipher_suite_id)
-        {
+        if !negotiable.iter().any(|suite| suite.id() == cipher_suite_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
                     "server selected cipher suite 0x{cipher_suite_id:04x}, which the \
-                     {} hello does not offer as negotiable",
-                    profile.name
+                     {profile_name} hello does not offer as negotiable"
                 ),
             ));
         }
@@ -1068,7 +1119,11 @@ const HELLO_RETRY_REQUEST_RANDOM: [u8; 32] = [
     0xc2, 0xa2, 0x11, 0x16, 0x7a, 0xbb, 0x8c, 0x5e, 0x07, 0x9e, 0x09, 0xe2, 0xc8, 0xa8, 0x33, 0x9c,
 ];
 
-fn validate_server_hello(server_hello: &[u8], client_hello: &[u8]) -> io::Result<()> {
+fn validate_server_hello(
+    server_hello: &[u8],
+    client_hello: &[u8],
+    offered_shares: &[NamedGroup],
+) -> io::Result<()> {
     let invalid = |message: String| io::Error::new(io::ErrorKind::InvalidData, message);
 
     let end = HELLO_SESSION_ID_OFFSET + HELLO_SESSION_ID_LEN;
@@ -1126,15 +1181,12 @@ fn validate_server_hello(server_hello: &[u8], client_hello: &[u8]) -> io::Result
         }
     }
 
-    // Lock 3 — the selected group. `supported_groups` names secp256r1 and
-    // secp384r1 because Chrome names them; this build sends no share for either
-    // and cannot complete one. A server picking one is refused by name.
     let group = extract_server_selected_group(server_hello)?;
     match NamedGroup::from_id(group) {
-        Some(named) if named.is_executable() => Ok(()),
+        Some(named) if offered_shares.contains(&named) => Ok(()),
         Some(named) => Err(invalid(format!(
-            "REALITY server selected key exchange group {}, which this hello names but this \
-             build does not execute",
+            "REALITY server selected key exchange group {}, which this hello names but sent no \
+             key share for",
             named.name()
         ))),
         None => Err(invalid(format!(
@@ -1160,7 +1212,7 @@ mod tests {
             public_key: server_public_key(&[0x42u8; 32]),
             short_id: [1, 2, 3, 4, 5, 6, 7, 8],
             server_name: "example.com".to_string(),
-            hello_profile: RealityHelloProfile::Chrome133,
+            hello: RealityHelloProfile::Chrome133.into(),
         }
     }
 
@@ -1296,6 +1348,8 @@ mod tests {
         hello
     }
 
+    const CHROME_SHARES: &[NamedGroup] = &[NamedGroup::X25519MlKem768, NamedGroup::X25519];
+
     /// Three refusals, three messages. One "invalid ServerHello" for all of
     /// them would be a client that cannot tell a server asking for another
     /// group from a server that answered TLS 1.2.
@@ -1314,6 +1368,7 @@ mod tests {
                 Some(NamedGroup::X25519.id()),
             ),
             &client_hello,
+            CHROME_SHARES,
         )
         .expect("a TLS 1.3 x25519 ServerHello is exactly what this client asked for");
         validate_server_hello(
@@ -1324,11 +1379,12 @@ mod tests {
                 Some(NamedGroup::X25519MlKem768.id()),
             ),
             &client_hello,
+            CHROME_SHARES,
         )
         .expect("and so is the hybrid");
 
         let message = |hello: Vec<u8>| -> String {
-            validate_server_hello(&hello, &client_hello)
+            validate_server_hello(&hello, &client_hello, CHROME_SHARES)
                 .expect_err("this ServerHello must be refused")
                 .to_string()
         };
@@ -1364,6 +1420,24 @@ mod tests {
             Some(NamedGroup::Secp256r1.id()),
         ));
         assert!(named_group.contains("secp256r1"), "{named_group}");
+        assert!(named_group.contains("sent no key share"), "{named_group}");
+
+        const FIREFOX_SHARES: &[NamedGroup] = &[
+            NamedGroup::X25519MlKem768,
+            NamedGroup::X25519,
+            NamedGroup::Secp256r1,
+        ];
+        validate_server_hello(
+            &server_hello(
+                good_random,
+                &session_id,
+                Some(TLS_1_3),
+                Some(NamedGroup::Secp256r1.id()),
+            ),
+            &client_hello,
+            FIREFOX_SHARES,
+        )
+        .expect("a profile that sent a P-256 share must accept a P-256 ServerHello");
 
         let unknown_group = message(server_hello(
             good_random,

@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use foxcore_api::{Destination, Hysteria2Config, Hysteria2ObfsConfig};
 use foxcore_dialer::ProtectedDialer;
-use foxcore_transport::rustls_client_config;
+use foxcore_transport::{quic, rustls_client_config};
 use qpack::{HeaderField, decode_stateless, encode_stateless};
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Join};
@@ -33,7 +33,6 @@ const H3_HEADERS_FRAME: u64 = 0x01;
 const H3_SETTING_QPACK_MAX_TABLE_CAPACITY: u64 = 0x01;
 const H3_SETTING_QPACK_BLOCKED_STREAMS: u64 = 0x07;
 const MAX_RESPONSE_HEADERS_LEN: usize = 16 * 1024;
-const QUIC_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 // Leave room for Salamander's eight-byte salt inside a conventional 1500-byte
 // path MTU. IPv6 has the larger fixed network header.
 const SALAMANDER_MAX_QUIC_PAYLOAD_IPV4: u16 = 1_464;
@@ -66,6 +65,7 @@ impl Hysteria2Conn {
         // QUIC sends anything — an unprotected first datagram would route back into our own TUN.
         let socket = dialer.bind_udp_std(server_addr.is_ipv6())?;
         let mut endpoint_config = quinn::EndpointConfig::default();
+        quic_shape::apply_endpoint_shape(&mut endpoint_config);
         let runtime: Arc<dyn quinn::Runtime> = match &cfg.obfs {
             Some(Hysteria2ObfsConfig::Salamander { password }) => {
                 let max_payload = if server_addr.is_ipv6() {
@@ -95,7 +95,7 @@ impl Hysteria2Conn {
         let connecting = endpoint
             .connect(server_addr, sni)
             .map_err(|e| other(format!("quic connect config: {e}")))?;
-        let conn = tokio::time::timeout(QUIC_HANDSHAKE_TIMEOUT, connecting)
+        let conn = tokio::time::timeout(dialer.handshake_timeout(), connecting)
             .await
             .map_err(|_| {
                 io::Error::new(
@@ -425,31 +425,60 @@ fn parse_auth_response(block: &[u8]) -> io::Result<bool> {
     Ok(udp)
 }
 
+fn quic_timing(cfg: &Hysteria2Config) -> io::Result<(quinn::IdleTimeout, Duration)> {
+    let idle_timeout = Duration::from_millis(cfg.idle_timeout_ms)
+        .try_into()
+        .map_err(|_| other("hysteria2 idle timeout is outside QUIC limits"))?;
+    Ok((idle_timeout, Duration::from_millis(cfg.keepalive_ms)))
+}
+
 fn build_client_config(cfg: &Hysteria2Config) -> io::Result<quinn::ClientConfig> {
     let mut tls_config = cfg.tls.clone();
     if tls_config.alpn.is_empty() {
-        tls_config.alpn.push("h3".into());
+        tls_config.alpn.push(quic::DEFAULT_ALPN.into());
     }
     let tls = Arc::unwrap_or_clone(rustls_client_config(&tls_config)?);
 
     let quic_tls = quinn::crypto::rustls::QuicClientConfig::try_from(tls)
         .map_err(|e| other(format!("quic tls: {e}")))?;
     let mut client = quinn::ClientConfig::new(Arc::new(quic_tls));
+    client.initial_dst_cid_provider(Arc::new(quic_shape::initial_destination_connection_id));
 
     let mut transport = quinn::TransportConfig::default();
     let target_bps = u64::from(cfg.up_mbps) * 125_000;
     if target_bps > 0 {
         transport.congestion_controller_factory(Arc::new(BrutalConfig::new(target_bps)));
     }
-    let idle_timeout = Duration::from_secs(30)
-        .try_into()
-        .map_err(|_| other("hysteria2 idle timeout is outside QUIC limits"))?;
+    let (idle_timeout, keepalive) = quic_timing(cfg)?;
     transport.max_idle_timeout(Some(idle_timeout));
-    transport.keep_alive_interval(Some(Duration::from_secs(10)));
-    transport.datagram_receive_buffer_size(Some(2 * 1024 * 1024));
-    transport.datagram_send_buffer_size(1024 * 1024);
+    transport.keep_alive_interval(Some(keepalive));
+    transport.datagram_receive_buffer_size(Some(quic::DATAGRAM_RECEIVE_BUFFER_BYTES));
+    transport.datagram_send_buffer_size(quic::DATAGRAM_SEND_BUFFER_BYTES);
+    quic_shape::apply_flow_control(&mut transport);
     client.transport_config(Arc::new(transport));
     Ok(client)
+}
+
+/// The handshake-shaping knobs both QUIC outbounds set the same way.
+///
+/// The values are [`foxcore_transport::quic`]'s, so hysteria2 and TUIC cannot
+pub(crate) mod quic_shape {
+    use foxcore_transport::quic;
+    use quinn_proto::{ConnectionId, ConnectionIdGenerator, RandomConnectionIdGenerator};
+
+    pub(crate) fn initial_destination_connection_id() -> ConnectionId {
+        RandomConnectionIdGenerator::new(quic::INITIAL_DESTINATION_CONNECTION_ID_BYTES)
+            .generate_cid()
+    }
+
+    pub(crate) fn apply_flow_control(transport: &mut quinn::TransportConfig) {
+        transport.receive_window(quic::RECEIVE_WINDOW_BYTES.into());
+        transport.stream_receive_window(quic::STREAM_RECEIVE_WINDOW_BYTES.into());
+    }
+
+    pub(crate) fn apply_endpoint_shape(endpoint: &mut quinn::EndpointConfig) {
+        endpoint.grease_quic_bit(quic::GREASE_QUIC_BIT);
+    }
 }
 
 /// Read a QUIC varint from an async stream.
@@ -513,6 +542,76 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use super::*;
+
+    fn timing_config(keepalive_ms: u64, idle_timeout_ms: u64) -> Hysteria2Config {
+        Hysteria2Config {
+            server: "hy2.example".into(),
+            port: 443,
+            server_ip: None,
+            password: foxcore_api::SecretString::new("pw"),
+            up_mbps: 0,
+            down_mbps: 0,
+            obfs: None,
+            server_ports: Vec::new(),
+            hop_interval_ms: 30_000,
+            keepalive_ms,
+            idle_timeout_ms,
+            tls: Default::default(),
+        }
+    }
+
+    #[test]
+    fn quic_timing_follows_the_profile() {
+        let (idle, keepalive) = quic_timing(&timing_config(45_000, 120_000)).unwrap();
+        assert_eq!(keepalive, Duration::from_secs(45));
+        assert_eq!(
+            idle,
+            quinn::IdleTimeout::try_from(Duration::from_secs(120)).unwrap()
+        );
+    }
+
+    #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+    #[tokio::test]
+    async fn the_quic_handshake_budget_comes_from_the_profile() {
+        let black_hole = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = black_hole.local_addr().unwrap();
+        let mut config = timing_config(10_000, 30_000);
+        config.tls = foxcore_api::TlsConfig {
+            enabled: true,
+            ..Default::default()
+        };
+        let dialer = ProtectedDialer::host().with_handshake_timeout(Duration::from_millis(300));
+
+        let started = std::time::Instant::now();
+        let Err(error) = Hysteria2Conn::connect(&config, address, &dialer).await else {
+            panic!("a socket that never answers cannot complete a QUIC handshake");
+        };
+        let elapsed = started.elapsed();
+
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "the profile asked for 300ms and got {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn the_default_handshake_budget_is_the_fifteen_seconds_that_was_hardcoded() {
+        assert_eq!(
+            ProtectedDialer::host().handshake_timeout(),
+            Duration::from_secs(15)
+        );
+    }
+
+    #[test]
+    fn quic_timing_keeps_the_reference_defaults() {
+        let (idle, keepalive) = quic_timing(&timing_config(10_000, 30_000)).unwrap();
+        assert_eq!(keepalive, Duration::from_secs(10));
+        assert_eq!(
+            idle,
+            quinn::IdleTimeout::try_from(Duration::from_secs(30)).unwrap()
+        );
+    }
 
     /// What the scripted peer does on the next read.
     enum Step {

@@ -65,19 +65,24 @@ impl PacketOut for ArenaPacket<'_> {
     }
 }
 
-/// Timer resolution. WireGuard's shortest interval is `REKEY_TIMEOUT` (5 s), so
-/// a one-second tick is fine-grained enough and costs nothing while idle.
+/// Floor on the relay's sleep between timer passes.
 pub(crate) const TICK: Duration = Duration::from_secs(1);
 
-/// How long the relay may send into silence before it says so.
-///
-/// Four `REKEY_TIMEOUT` windows. By then four whole handshake attempts have gone
-/// out and not one authenticated byte has come back, which is no longer "the
-/// peer is starting up" — it is a tunnel that is down. Shorter would report a
-/// slow handshake; longer would let a dead tunnel run a battery flat while every
-/// counter reads healthy, which is exactly what happened (D15).
+pub(crate) const MAX_IDLE_TICK: Duration =
+    Duration::from_millis(proto_wireguard::tunnel::REKEY_AFTER_TIME_MS);
+
+pub(crate) const REBIND_BACKOFF_MIN: Duration = Duration::from_secs(1);
+
+pub(crate) const REBIND_BACKOFF_MAX: Duration = Duration::from_secs(60);
+
+/// Six rekey windows form the floor; [`peer_silence_window`] adds the profile's
+/// keepalive so a common 25-second interval cannot look like peer silence.
 pub(crate) const PEER_SILENCE: Duration =
-    Duration::from_millis(4 * proto_wireguard::tunnel::REKEY_TIMEOUT_MS);
+    Duration::from_millis(6 * proto_wireguard::tunnel::REKEY_TIMEOUT_MS);
+
+pub(crate) fn peer_silence_window(keepalive_s: Option<u16>) -> Duration {
+    PEER_SILENCE.saturating_add(Duration::from_secs(u64::from(keepalive_s.unwrap_or(0))))
+}
 
 /// Receive errors in a row before the relay stops trusting the socket.
 ///

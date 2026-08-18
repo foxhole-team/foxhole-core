@@ -1,10 +1,16 @@
 #![forbid(unsafe_code)]
 
+pub mod backoff;
 mod datagram;
 mod grpc;
 mod h2io;
 mod http2;
 mod httpupgrade;
+#[cfg(feature = "fingerprinting")]
+pub mod ja;
+pub mod quic;
+#[cfg(feature = "fingerprinting")]
+pub mod quic_initial;
 mod serverfirst;
 pub mod splice;
 mod tls;
@@ -56,8 +62,8 @@ pub fn ensure_process_crypto_provider() -> std::io::Result<()> {
 }
 
 /// Compose the TLS layer (with ALPN forced to `h2` for gRPC/HTTP2 transports)
-/// and the stream transport into one client byte stream. Reality is handled by
-/// its own crate because it replaces TLS on raw TCP only.
+/// and the stream transport into one client byte stream. REALITY owns its
+/// ClientHello and reuses only [`wrap_stream_transport`].
 pub async fn establish_stream<S>(
     tcp: S,
     tls: &TlsConfig,

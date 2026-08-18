@@ -125,7 +125,7 @@ impl IpStackUdpStream {
                     payload: Some(payload),
                 })
             }
-            _ => unreachable!(),
+            _ => Err(IpStackError::InvalidPacket.into()),
         }
     }
 

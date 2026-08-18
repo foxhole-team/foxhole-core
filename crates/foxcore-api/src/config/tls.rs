@@ -24,10 +24,11 @@ pub struct TlsConfig {
     pub min_version: Option<TlsVersion>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_version: Option<TlsVersion>,
-    /// Key-exchange groups, most preferred first. A profile pins these to shape
-    /// its ClientHello; an empty list means the provider's own order.
+    /// Key-exchange groups in wire order; empty means hybrid-first.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub curve_preferences: Vec<CurveGroup>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_classical_only_key_exchange: bool,
     /// Encrypted Client Hello. Absent means the SNI travels in the clear, which
     /// is what every profile written before this field did and still does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -124,6 +125,8 @@ pub enum CurveGroup {
     X25519,
     Secp256r1,
     Secp384r1,
+    #[serde(rename = "x25519mlkem768", alias = "X25519MLKEM768")]
+    X25519MlKem768,
 }
 
 impl std::hash::Hash for CurveGroup {

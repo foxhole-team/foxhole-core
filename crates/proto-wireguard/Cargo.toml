@@ -28,3 +28,7 @@ proptest = "1.11.0"
 [[bench]]
 name = "wireguard_datapath"
 harness = false
+
+[[example]]
+name = "wg_responder"
+required-features = ["test-support"]

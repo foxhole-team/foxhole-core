@@ -3,6 +3,7 @@ use super::*;
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::BytesMut;
 use foxcore_api::{BlockReason, CoreEvent, Destination, EventSink, IpTransport};
@@ -142,8 +143,9 @@ impl PacketTunnelRelay {
         let refusals = RefusalReporter::default();
         let mut inbound = vec![0_u8; MAX_DATAGRAM];
         let mut decrypted_arena = PacketArena::new(DECRYPTED_PACKET_HINT);
-        let mut ticker = tokio::time::interval(TICK);
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut rebind_backoff = REBIND_BACKOFF_MIN;
+        let timer = tokio::time::sleep(TICK);
+        tokio::pin!(timer);
         // `None` is the fail-closed state: the network moved and no protected
         // socket could be built for the new one. Packets are dropped and
         // counted while it holds, and every tick retries.
@@ -163,8 +165,24 @@ impl PacketTunnelRelay {
         let mut heard_ms = 0_u64;
         let mut sent_since_heard = false;
         let mut silence_reported = false;
+        let peer_silence = peer_silence_window(tunnel.persistent_keepalive_s());
 
         loop {
+            let now = elapsed_ms(started);
+            let mut wake = tunnel
+                .next_deadline_ms()
+                .map(|deadline| deadline.saturating_sub(now))
+                .unwrap_or(MAX_IDLE_TICK.as_millis() as u64);
+            if socket.is_none() {
+                wake = wake.min(rebind_backoff.as_millis() as u64);
+            }
+            let silence_due = heard_ms.saturating_add(peer_silence.as_millis() as u64);
+            if !silence_reported && silence_due > now {
+                wake = wake.min(silence_due.saturating_sub(now));
+            }
+            let wake = Duration::from_millis(wake).clamp(TICK, MAX_IDLE_TICK);
+            timer.as_mut().reset(Instant::now() + wake);
+
             tokio::select! {
                 _ = cancel.cancelled() => return Ok(()),
                 changed = network.changed(), if network_signalled => {
@@ -178,6 +196,7 @@ impl PacketTunnelRelay {
                     // it accepts every send and delivers nothing, which is
                     // indistinguishable from a working tunnel from inside.
                     socket = None;
+                    rebind_backoff = REBIND_BACKOFF_MIN;
                     // Cancellation is polled *during* the rebind, not only
                     // between them. `rebind` resolves the peer under
                     // `connect_timeout_ms`, which defaults to 10 s — more than
@@ -327,7 +346,10 @@ impl PacketTunnelRelay {
                             // network is full of, and treating it as an answer
                             // would let anything on the path silence the
                             // liveness report below.
-                            flush(&mut tunnel, socket.as_ref(), &metrics).await;
+                            // A failed decrypt may trigger a retry; count that
+                            // send so silence tracking remains symmetric.
+                            sent_since_heard |=
+                                flush(&mut tunnel, socket.as_ref(), &metrics).await;
                             continue;
                         }
                     }
@@ -338,12 +360,7 @@ impl PacketTunnelRelay {
                     silence_reported = false;
                     sent_since_heard = flush(&mut tunnel, socket.as_ref(), &metrics).await;
                 }
-                _ = ticker.tick() => {
-                    // The retry. One second is the relay's existing timer and
-                    // finer than anything WireGuard measures, so a rebind that
-                    // failed because the new interface was not up yet costs at
-                    // most a tick — while a rebind loop of its own would need a
-                    // second timer and a second place to get the backoff wrong.
+                _ = timer.as_mut() => {
                     let retried = if socket.is_none() {
                         // Same reason as the network-change branch above.
                         tokio::select! {
@@ -357,6 +374,10 @@ impl PacketTunnelRelay {
                         socket = Some(fresh);
                         peer = address;
                         offline_reported = false;
+                        rebind_backoff = REBIND_BACKOFF_MIN;
+                    } else if socket.is_none() {
+                        rebind_backoff =
+                            (rebind_backoff * 2).min(REBIND_BACKOFF_MAX);
                     }
                     let _ = tunnel.tick(elapsed_ms(started));
                     sent_since_heard |= flush(&mut tunnel, socket.as_ref(), &metrics).await;
@@ -371,7 +392,7 @@ impl PacketTunnelRelay {
                     if sent_since_heard
                         && !silence_reported
                         && elapsed_ms(started).saturating_sub(heard_ms)
-                            >= PEER_SILENCE.as_millis() as u64
+                            >= peer_silence.as_millis() as u64
                     {
                         silence_reported = true;
                         metrics.tunnel_peer_silent();

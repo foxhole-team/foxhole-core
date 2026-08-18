@@ -376,12 +376,12 @@ async fn a_peer_that_answers_nothing_while_we_send_is_reported_not_drawn_as_heal
 
     // One packet is enough to start the handshake; the peer never answers.
     to_relay.send(ip_packet(TUN_V4, REMOTE_V4)).await.unwrap();
-    tokio::time::sleep(Duration::from_secs(25)).await;
+    tokio::time::sleep(crate::relay::state::PEER_SILENCE + Duration::from_secs(5)).await;
 
     assert_eq!(
         metrics.snapshot().tunnel_peer_silences,
         1,
-        "a tunnel sending into silence for four handshake windows is down, \
+        "a tunnel sending into silence past PEER_SILENCE is down, \
              and reporting it once is the difference between a diagnosis and a \
              screen that says everything is fine"
     );
@@ -402,4 +402,19 @@ async fn a_peer_that_answers_nothing_while_we_send_is_reported_not_drawn_as_heal
 
     cancel.cancel();
     let _ = task.await;
+}
+
+#[test]
+fn the_silence_window_clears_the_profiles_own_keepalive() {
+    use crate::relay::state::{PEER_SILENCE, peer_silence_window};
+
+    assert_eq!(peer_silence_window(None), PEER_SILENCE);
+    assert_eq!(peer_silence_window(Some(0)), PEER_SILENCE);
+
+    for keepalive in [10_u16, 25, 45, 60, 300, u16::MAX] {
+        assert!(
+            peer_silence_window(Some(keepalive)) > Duration::from_secs(u64::from(keepalive)),
+            "a healthy tunnel with a {keepalive} s keepalive must not be called unresponsive"
+        );
+    }
 }

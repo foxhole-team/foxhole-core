@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-android"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "foxcore-api",
  "foxcore-dialer",
@@ -1554,6 +1554,7 @@ dependencies = [
  "jni",
  "libc",
  "log",
+ "proto-reality",
  "serde",
  "serde_json",
  "sha2",
@@ -1562,7 +1563,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-api"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "ipnet",
@@ -1575,7 +1576,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-component"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1592,24 +1593,25 @@ dependencies = [
 
 [[package]]
 name = "foxcore-dialer"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-dns"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "foxcore-link"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "foxcore-api",
+ "getrandom 0.3.4",
  "ipnet",
  "percent-encoding",
  "serde",
@@ -1620,7 +1622,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-outbound"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1648,7 +1650,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-relay"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "criterion",
  "tokio",
@@ -1656,7 +1658,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-route"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aws-lc-rs",
  "criterion",
@@ -1671,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-runtime"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1694,7 +1696,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-share"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "argon2",
  "base64",
@@ -1715,7 +1717,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-testkit"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1736,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-trafficmap"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "foxcore-api",
@@ -1748,13 +1750,15 @@ dependencies = [
 
 [[package]]
 name = "foxcore-transport"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "base64",
  "bytes",
  "foxcore-api",
  "futures",
+ "getrandom 0.3.4",
  "h2",
  "http",
  "rcgen",
@@ -1771,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-tun"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -3286,7 +3290,7 @@ dependencies = [
 
 [[package]]
 name = "proto-anytls"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3301,7 +3305,7 @@ dependencies = [
 
 [[package]]
 name = "proto-http"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "bytes",
@@ -3314,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "proto-hysteria2"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "blake2",
  "bytes",
@@ -3335,7 +3339,7 @@ dependencies = [
 
 [[package]]
 name = "proto-i2p"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "foxcore-api",
  "foxcore-transport",
@@ -3344,7 +3348,7 @@ dependencies = [
 
 [[package]]
 name = "proto-naive"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "bytes",
@@ -3360,13 +3364,14 @@ dependencies = [
 
 [[package]]
 name = "proto-reality"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aws-lc-rs",
  "base64",
  "foxcore-transport",
  "rand 0.9.4",
  "rcgen",
+ "serde_json",
  "subtle",
  "tokio",
  "x509-parser",
@@ -3375,7 +3380,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowsocks"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "bytes",
@@ -3390,7 +3395,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowtls"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3410,7 +3415,7 @@ dependencies = [
 
 [[package]]
 name = "proto-socks"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3423,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tor"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arti-client",
  "async-trait",
@@ -3444,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "proto-trojan"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3457,12 +3462,13 @@ dependencies = [
 
 [[package]]
 name = "proto-tuic"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
  "foxcore-dialer",
  "foxcore-transport",
+ "log",
  "quinn",
  "quinn-proto",
  "tokio",
@@ -3472,22 +3478,32 @@ dependencies = [
 
 [[package]]
 name = "proto-vless"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
+ "aes",
+ "aes-gcm",
+ "aws-lc-rs",
+ "base64",
+ "blake3",
  "bytes",
+ "chacha20poly1305",
+ "ctr",
  "foxcore-api",
  "foxcore-dialer",
+ "foxcore-link",
  "foxcore-transport",
  "getrandom 0.3.4",
  "proto-reality",
+ "serde_json",
  "sha2",
  "tokio",
  "tokio-util",
+ "zeroize",
 ]
 
 [[package]]
 name = "proto-vmess"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3507,7 +3523,7 @@ dependencies = [
 
 [[package]]
 name = "proto-wireguard"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aws-lc-rs",
  "blake2",

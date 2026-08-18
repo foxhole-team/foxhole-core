@@ -64,11 +64,14 @@ impl SocketCallbacks {
     }
 }
 
+const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+
 #[derive(Clone)]
 pub struct ProtectedDialer {
     callbacks: SocketCallbacks,
     network_handle: Arc<AtomicU64>,
     connect_timeout: Duration,
+    handshake_timeout: Duration,
 }
 
 impl fmt::Debug for ProtectedDialer {
@@ -77,6 +80,7 @@ impl fmt::Debug for ProtectedDialer {
             .field("callbacks", &self.callbacks)
             .field("network_handle", &self.network_handle())
             .field("connect_timeout", &self.connect_timeout)
+            .field("handshake_timeout", &self.handshake_timeout)
             .finish()
     }
 }
@@ -87,7 +91,24 @@ impl ProtectedDialer {
             callbacks,
             network_handle: Arc::new(AtomicU64::new(0)),
             connect_timeout,
+            handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
         }
+    }
+
+    /// Set the handshake budget the profile asked for.
+    ///
+    /// A builder rather than a constructor argument so every existing caller
+    /// keeps the budget it already had, which is the 15 seconds the QUIC
+    /// protocols used to hardcode.
+    #[must_use]
+    pub fn with_handshake_timeout(mut self, handshake_timeout: Duration) -> Self {
+        self.handshake_timeout = handshake_timeout;
+        self
+    }
+
+    /// How long a protocol may spend on its handshake once connected.
+    pub fn handshake_timeout(&self) -> Duration {
+        self.handshake_timeout
     }
 
     pub fn host() -> Self {
@@ -299,15 +320,20 @@ impl ProtectedDialer {
                 "host refused to protect outbound socket",
             ));
         }
-        let network_handle = self.network_handle();
-        if network_handle != 0
-            && let Some(bind) = &self.callbacks.bind
-            && !bind(fd, network_handle)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "host refused to bind outbound socket to Android Network",
-            ));
+        if let Some(bind) = &self.callbacks.bind {
+            let network_handle = self.network_handle();
+            if network_handle == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "Android Network handle is required before an outbound socket may be opened",
+                ));
+            }
+            if !bind(fd, network_handle) {
+                return Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "host refused to bind outbound socket to Android Network",
+                ));
+            }
         }
         Ok(())
     }
@@ -338,6 +364,60 @@ mod tests {
         dialer.set_network_handle(42);
         let _ = dialer.connect_tcp("127.0.0.1:9".parse().unwrap()).await;
         assert_eq!(*events.lock().unwrap(), ["protect", "bind:42"]);
+    }
+
+    #[tokio::test]
+    async fn literal_address_is_refused_while_no_network_is_selected() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let protect_events = events.clone();
+        let bind_events = events.clone();
+        let callbacks = SocketCallbacks::new(
+            move |_| {
+                protect_events.lock().unwrap().push("protect".to_string());
+                true
+            },
+            move |_, network| {
+                bind_events.lock().unwrap().push(format!("bind:{network}"));
+                true
+            },
+        );
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_millis(50));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reachable = listener.local_addr().unwrap();
+        let error = dialer.connect_tcp(reachable).await.unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::NotConnected);
+        assert!(
+            !events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| event.starts_with("bind"))
+        );
+
+        assert!(dialer.bind_udp_std(false).is_err());
+        dialer.set_network_handle(42);
+        dialer.connect_tcp(reachable).await.unwrap();
+        assert!(
+            events
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|event| event == "bind:42")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_host_without_a_bind_callback_still_dials_unbound() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reachable = listener.local_addr().unwrap();
+        let dialer = ProtectedDialer::new(
+            SocketCallbacks::protect_only(|_| true),
+            Duration::from_millis(500),
+        );
+
+        dialer.connect_tcp(reachable).await.unwrap();
     }
 
     #[tokio::test]

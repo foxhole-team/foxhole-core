@@ -55,11 +55,21 @@ TUN → flow engine → routing policy → outbound
 > **Status:** early beta. Production hardening and part of the device gates are
 > not yet complete. Protocol maturity is listed in the table below; independently
 > verified interoperability is documented in [`interop.md`](docs/interop.md).
+>
+> **TLS fingerprint:** a Reality connection sends a browser-faithful
+> ClientHello — nine profiles, seven transcribed from uTLS and two from
+> first-party captures, matching real Chromium on
+> the human-readable part of JA4.
+> rustls implements none of the RSA and CBC suites Chrome
+> carries and exposes no API for GREASE or extension order. Under active
+> development and experiment; a different TLS stack (BoringSSL) is a candidate
+> for closing it.
 
 ### Documentation
 
 | Document | Purpose |
 | --- | --- |
+| [Beta architecture](docs/architecture/README.md) | cross-repository architecture, trust boundaries and release data flow for the public beta |
 | [SECURITY.md](SECURITY.md) | vulnerability reporting and security scope |
 | [threat-model.md](docs/threat-model.md) | threat model and security boundaries |
 | [abi.md](docs/abi.md) | FFI contract: handles, threads, panic boundaries, error codes and limits |
@@ -80,8 +90,8 @@ TUN → flow engine → routing policy → outbound
 | **Firewall** | Block priority, kill switch, quarantine, TTL rules |
 | **Traffic map** | live flows, per-app/per-lane accounting, route/outbound state |
 | **Core events** | bounded native event stream with an explicit `dropped` counter |
-| **Web Apps / leases** | isolated Web App identity, routable leases, origin-bound notifications |
-| **File sharing (in development)** | native XChaCha20-Poly1305 vault, capability-based access, and onion-publication primitives; not a released FoxHole Guard feature |
+| **Web Apps / leases (ABI only)** | identity, lease and notification primitives retained in JNI for v0.0.1 compatibility; FoxHole Guard has no product caller |
+| **File sharing (ABI only)** | XChaCha20-Poly1305 vault and onion-publication primitives retained in JNI; FoxHole Guard has no user flow |
 | **Proxy server** | SOCKS5 / HTTP CONNECT, mandatory authentication, network binding, JNI entry points |
 | **Android / Native ABI** | versioned C/JNI ABI, capabilities JSON, safe handles |
 
@@ -118,7 +128,7 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 
 | Protocol | Support | Maturity |
 | --- | --- | --- |
-| **VLESS** | raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH; Reality and Vision over raw TCP | `beta` |
+| **VLESS** | raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH; Reality under any stream transport, Vision over raw TCP | `beta` |
 | **VMess** | AEAD (`alterId=0`), TCP/UDP, raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH | `beta` |
 | **Hysteria2** | QUIC/H3, Brutal, Salamander obfs, TCP/UDP, destination port hopping | `beta` |
 | **WireGuard** | implementation of the Noise_IKpsk2 handshake, L3 tunnel, `reserved`, `wg://`, `.conf` | `beta` |
@@ -132,7 +142,8 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 | **ShadowTLS** | strict v3 / TLS 1.3, Shadowsocks inner only | `experimental` |
 | **SOCKS5** | CONNECT, UDP ASSOCIATE, authentication | `beta` |
 | **HTTP** | CONNECT proxy | `beta` |
-| **Tor** | Arti, TCP, `.onion`, bridges, pluggable transports, onion service | `beta` |
+| **Tor** | Arti, TCP, `.onion`, bridges, pluggable transports | `beta` |
+| Tor onion **service** (publishing) | compiled, never exercised on a device — the artifact every acceptance run covered was built without it | `experimental` |
 | **I2P** | TCP-only SOCKS5 adapter to external `i2pd` | `experimental` |
 | **Selector** | named outbound group, connect failover, urltest | `beta` |
 
@@ -142,7 +153,7 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 
 The protocol list above is not a freely composable transport matrix:
 
-- **Reality** works only over raw TCP and is mutually exclusive with normal TLS. It cannot be placed under WebSocket, HTTP Upgrade, gRPC or H2.
+- **Reality** is a security layer, not a carrier, and is mutually exclusive with normal TLS. A stream transport may sit above it: WebSocket, HTTP Upgrade, gRPC and H2 are all accepted, gRPC being the common shape in the wild. **Vision** is the exception — it requires raw TCP.
 - **Vision**, in this implementation, requires TLS 1.3 on the outer layer and `packet_encoding = xudp`, and rejects UDP on port 443.
 - **Outline** `prefix=` applies to AEAD ciphers over TCP; it is not carried over to AEAD-2022 or UDP.
 - **Hysteria2 port hopping** rotates the destination port from the configured set while retaining one protected local UDP socket. The reference client also rotates the source port, so this implementation is deliberately narrower.
@@ -320,7 +331,9 @@ outbound_unavailable
 outbound_restored
 ```
 
-Two additional bounded streams exist with their own `dropped` counters: traffic-map open/close events and component events.
+The shipped ABI also exposes traffic-map open/close events with its own `dropped` counter.
+Component/share event streams remain exported for v0.0.1 ABI compatibility, but the current Guard
+does not subscribe to them.
 
 FoxHole Core does not maintain a persistent security journal and does not contain
 FoxHole Sentinel. FoxHole Sentinel and the long-term FoxHole Guard journal live in
@@ -330,6 +343,10 @@ application may use for journaling, traffic mapping and local correlation.
 ---
 
 ## 🧩 Extensions and system components
+
+The component, lease and vault model below is implemented in the core. Its 19 Android JNI exports
+remain in release libraries because v0.0.1 shipped them; the current Guard has no product call
+sites. The Engine surface separately includes LAN proxy and loopback-inbound operations.
 
 At the FoxHole Core level, every component has a bounded ASCII identifier. A Web
 App also has a separately validated canonical HTTPS origin, which is its origin
@@ -346,10 +363,9 @@ Operations are authorized through leases. A lease is not a permanent grant: it m
 | File sharing (in development) | always Tor; no clearnet fallback |
 | Proxy server | no component lease route; its preset selects VPN/Tor upstreams |
 
-File-sharing vault and onion-publication primitives are compiled into the shipped
-core, but the feature remains **in development**: it has not completed external
-end-to-end release acceptance and is not exposed by the public FoxHole Guard
-application. `share.compiled` reports code presence, not product readiness.
+The shipped core contains the vault implementation, onion-service support and the compatibility
+JNI exports, so `share.compiled` reports code presence. FoxHole Guard has no product call site for
+this **in-development** surface.
 
 ---
 
@@ -391,6 +407,16 @@ FoxHole Core exposes a versioned C/JNI ABI.
 
 The Android application queries runtime capabilities.
 
+The release library has 33 `FoxholeNativeEngine` exports and Guard declares 32; only the legacy
+start without an Android `Network` handle is intentionally omitted. Signed DNS starts and
+`nativeTrafficMap` are used in production. Link-import and continuity declarations are retained as
+compatibility-only ABI, with no Kotlin product wrapper. Signed DNS downloads are persisted first,
+then installed live into a stable engine; enabling filtering or changing trust uses an atomic
+replacement start, and an inactive engine consumes the bundle at its next start.
+
+Release ELF files also retain the 19 v0.0.1 component/share exports. They are compatibility ABI,
+not released Guard functionality.
+
 Capabilities include:
 
 - compiled protocols;
@@ -399,14 +425,15 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-Release ABIs:
+Release ABI:
 
 ```text
 arm64-v8a
-armeabi-v7a
 ```
 
-`x86_64` is in development.
+arm64 only, deliberately: no live traffic, protocol matrix or Tor leg was ever
+verified on 32-bit ARM, so shipping it would mean shipping untested. `armeabi-v7a`
+and `x86_64` build and pass the ELF gate; neither is published.
 
 Native build gates:
 
@@ -416,7 +443,7 @@ Native build gates:
 - non-executable stack;
 - 16 KiB page alignment;
 - `libandroid.so`;
-- frozen ABI-v1 C/JNI exports and capabilities/config compatibility; the release ELF export set is checked for both shipped ABIs.
+- frozen ABI-v1 C/JNI exports and capabilities/config compatibility; the ELF export set is checked for every built ABI.
 
 ---
 

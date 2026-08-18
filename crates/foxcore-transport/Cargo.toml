@@ -7,12 +7,17 @@ license.workspace = true
 publish.workspace = true
 description = "Shared stream, datagram, and TLS boundaries for FoxCore protocols"
 
+[features]
+fingerprinting = []
+
 [dependencies]
+aws-lc-rs.workspace = true
 async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 foxcore-api = { path = "../foxcore-api" }
 futures.workspace = true
+getrandom.workspace = true
 h2.workspace = true
 http.workspace = true
 # The `aws-lc-rs` feature is asked for here, and nowhere else, because this is
@@ -35,7 +40,20 @@ webpki-roots.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+aws-lc-rs.workspace = true
 # Same pin proto-reality already uses, so the ECH tests add no crate to the
 # graph cargo-deny reasons about.
 rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[[test]]
+name = "ja_fingerprint"
+required-features = ["fingerprinting"]
+
+[[test]]
+name = "quic_initial_vector"
+required-features = ["fingerprinting"]
+
+[[test]]
+name = "quic_initial_chromium"
+required-features = ["fingerprinting"]

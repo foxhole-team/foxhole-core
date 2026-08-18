@@ -30,11 +30,25 @@ The C surface exposes version and capabilities discovery:
 
 Buffer ownership never crosses the ABI. The caller allocates and frees all buffers passed to the C interface.
 
-The JNI surface is grouped into three areas:
+The shipped JNI surface is `FoxholeNativeEngine`: runtime, policy, DNS, traffic,
+LAN/loopback proxy and lifecycle. Its release ELF contains 33 Engine exports; the current Guard
+facade declares 32. The one deliberate omission is legacy `nativeStart`, because production starts
+must supply an Android `Network` handle.
 
-- `FoxholeNativeEngine` — runtime, policy, DNS, statistics and lifecycle;
-- `FoxholeNativeComponents` — Web App, lease and LAN-proxy operations;
-- `FoxholeNativeShares` — vault and file-sharing operations.
+Release libraries also contain 19 `FoxholeNativeComponents` / `FoxholeNativeShares` exports.
+v0.0.1 shipped those symbols, so removing them while keeping ABI version 1 would break rollback
+and older callers. The current Guard has no product flow for them; they remain compatibility ABI.
+
+Current Guard reachability is narrower than declaration parity:
+
+- signed DNS bundles use `nativeStartWithNetworkAndDnsRuleSet`, so verification and engine start
+  are atomic;
+- traffic-map polling uses canonical `nativeTrafficMap`; `nativeConnections` remains its ABI alias;
+- link import and continuity retain Java declarations as compatibility-only ABI, without Kotlin
+  product wrappers or production call sites;
+- DNS downloads are persisted before a generation-fenced `nativeInstallDnsRuleSet` call. Stable
+  engines adopt them live; enable/trust changes use atomic replacement, and inactive engines read
+  the persisted bundle on start.
 
 ---
 
@@ -45,7 +59,8 @@ Rust unwinding is contained inside the native boundary. A panic must not unwind 
 Public failure semantics are deterministic:
 
 - integer-returning guarded calls use their documented negative or zero failure value;
-- string-returning calls return `null` only for a panic path;
+- string-returning calls may return `null` after a panic or JNI string-allocation failure;
+- link-import calls also throw `IllegalStateException` and return `null` on parse or render errors;
 - lifecycle and configuration operations that expose Java exceptions use `IllegalStateException`;
 - malformed input and runtime refusals are returned through typed result codes or structured error documents.
 
@@ -55,7 +70,8 @@ The caller must treat documented result codes as ABI values.
 
 ## Handles
 
-Engine, lease, share and publication handles are opaque positive integers.
+Engine handles are opaque positive integers. Mini-platform builds use the same rule for lease,
+share and publication handles.
 
 - `0` and negative values are invalid;
 - handles are not reused during the process lifetime;
@@ -120,8 +136,8 @@ Events are pull-based and bounded.
 | --- | ---: | ---: |
 | Core audit events | 512 | 4096 |
 | Traffic events | 512 | 4096 |
-| Component events | 256 per component | 512 |
-| Share events | 256 per share | 512 |
+| Component events (compatibility ABI) | 256 per component | 512 |
+| Share events (compatibility ABI) | 256 per share | 512 |
 
 Each drain reports `dropped` when the producer exceeded the bounded queue. The counter represents events lost since the previous read.
 
@@ -155,7 +171,7 @@ It is an emergency lifecycle operation, not a guarantee that all native resource
 
 ## Result codes
 
-### Components, shares and LAN proxy
+### LAN proxy and compatibility components/shares
 
 | Code | Meaning |
 | ---: | --- |
@@ -264,7 +280,14 @@ Protocol-specific strings, headers and ECH configuration are also bounded before
 
 A failed rule-set installation does not replace the currently active verified rule set.
 
-### Components and vault
+`nativeStartWithNetworkAndDnsRuleSet` is the atomic bootstrap form: the signed bundle is checked
+before the resolver can answer and any refusal aborts the start. Guard persists a verified update
+before calling `nativeInstallDnsRuleSet`. A running engine with the same pinned name and key adopts
+the new bytes immediately and returns its new policy revision. Enabling the rule set or changing its
+trust identity changes the immutable engine fingerprint and therefore uses an atomic replacement
+start. If no stable engine owns the generation, the persisted bundle is selected by the next start.
+
+### Mini-platform components and vault
 
 | Limit | Value |
 | --- | ---: |

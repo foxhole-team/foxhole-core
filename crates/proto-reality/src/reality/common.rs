@@ -16,6 +16,9 @@ pub const ALERT_DESC_CLOSE_NOTIFY: u8 = 0x00;
 pub const VERSION_TLS_1_2_MAJOR: u8 = 0x03;
 pub const VERSION_TLS_1_2_MINOR: u8 = 0x03;
 
+pub const VERSION_TLS_1_0_MAJOR: u8 = 0x03;
+pub const VERSION_TLS_1_0_MINOR: u8 = 0x01;
+
 /// Byte offset of `legacy_session_id` inside a ClientHello or ServerHello
 /// *handshake message* (record header excluded).
 ///
@@ -35,7 +38,7 @@ pub const HELLO_SESSION_ID_OFFSET: usize = 1 + 3 + 2 + 32 + 1;
 pub const HELLO_SESSION_ID_LEN: usize = 32;
 
 // TLS 1.3 handshake message types
-#[cfg(test)]
+#[cfg(any(test, feature = "testkit"))]
 pub const HANDSHAKE_TYPE_SERVER_HELLO: u8 = 2;
 pub const HANDSHAKE_TYPE_ENCRYPTED_EXTENSIONS: u8 = 8;
 pub const HANDSHAKE_TYPE_CERTIFICATE: u8 = 11;

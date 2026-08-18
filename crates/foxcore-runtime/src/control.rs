@@ -881,8 +881,8 @@ impl CoreRuntime {
     /// live flows on the other lanes are not disturbed.
     ///
     /// Zero means there was nothing worth attempting — every lane is up, an
-    /// attempt is already running, or what is left cannot be fixed by trying
-    /// again (a malformed profile, a protocol this build does not carry).
+    /// attempt is already running, the failure is permanent, or policy gates
+    /// the lane off.
     pub fn retry_unavailable_outbounds(&self) -> usize {
         self.spawn_outbound_retry()
     }
@@ -890,11 +890,13 @@ impl CoreRuntime {
     /// Start a retry pass on the worker's executor. Returns how many entries it
     /// claimed — never blocks, and never runs on a flow path.
     fn spawn_outbound_retry(&self) -> usize {
+        let policy_gates = self.policy.gates();
+        let gates = OverlayGates::new(policy_gates.tor_enabled(), policy_gates.i2p_enabled());
         let pending: Vec<_> = self
             .outbounds
             .deferred()
             .into_iter()
-            .filter(|deferred| deferred.is_retryable())
+            .filter(|deferred| gates.may_build(deferred))
             .collect();
         if pending.is_empty() {
             return 0;
@@ -904,7 +906,7 @@ impl CoreRuntime {
         let handshake_timeout_ms = self.handshake_timeout_ms;
         let events = self.events.sink();
         drop(self.tokio_handle.spawn(async move {
-            retry_deferred_outbounds(outbounds, dialer, handshake_timeout_ms, events).await
+            retry_deferred_outbounds(outbounds, dialer, handshake_timeout_ms, gates, events).await
         }));
         pending.len()
     }

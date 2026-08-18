@@ -8,7 +8,10 @@
 
 mod buf_reader;
 mod reality;
+
 mod slide_buffer;
+#[cfg(feature = "testkit")]
+pub mod testkit;
 
 use std::io::{self, BufRead as _, Write as _};
 use std::time::Duration;
@@ -16,7 +19,10 @@ use std::time::Duration;
 use foxcore_transport::{InnerCodec, PassthroughCodec, RecordLayer, spawn_relay};
 #[cfg(feature = "fuzzing")]
 pub use reality::fuzz_records as fuzz_internals;
-pub use reality::{CipherSuite, RealityHelloProfile, decode_public_key, decode_short_id};
+pub use reality::{
+    CipherSuite, RealityHello, RealityHelloProfile, clear_fingerprint_tables, decode_public_key,
+    decode_short_id, install_fingerprint_tables, using_downloaded_fingerprint_tables,
+};
 use reality::{RealityClientConfig, RealityClientConnection};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, DuplexStream};
 
@@ -31,7 +37,7 @@ pub async fn wrap_reality<S>(
     public_key: [u8; 32],
     short_id: [u8; 8],
     server_name: String,
-    hello_profile: RealityHelloProfile,
+    hello: RealityHello,
     handshake_timeout: Duration,
 ) -> io::Result<DuplexStream>
 where
@@ -42,7 +48,7 @@ where
         public_key,
         short_id,
         server_name,
-        hello_profile,
+        hello,
         handshake_timeout,
         PassthroughCodec,
     )
@@ -59,7 +65,7 @@ pub async fn wrap_reality_spliced<S, C>(
     public_key: [u8; 32],
     short_id: [u8; 8],
     server_name: String,
-    hello_profile: RealityHelloProfile,
+    hello: RealityHello,
     handshake_timeout: Duration,
     codec: C,
 ) -> io::Result<DuplexStream>
@@ -76,7 +82,7 @@ where
         public_key,
         short_id,
         server_name,
-        hello_profile,
+        hello,
     })?;
 
     tokio::time::timeout(

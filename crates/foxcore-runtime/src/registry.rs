@@ -4,9 +4,47 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 
-use foxcore_api::{CoreEvent, EventSink, NamedOutboundConfig, OutboundConfig, OutboundId};
+use foxcore_api::{
+    CoreEvent, EventSink, NamedOutboundConfig, OutboundConfig, OutboundId, TrafficPolicyConfig,
+};
 use foxcore_dialer::ProtectedDialer;
-use foxcore_outbound::{InterruptionSink, Outbound, OutboundRegistry};
+use foxcore_outbound::{
+    DeferredOutbound, InterruptionSink, Outbound, OutboundKind, OutboundRegistry,
+};
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OverlayGates {
+    tor: bool,
+    i2p: bool,
+}
+
+impl OverlayGates {
+    pub(crate) fn from_traffic(traffic: &TrafficPolicyConfig) -> Self {
+        Self {
+            tor: traffic.tor_enabled != Some(false),
+            i2p: traffic.i2p_enabled != Some(false),
+        }
+    }
+
+    pub(crate) fn new(tor: bool, i2p: bool) -> Self {
+        Self { tor, i2p }
+    }
+
+    fn allows(self, kind: OutboundKind) -> bool {
+        match kind {
+            OutboundKind::Tor => self.tor,
+            OutboundKind::I2p => self.i2p,
+            _ => true,
+        }
+    }
+
+    pub(crate) fn may_build(self, deferred: &DeferredOutbound) -> bool {
+        if deferred.is_gated_off() {
+            return self.allows(deferred.kind());
+        }
+        deferred.is_retryable()
+    }
+}
 
 /// The addresses the platform put on the tun.
 ///
@@ -62,21 +100,27 @@ type PacketTunnel = foxcore_outbound::PacketTunnelOutbound;
 #[cfg(not(feature = "wireguard"))]
 type PacketTunnel = std::convert::Infallible;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_outbound_registry(
     default_config: OutboundConfig,
     named_configs: Vec<NamedOutboundConfig>,
     dialer: ProtectedDialer,
     handshake_timeout_ms: u64,
+    gates: OverlayGates,
     events: &EventSink,
     interruption: &InterruptionSink,
     #[allow(unused_variables)] tun: &foxcore_api::TunConfig,
 ) -> io::Result<(OutboundRegistry, Option<PacketTunnel>)> {
     let is_packet_tunnel = default_config.is_packet_tunnel();
     let mut tasks = tokio::task::JoinSet::new();
+    let mut default = None;
+    let mut named = HashMap::new();
     let default_dialer = dialer.clone();
     // Held back when the primary is a packet tunnel: it is built after the
     // proxies, by a path that produces an `OutboundMode` instead of an
     // `Outbound`.
+    // A Tor primary remains the default outbound; the Tor gate controls only
+    // overlay routes, so it must not suppress this build.
     let packet_tunnel_config = if is_packet_tunnel {
         Some(default_config)
     } else {
@@ -98,6 +142,16 @@ pub(crate) async fn create_outbound_registry(
         outbound,
     } in named_configs
     {
+        let kind = OutboundKind::of(&outbound);
+        if !gates.allows(kind) {
+            named.insert(
+                id.clone(),
+                Arc::new(Outbound::Deferred(DeferredOutbound::gated_off(
+                    id, kind, outbound,
+                ))),
+            );
+            continue;
+        }
         let dialer = dialer.clone();
         let interruption = interruption.clone();
         tasks.spawn(async move {
@@ -112,8 +166,6 @@ pub(crate) async fn create_outbound_registry(
         });
     }
 
-    let mut default = None;
-    let mut named = HashMap::new();
     while let Some(joined) = tasks.join_next().await {
         // A `JoinError` is a panic in our own build task, not a network
         // failure, and it takes the id and the profile down with it — there is
@@ -226,15 +278,17 @@ fn unavailable_outbound(
 /// bootstraps. Entries whose failure cannot be fixed by retrying — a malformed
 /// key, a protocol this build does not carry — are skipped rather than
 /// hammered.
+/// `gates` is read live so network changes cannot rebuild a disabled overlay.
 pub(crate) async fn retry_deferred_outbounds(
     outbounds: Arc<OutboundRegistry>,
     dialer: ProtectedDialer,
     handshake_timeout_ms: u64,
+    gates: OverlayGates,
     events: EventSink,
 ) -> Vec<String> {
     let mut attempts = tokio::task::JoinSet::new();
     for deferred in outbounds.deferred() {
-        if !deferred.is_retryable() || !deferred.begin_attempt() {
+        if !gates.may_build(&deferred) || !deferred.begin_attempt() {
             continue;
         }
         let dialer = dialer.clone();

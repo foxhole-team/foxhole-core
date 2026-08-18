@@ -94,8 +94,35 @@ impl DeferredOutbound {
         }
     }
 
+    pub fn gated_off(id: impl Into<String>, kind: OutboundKind, config: OutboundConfig) -> Self {
+        let id = id.into();
+        Self {
+            inner: Arc::new(Inner {
+                failure: Mutex::new(Failure {
+                    reason: UnavailableReason::Disabled,
+                    message: format!(
+                        "outbound '{id}' ({}) was not built: the traffic policy has this overlay switched off",
+                        kind.name()
+                    ),
+                    attempts: 0,
+                }),
+                id,
+                kind,
+                config,
+                resolved: ArcSwapOption::empty(),
+                refused: AtomicU64::new(0),
+                sink: Mutex::new(None),
+                building: AtomicBool::new(false),
+            }),
+        }
+    }
+
     pub fn id(&self) -> &str {
         &self.inner.id
+    }
+
+    pub fn is_gated_off(&self) -> bool {
+        !self.is_available() && self.failure().reason == UnavailableReason::Disabled
     }
 
     /// The kind the *profile* asked for, whether or not it was ever built.
@@ -419,6 +446,24 @@ mod tests {
         assert_eq!(reason, UnavailableReason::Permissions);
         assert!(changed);
         assert_eq!(entry.attempts(), 3, "the attempt at start counts as one");
+    }
+
+    #[test]
+    fn a_gated_off_lane_was_never_built_and_is_never_rebuilt() {
+        let entry = DeferredOutbound::gated_off("tor", OutboundKind::Tor, config());
+        assert_eq!(entry.attempts(), 0);
+        assert_eq!(entry.reason(), UnavailableReason::Disabled);
+        assert!(entry.is_gated_off());
+        assert!(
+            !entry.is_retryable(),
+            "a network change must not turn the switch back on"
+        );
+        assert_eq!(
+            entry.kind(),
+            OutboundKind::Tor,
+            "and it is still the Tor lane, so .onion refuses as 'off' rather than 'unregistered'"
+        );
+        assert_eq!(entry.error().kind(), io::ErrorKind::NotConnected);
     }
 
     #[test]

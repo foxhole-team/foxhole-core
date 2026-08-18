@@ -8,8 +8,7 @@
 //!   handshake, so the first thing on the wire is not a 148-byte initiation.
 //! * `S1`/`S2` prepend random junk to the initiation and response, moving the
 //!   recognisable fields off their fixed offsets.
-//! * `H1..H4` replace WireGuard's four one-byte message types with arbitrary
-//!   32-bit values, erasing the `01/02/03/04 00 00 00` signature.
+//! * `H1..H4` replace message types with disjoint 32-bit [`HeaderRange`] values.
 //!
 //! The obfuscation is symmetric: both peers share the same parameters, so a
 //! sealed handshake is just a standard one with a different header and a junk
@@ -20,6 +19,56 @@ use crate::message::{
     COOKIE_REPLY_LEN, INITIATION_LEN, RESPONSE_LEN, TYPE_COOKIE_REPLY, TYPE_INITIATION,
     TYPE_RESPONSE, TYPE_TRANSPORT, message_type,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HeaderRange {
+    start: u32,
+    end: u32,
+}
+
+impl HeaderRange {
+    pub const fn single(value: u32) -> Self {
+        Self {
+            start: value,
+            end: value,
+        }
+    }
+
+    pub const fn new(start: u32, end: u32) -> Option<Self> {
+        if end < start {
+            return None;
+        }
+        Some(Self { start, end })
+    }
+
+    pub const fn start(&self) -> u32 {
+        self.start
+    }
+
+    pub const fn end(&self) -> u32 {
+        self.end
+    }
+
+    pub const fn is_single(&self) -> bool {
+        self.start == self.end
+    }
+
+    pub const fn contains(&self, value: u32) -> bool {
+        self.start <= value && value <= self.end
+    }
+
+    pub const fn overlaps(&self, other: &Self) -> bool {
+        self.start <= other.end && other.start <= self.end
+    }
+
+    pub const fn pick(&self, draw: u32) -> u32 {
+        if self.start == self.end {
+            return self.start;
+        }
+        let span = (self.end as u64) - (self.start as u64) + 1;
+        (self.start as u64 + (draw as u64) % span) as u32
+    }
+}
 
 /// AmneziaWG obfuscation parameters (`Jc, Jmin, Jmax, S1, S2, H1..H4`).
 ///
@@ -41,11 +90,10 @@ pub struct AmneziaParams {
     /// header, exactly like `S1`/`S2`.
     pub cookie_junk_size: u16,
     pub transport_junk_size: u16,
-    /// Replacement 32-bit header for each message type.
-    pub header_initiation: u32,
-    pub header_response: u32,
-    pub header_cookie: u32,
-    pub header_transport: u32,
+    pub header_initiation: HeaderRange,
+    pub header_response: HeaderRange,
+    pub header_cookie: HeaderRange,
+    pub header_transport: HeaderRange,
 }
 
 impl Default for AmneziaParams {
@@ -58,10 +106,10 @@ impl Default for AmneziaParams {
             response_junk_size: 0,
             cookie_junk_size: 0,
             transport_junk_size: 0,
-            header_initiation: TYPE_INITIATION as u32,
-            header_response: TYPE_RESPONSE as u32,
-            header_cookie: TYPE_COOKIE_REPLY as u32,
-            header_transport: TYPE_TRANSPORT as u32,
+            header_initiation: HeaderRange::single(TYPE_INITIATION as u32),
+            header_response: HeaderRange::single(TYPE_RESPONSE as u32),
+            header_cookie: HeaderRange::single(TYPE_COOKIE_REPLY as u32),
+            header_transport: HeaderRange::single(TYPE_TRANSPORT as u32),
         }
     }
 }
@@ -97,8 +145,11 @@ impl AmneziaParams {
         if self.junk_packet_count > 0 && self.junk_min_size > self.junk_max_size {
             return Err(WireguardError::InvalidParameters);
         }
-        // Custom headers must stay collision-free, otherwise the receiver cannot
-        // tell an initiation from a transport packet.
+        if self.junk_packet_count > 0 && self.junk_max_size == 0 {
+            return Err(WireguardError::InvalidParameters);
+        }
+        // Every pair of ranges must be disjoint or message types become
+        // intermittently ambiguous on the wire.
         let headers = [
             self.header_initiation,
             self.header_response,
@@ -107,7 +158,7 @@ impl AmneziaParams {
         ];
         for i in 0..headers.len() {
             for j in i + 1..headers.len() {
-                if headers[i] == headers[j] {
+                if headers[i].overlaps(&headers[j]) {
                     return Err(WireguardError::InvalidParameters);
                 }
             }
@@ -124,6 +175,14 @@ impl AmneziaParams {
             TYPE_COOKIE_REPLY => self.cookie_junk_size as usize,
             TYPE_TRANSPORT => self.transport_junk_size as usize,
             _ => 0,
+        }
+    }
+
+    fn header_matches(&self, header: [u8; 4], expected: HeaderRange) -> bool {
+        if self.is_vanilla() {
+            header[0] == expected.start() as u8
+        } else {
+            expected.contains(u32::from_le_bytes(header))
         }
     }
 
@@ -145,19 +204,17 @@ impl AmneziaParams {
         }
     }
 
-    /// Obfuscate a freshly encoded handshake message: swap the 4-byte header for
-    /// the custom one and prepend the per-type junk. `fill_junk` supplies the
-    /// randomness so the transform stays deterministic under test.
+    /// Obfuscate a handshake using caller-supplied entropy for deterministic tests.
     ///
     /// The junk size is taken from the shared parameters, never from the caller,
     /// so the peer can strip exactly as many bytes back off.
     pub fn obfuscate(
         &self,
         message: &[u8],
-        fill_junk: impl FnOnce(&mut [u8]),
+        random: impl FnMut(&mut [u8]),
     ) -> Result<Vec<u8>, WireguardError> {
         let mut out = Vec::new();
-        self.obfuscate_into(message, &mut out, fill_junk)?;
+        self.obfuscate_into(message, &mut out, random)?;
         Ok(out)
     }
 
@@ -168,15 +225,12 @@ impl AmneziaParams {
     /// datagram buffers and hands one in. `out` is cleared first, so a buffer
     /// that carried a previous datagram is reused rather than grown.
     ///
-    /// Only the junk prefix is zeroed, and only so `fill_junk` has something to
-    /// write into. Everything after it is appended byte for byte, which on a
-    /// vanilla profile — where the prefix is empty — means the whole transform
-    /// touches each byte exactly once.
+    /// Fixed headers consume no extra entropy, preserving legacy wire bytes.
     pub fn obfuscate_into(
         &self,
         message: &[u8],
         out: &mut Vec<u8>,
-        fill_junk: impl FnOnce(&mut [u8]),
+        mut random: impl FnMut(&mut [u8]),
     ) -> Result<(), WireguardError> {
         let kind = self.classify(message)?;
         let (header, junk_size) = match kind {
@@ -188,7 +242,14 @@ impl AmneziaParams {
         out.clear();
         out.reserve(junk_size + message.len());
         out.resize(junk_size, 0);
-        fill_junk(&mut out[..junk_size]);
+        random(&mut out[..junk_size]);
+        let header = if header.is_single() {
+            header.start()
+        } else {
+            let mut draw = [0_u8; 4];
+            random(&mut draw);
+            header.pick(u32::from_le_bytes(draw))
+        };
         out.extend_from_slice(&header.to_le_bytes());
         out.extend_from_slice(&message[4..]);
         Ok(())
@@ -228,8 +289,7 @@ impl AmneziaParams {
             let Some(header_bytes) = body.first_chunk::<4>() else {
                 continue;
             };
-            let got = u32::from_le_bytes(*header_bytes);
-            if got != header {
+            if !self.header_matches(*header_bytes, header) {
                 continue;
             }
             let mut out = vec![0_u8; body_len];
@@ -275,8 +335,7 @@ impl AmneziaParams {
         datagram
             .get(junk..junk + 4)
             .and_then(|bytes| bytes.first_chunk::<4>().copied())
-            .map(|bytes| u32::from_le_bytes(bytes) == self.header_transport)
-            .unwrap_or(false)
+            .is_some_and(|bytes| self.header_matches(bytes, self.header_transport))
     }
 }
 
@@ -293,10 +352,10 @@ mod tests {
             response_junk_size: 9,
             cookie_junk_size: 10,
             transport_junk_size: 11,
-            header_initiation: 0x1111_1111,
-            header_response: 0x2222_2222,
-            header_cookie: 0x3333_3333,
-            header_transport: 0x4444_4444,
+            header_initiation: HeaderRange::single(0x1111_1111),
+            header_response: HeaderRange::single(0x2222_2222),
+            header_cookie: HeaderRange::single(0x3333_3333),
+            header_transport: HeaderRange::single(0x4444_4444),
             ..AmneziaParams::default()
         }
     }
@@ -317,7 +376,7 @@ mod tests {
         assert_eq!(&wire[..11], &[0x5a; 11], "the prefix is junk, not header");
         assert_eq!(
             u32::from_le_bytes(wire[11..15].try_into().unwrap()),
-            params.header_transport,
+            params.header_transport.start(),
             "H4 sits behind the S4 prefix, where S1 puts H1"
         );
         assert!(
@@ -379,10 +438,10 @@ mod tests {
             response_junk_size: 15,
             cookie_junk_size: 0,
             transport_junk_size: 0,
-            header_initiation: 0x1000_0001,
-            header_response: 0x2000_0002,
-            header_cookie: 0x3000_0003,
-            header_transport: 0x4000_0004,
+            header_initiation: HeaderRange::single(0x1000_0001),
+            header_response: HeaderRange::single(0x2000_0002),
+            header_cookie: HeaderRange::single(0x3000_0003),
+            header_transport: HeaderRange::single(0x4000_0004),
         }
     }
 
@@ -471,6 +530,37 @@ mod tests {
     }
 
     #[test]
+    fn a_vanilla_profile_reads_a_type_through_stamped_reserved_bytes() {
+        let params = AmneziaParams::default();
+
+        let mut transport = vec![TYPE_TRANSPORT, 0x11, 0x22, 0x33];
+        transport.extend_from_slice(&[0xAB; 32]);
+        assert!(params.is_transport(&transport));
+
+        let mut response = vec![TYPE_RESPONSE, 0x11, 0x22, 0x33];
+        response.resize(RESPONSE_LEN, 0x5A);
+        let recovered = params.deobfuscate(&response).unwrap();
+        assert_eq!(
+            &recovered[..4],
+            &[TYPE_RESPONSE, 0, 0, 0],
+            "the message handed on is the canonical one, not the stamped bytes"
+        );
+        assert_eq!(&recovered[4..], &response[4..]);
+    }
+
+    #[test]
+    fn an_obfuscated_profile_still_matches_the_whole_header_word() {
+        let params = tuned();
+        let mut datagram = params.header_transport.start().to_le_bytes().to_vec();
+        datagram.extend_from_slice(&[0; 32]);
+        assert!(params.is_transport(&datagram));
+
+        datagram[1] ^= 0xFF;
+        assert!(!params.is_transport(&datagram));
+        assert!(params.deobfuscate_transport(&mut datagram).is_err());
+    }
+
+    #[test]
     fn colliding_headers_are_rejected() {
         let mut params = tuned();
         params.header_transport = params.header_initiation;
@@ -478,6 +568,101 @@ mod tests {
             params.validate(),
             Err(WireguardError::InvalidParameters)
         ));
+    }
+
+    fn ranged() -> AmneziaParams {
+        AmneziaParams {
+            header_initiation: HeaderRange::new(234_567, 345_678).unwrap(),
+            header_response: HeaderRange::new(400_000, 500_000).unwrap(),
+            header_cookie: HeaderRange::new(600_000, 700_000).unwrap(),
+            header_transport: HeaderRange::new(800_000, 900_000).unwrap(),
+            ..AmneziaParams::default()
+        }
+    }
+
+    #[test]
+    fn a_ranged_header_is_drawn_inside_the_interval_and_moves_between_datagrams() {
+        let params = ranged();
+        assert!(params.validate().is_ok(), "a range profile is a valid one");
+
+        let mut plain = vec![TYPE_TRANSPORT, 0, 0, 0];
+        plain.extend_from_slice(&[0xAB; 32]);
+
+        let mut draws = [0x00_u8, 0x01_u8].into_iter();
+        let mut seen = Vec::new();
+        for _ in 0..2 {
+            let byte = draws.next().unwrap();
+            let wire = params.obfuscate(&plain, |bytes| bytes.fill(byte)).unwrap();
+            let header = u32::from_le_bytes(wire[..4].try_into().unwrap());
+            assert!(
+                params.header_transport.contains(header),
+                "a drawn header must lie inside H4"
+            );
+            assert!(
+                params.is_transport(&wire),
+                "and the receiver must recognise every value it can draw"
+            );
+            seen.push(header);
+        }
+        assert_ne!(
+            seen[0], seen[1],
+            "a range that always produced one value would be a constant, \
+             which is exactly the collapse this must not do"
+        );
+    }
+
+    #[test]
+    fn every_header_in_the_range_is_accepted_and_every_header_outside_it_is_not() {
+        let params = ranged();
+        for value in [234_567_u32, 290_000, 345_678] {
+            let mut datagram = value.to_le_bytes().to_vec();
+            datagram.resize(INITIATION_LEN, 0x5A);
+            assert!(
+                params.deobfuscate(&datagram).is_ok(),
+                "{value} is inside H1 and must open"
+            );
+        }
+        for value in [234_566_u32, 345_679] {
+            let mut datagram = value.to_le_bytes().to_vec();
+            datagram.resize(INITIATION_LEN, 0x5A);
+            assert!(
+                params.deobfuscate(&datagram).is_err(),
+                "{value} is one step outside H1 and is not this peer's"
+            );
+        }
+    }
+
+    #[test]
+    fn overlapping_ranges_are_refused_because_the_types_would_be_ambiguous() {
+        let mut params = ranged();
+        params.header_response = HeaderRange::new(345_678, 500_000).unwrap();
+        assert!(matches!(
+            params.validate(),
+            Err(WireguardError::InvalidParameters)
+        ));
+    }
+
+    #[test]
+    fn an_inverted_range_has_no_representation() {
+        assert!(HeaderRange::new(345_678, 234_567).is_none());
+        assert_eq!(HeaderRange::new(7, 7), Some(HeaderRange::single(7)));
+    }
+
+    #[test]
+    fn a_draw_lands_in_the_interval_for_every_corner_of_the_word() {
+        let full = HeaderRange::new(0, u32::MAX).unwrap();
+        for draw in [0, 1, u32::MAX / 2, u32::MAX] {
+            assert!(full.contains(full.pick(draw)));
+        }
+        let narrow = HeaderRange::new(10, 11).unwrap();
+        assert_eq!(narrow.pick(0), 10);
+        assert_eq!(narrow.pick(1), 11);
+        assert_eq!(narrow.pick(u32::MAX), 11);
+        assert_eq!(
+            HeaderRange::single(4).pick(u32::MAX),
+            4,
+            "a single value never consults the draw"
+        );
     }
 
     #[test]
@@ -494,6 +679,22 @@ mod tests {
         let mut params = tuned();
         params.junk_packet_count = 200;
         assert!(params.validate().is_err());
+    }
+
+    #[test]
+    fn junk_packets_that_would_be_empty_are_rejected() {
+        let mut params = tuned();
+        params.junk_packet_count = 4;
+        params.junk_min_size = 0;
+        params.junk_max_size = 0;
+        assert!(params.validate().is_err());
+
+        params.junk_max_size = 1;
+        assert!(params.validate().is_ok());
+
+        params.junk_packet_count = 0;
+        params.junk_max_size = 0;
+        assert!(params.validate().is_ok());
     }
 
     #[test]

@@ -9,7 +9,7 @@ use bytes::{Bytes, BytesMut};
 use foxcore_api::{AnyTlsConfig, Destination};
 use foxcore_dialer::ProtectedDialer;
 use foxcore_transport::{BoxStream, wrap_tls};
-use rand::rngs::SmallRng;
+use rand::rngs::StdRng;
 use rand::{RngCore, SeedableRng};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
@@ -541,7 +541,7 @@ async fn run_session(
     let mut streams = HashMap::<u32, StreamState>::new();
     let mut pending = HashMap::<u32, oneshot::Sender<io::Result<()>>>::new();
     let mut packet_index = 1usize;
-    let mut rng = SmallRng::from_os_rng();
+    let mut rng = StdRng::from_os_rng();
     let mut negotiated_v2 = false;
     let result: io::Result<()> = async {
         loop {
@@ -739,7 +739,7 @@ async fn write_authentication<W>(
 where
     W: AsyncWrite + Unpin,
 {
-    let mut rng = SmallRng::from_os_rng();
+    let mut rng = StdRng::from_os_rng();
     let padding_length = scheme.auth_padding_length(&mut rng);
     let mut packet = BytesMut::with_capacity(34 + padding_length);
     packet.extend_from_slice(&Sha256::digest(password.as_bytes()));
@@ -756,7 +756,7 @@ async fn write_packet<W>(
     scheme: &PaddingScheme,
     packet_index: &mut usize,
     payload: &[u8],
-    rng: &mut SmallRng,
+    rng: &mut StdRng,
 ) -> io::Result<()>
 where
     W: AsyncWrite + Unpin,

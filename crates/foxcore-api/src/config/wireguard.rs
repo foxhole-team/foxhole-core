@@ -85,15 +85,184 @@ pub struct AmneziaConfig {
     /// The string form is parsed exactly once, where the profile is imported.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub init_packets: Vec<AmneziaInitPacket>,
+    #[serde(default, skip_serializing_if = "AmneziaTimers::is_default")]
+    pub timers: AmneziaTimers,
     /// `H1..H4`: replacement 32-bit message headers.
     #[serde(default = "default_header_initiation")]
-    pub header_initiation: u32,
+    pub header_initiation: AmneziaHeaderRange,
     #[serde(default = "default_header_response")]
-    pub header_response: u32,
+    pub header_response: AmneziaHeaderRange,
     #[serde(default = "default_header_cookie")]
-    pub header_cookie: u32,
+    pub header_cookie: AmneziaHeaderRange,
     #[serde(default = "default_header_transport")]
-    pub header_transport: u32,
+    pub header_transport: AmneziaHeaderRange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AmneziaTimers {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rekey_timeout_s: Option<AmneziaTimerRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rekey_after_time_s: Option<AmneziaTimerRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reject_after_time_s: Option<AmneziaTimerRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keepalive_timeout_s: Option<AmneziaTimerRange>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_handshake_attempts: Option<AmneziaTimerRange>,
+}
+
+impl AmneziaTimers {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "AmneziaTimerRangeRepr", into = "AmneziaTimerRangeRepr")]
+pub struct AmneziaTimerRange {
+    pub start: u16,
+    pub end: u16,
+}
+
+impl AmneziaTimerRange {
+    pub const fn single(value: u16) -> Self {
+        Self {
+            start: value,
+            end: value,
+        }
+    }
+
+    pub const fn new(start: u16, end: u16) -> Option<Self> {
+        if end < start {
+            return None;
+        }
+        Some(Self { start, end })
+    }
+
+    pub const fn is_single(&self) -> bool {
+        self.start == self.end
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AmneziaTimerRangeRepr {
+    Single(u16),
+    Range(String),
+}
+
+impl From<AmneziaTimerRange> for AmneziaTimerRangeRepr {
+    fn from(value: AmneziaTimerRange) -> Self {
+        if value.is_single() {
+            Self::Single(value.start)
+        } else {
+            Self::Range(format!("{}-{}", value.start, value.end))
+        }
+    }
+}
+
+impl TryFrom<AmneziaTimerRangeRepr> for AmneziaTimerRange {
+    type Error = String;
+
+    fn try_from(value: AmneziaTimerRangeRepr) -> Result<Self, Self::Error> {
+        match value {
+            AmneziaTimerRangeRepr::Single(value) => Ok(Self::single(value)),
+            AmneziaTimerRangeRepr::Range(text) => parse_amnezia_timer_range(&text),
+        }
+    }
+}
+
+pub fn parse_amnezia_timer_range(text: &str) -> Result<AmneziaTimerRange, String> {
+    let malformed = || format!("AmneziaWG timer must be N or N-M seconds, got {text}");
+    match text.split_once('-') {
+        None => text
+            .parse::<u16>()
+            .map(AmneziaTimerRange::single)
+            .map_err(|_| malformed()),
+        Some((low, high)) => {
+            let start = low.parse::<u16>().map_err(|_| malformed())?;
+            let end = high.parse::<u16>().map_err(|_| malformed())?;
+            AmneziaTimerRange::new(start, end)
+                .ok_or_else(|| format!("AmneziaWG timer range {text} ends before it starts"))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "AmneziaHeaderRangeRepr", into = "AmneziaHeaderRangeRepr")]
+pub struct AmneziaHeaderRange {
+    pub start: u32,
+    pub end: u32,
+}
+
+impl AmneziaHeaderRange {
+    pub const fn single(value: u32) -> Self {
+        Self {
+            start: value,
+            end: value,
+        }
+    }
+
+    pub const fn new(start: u32, end: u32) -> Option<Self> {
+        if end < start {
+            return None;
+        }
+        Some(Self { start, end })
+    }
+
+    pub const fn is_single(&self) -> bool {
+        self.start == self.end
+    }
+
+    pub const fn overlaps(&self, other: &Self) -> bool {
+        self.start <= other.end && other.start <= self.end
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AmneziaHeaderRangeRepr {
+    Single(u32),
+    Range(String),
+}
+
+impl From<AmneziaHeaderRange> for AmneziaHeaderRangeRepr {
+    fn from(value: AmneziaHeaderRange) -> Self {
+        if value.is_single() {
+            Self::Single(value.start)
+        } else {
+            Self::Range(format!("{}-{}", value.start, value.end))
+        }
+    }
+}
+
+impl TryFrom<AmneziaHeaderRangeRepr> for AmneziaHeaderRange {
+    type Error = String;
+
+    fn try_from(value: AmneziaHeaderRangeRepr) -> Result<Self, Self::Error> {
+        match value {
+            AmneziaHeaderRangeRepr::Single(value) => Ok(Self::single(value)),
+            AmneziaHeaderRangeRepr::Range(text) => parse_amnezia_header_range(&text),
+        }
+    }
+}
+
+pub fn parse_amnezia_header_range(text: &str) -> Result<AmneziaHeaderRange, String> {
+    let malformed = || format!("AmneziaWG header must be N or N-M, got {text}");
+    match text.split_once('-') {
+        None => text
+            .parse::<u32>()
+            .map(AmneziaHeaderRange::single)
+            .map_err(|_| malformed()),
+        Some((low, high)) => {
+            let start = low.parse::<u32>().map_err(|_| malformed())?;
+            let end = high.parse::<u32>().map_err(|_| malformed())?;
+            AmneziaHeaderRange::new(start, end)
+                .ok_or_else(|| format!("AmneziaWG header range {text} ends before it starts"))
+        }
+    }
 }
 
 /// One `I1..I5` template.
@@ -140,6 +309,7 @@ impl Default for AmneziaConfig {
             cookie_junk_size: 0,
             transport_junk_size: 0,
             init_packets: Vec::new(),
+            timers: AmneziaTimers::default(),
             header_initiation: default_header_initiation(),
             header_response: default_header_response(),
             header_cookie: default_header_cookie(),
@@ -148,20 +318,20 @@ impl Default for AmneziaConfig {
     }
 }
 
-const fn default_header_initiation() -> u32 {
-    1
+const fn default_header_initiation() -> AmneziaHeaderRange {
+    AmneziaHeaderRange::single(1)
 }
 
-const fn default_header_response() -> u32 {
-    2
+const fn default_header_response() -> AmneziaHeaderRange {
+    AmneziaHeaderRange::single(2)
 }
 
-const fn default_header_cookie() -> u32 {
-    3
+const fn default_header_cookie() -> AmneziaHeaderRange {
+    AmneziaHeaderRange::single(3)
 }
 
-const fn default_header_transport() -> u32 {
-    4
+const fn default_header_transport() -> AmneziaHeaderRange {
+    AmneziaHeaderRange::single(4)
 }
 
 /// Mirror of `proto_wireguard::amnezia::MAX_JUNK_SIZE`. `foxcore-api` cannot
@@ -173,7 +343,11 @@ const MAX_AMNEZIA_JUNK_PACKET_COUNT: u16 = 128;
 const MAX_AMNEZIA_INIT_PACKETS: usize = 5;
 
 impl AmneziaConfig {
-    pub(super) fn validate(&self) -> Result<(), ConfigError> {
+    pub fn junk_fragments_at_mtu(&self, mtu: u16) -> bool {
+        self.junk_packet_count > 0 && self.junk_max_size >= mtu
+    }
+
+    pub(super) fn validate(&self, mtu: u16) -> Result<(), ConfigError> {
         if self.junk_max_size > MAX_AMNEZIA_JUNK_SIZE
             || self.init_junk_size > MAX_AMNEZIA_JUNK_SIZE
             || self.response_junk_size > MAX_AMNEZIA_JUNK_SIZE
@@ -222,6 +396,11 @@ impl AmneziaConfig {
                     "AmneziaWG init packets must be at most {MAX_AMNEZIA_JUNK_SIZE} bytes"
                 )));
             }
+            if length == 0 {
+                return Err(ConfigError::Invalid(
+                    "AmneziaWG init packets must render at least one byte".into(),
+                ));
+            }
         }
         if self.junk_packet_count > MAX_AMNEZIA_JUNK_PACKET_COUNT {
             return Err(ConfigError::Invalid(format!(
@@ -233,6 +412,19 @@ impl AmneziaConfig {
                 "AmneziaWG junk_min_size must not exceed junk_max_size".into(),
             ));
         }
+        if self.junk_packet_count > 0 && self.junk_max_size == 0 {
+            return Err(ConfigError::Invalid(
+                "AmneziaWG junk_max_size must be at least 1 byte when junk_packet_count is set"
+                    .into(),
+            ));
+        }
+        if self.junk_fragments_at_mtu(mtu) {
+            return Err(ConfigError::Invalid(format!(
+                "AmneziaWG junk_max_size {} must stay below the profile MTU {mtu}, \
+                 or every junk datagram fragments",
+                self.junk_max_size
+            )));
+        }
         let headers = [
             self.header_initiation,
             self.header_response,
@@ -240,9 +432,12 @@ impl AmneziaConfig {
             self.header_transport,
         ];
         for (index, header) in headers.iter().enumerate() {
-            if headers[index + 1..].contains(header) {
+            if headers[index + 1..]
+                .iter()
+                .any(|other| header.overlaps(other))
+            {
                 return Err(ConfigError::Invalid(
-                    "AmneziaWG H1..H4 headers must be pairwise distinct".into(),
+                    "AmneziaWG H1..H4 headers must not overlap".into(),
                 ));
             }
         }

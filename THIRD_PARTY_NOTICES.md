@@ -28,6 +28,47 @@ in `crates/foxcore-tun/src/ipstack/mod.rs` and its tests.
 Apache-2.0 permits this redistribution under GPL-3.0-or-later; the notice above
 and the licence file are the conditions it attaches.
 
+## uTLS
+
+- Project: `refraction-networking/utls`
+- Copyright (c) 2009 The Go Authors; `u_parrots.go` additionally
+  "Copyright 2017 Google Inc. All rights reserved."
+- Licence: BSD-3-Clause (SPDX `BSD-3-Clause`), confirmed against the repository
+  `LICENSE` file, which carries the Go Authors' BSD text verbatim
+- Used at: `crates/proto-reality/src/reality/hello_profile.rs` and the seven
+  uTLS-derived vectors in `fingerprints/` (`chrome_133`, `chrome_131`,
+  `edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`, `firefox_148`). The
+  `chrome_151` and `firefox_153` vectors take nothing from uTLS: uTLS has no
+  table for either build, and both are transcribed from a first-party capture
+  of the shipping browser.
+
+No uTLS code is embedded, linked or executed: FoxHole Core is Rust and does not
+build Go. What is taken is the *data* in uTLS' maintained parrot tables — `HelloChrome_133`,
+`HelloChrome_131`, `HelloEdge_85`, `HelloSafari_26_3`, `HelloIOS_14` and
+`HelloQQ_11_1` in `u_parrots.go` — transcribed into FoxHole Core's own table
+types: the cipher list and its order, the extension set and its order, GREASE
+placement, supported groups, signature algorithms, key shares, ALPN and the
+certificate-compression algorithm. Which uTLS symbol each `fp=` name resolves
+to is taken from sing-box's `common/tls/utls_client.go` and uTLS'
+`Hello*_Auto` aliases, so the mapping matches the deployed ecosystem rather
+than being chosen here.
+
+`scripts/fingerprint-from-utls.py` re-reads those tables from uTLS source and
+diffs them against the committed vectors, and it resolves every code point from
+uTLS' own `const` blocks rather than from a transcribed copy.
+
+uTLS is the reference rather than a reading of Chrome because it is the code
+Xray and sing-box actually run, so matching uTLS is matching the deployed
+population rather than one interpretation of a capture. Two rules were taken
+from uTLS' own upstream instead, and are cited in place: BoringSSL's
+`tls_record_version` for the initial record's `legacy_record_version`, and
+BoringSSL's `setup_ech_grease` for the GREASE ECH HPKE suite.
+
+The BSD-3-Clause conditions are satisfied by the copyright notice above; the
+third condition (no use of the names of Google Inc. or contributors to endorse
+or promote) is observed — this notice is attribution of provenance, not
+endorsement.
+
 ## Shoes
 
 FoxHole Core contains independently adapted protocol algorithms from the following

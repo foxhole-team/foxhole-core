@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use foxcore_api::{ContinuityPermit, TuicConfig};
 use foxcore_dialer::ProtectedDialer;
+use foxcore_transport::backoff::ReconnectBackoff;
 use quinn::VarInt;
 use tokio::sync::{Mutex, Notify};
 use tokio::time::Instant;
@@ -161,7 +162,7 @@ async fn reconnect(
             }
         }
         let reconnect_epoch = session.reconnect_epoch.load(Ordering::Acquire);
-        let mut backoff = BACKOFF_MIN;
+        let mut backoff = ReconnectBackoff::new(BACKOFF_MIN, BACKOFF_MAX);
         loop {
             if cancel.is_cancelled() {
                 return false;
@@ -203,12 +204,24 @@ async fn reconnect(
                     tokio::select! {
                         _ = cancel.cancelled() => return false,
                         _ = reconnect_now => continue 'permission,
-                        _ = tokio::time::sleep(backoff) => {
-                            backoff = (backoff * 2).min(BACKOFF_MAX);
-                        }
+                        _ = tokio::time::sleep(backoff.next_delay()) => {}
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_reconnect_window_keeps_the_bounds_the_ladder_had() {
+        let mut backoff = ReconnectBackoff::new(BACKOFF_MIN, BACKOFF_MAX);
+        for _ in 0..64 {
+            let delay = backoff.next_delay();
+            assert!((BACKOFF_MIN..=BACKOFF_MAX).contains(&delay), "{delay:?}");
         }
     }
 }

@@ -39,16 +39,6 @@ done
     exit 1
 }
 
-# The floor. These are the entries whose absence would not look like a build
-# failure — the library would load, the app would start, and one feature would
-# be dead. Deriving the list purely from the source (below) cannot catch that:
-# a deleted `#[unsafe(no_mangle)] fn` would quietly shrink the requirement to
-# match, and the gate would pass on the very change it exists to catch.
-#
-# The `FoxholeNativeJournal` entries used to be part of this floor. They are
-# gone with the Rust journal port: the journal is the app's, in
-# Kotlin, and a floor that names symbols no build can export is a gate that
-# fails on every build rather than on a regression.
 REQUIRED_EXPORTS="
 Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeVersion
 Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeAbiVersion
@@ -72,37 +62,21 @@ Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeStartLanProxy
 Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeStopLanProxy
 Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeLanProxyStatus
 "
-# The four LAN entries are on the floor for the reason the floor exists: the LAN
-# proxy is reachable *only* through them, so losing one is a feature that is
-# silently dead on a device rather than a build that fails. The library still
-# loads, the tunnel still runs, and the toggle does nothing.
-#
-# The four entries before them were added because the list had drifted the wrong way:
-# it pinned `nativeImportLink` and `nativeImportSubscription`, which no caller in
-# the app has, while leaving unpinned the symbols the production start and
-# teardown paths actually resolve. A floor that guards what nobody calls and not
-# what everybody does is a floor in name only. `nativeImportLink` and
-# `nativeImportSubscription` are still built and still covered by the derived
-# ceiling below; they are simply no longer treated as release-critical.
 
-# And the ceiling: every JNI entry the crate actually defines. A hand-kept list
-# drifts the moment someone adds a function — this gate shipped for a while
-# without nativeInstallDnsRuleSet and nativeStartWithNetworkAndDnsRuleSet for
-# exactly that reason. Deriving it means a new entry point is covered the day it
-# is written rather than the day someone remembers this file.
-SOURCE_EXPORTS="$(
+ALL_SOURCE_EXPORTS="$(
     find "$JNI_SOURCE" -type f -name '*.rs' -exec \
         sed -nE 's/.*pub extern "system" fn (Java_[A-Za-z0-9_]+).*/\1/p' {} + |
         sort -u
 )"
-if [ -z "$SOURCE_EXPORTS" ]; then
+if [ -z "$ALL_SOURCE_EXPORTS" ]; then
     echo "no JNI entry points were found under $JNI_SOURCE" >&2
     exit 1
 fi
+SOURCE_EXPORTS="$ALL_SOURCE_EXPORTS"
 
 for symbol in $REQUIRED_EXPORTS; do
     if ! printf '%s\n' "$SOURCE_EXPORTS" | grep -Fqx "$symbol"; then
-        echo "required JNI entry $symbol no longer exists in $JNI_SOURCE" >&2
+        echo "required JNI entry $symbol is not a shipped export of $JNI_SOURCE" >&2
         exit 1
     fi
 done
@@ -134,12 +108,6 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
             ;;
     esac
 
-    # The shipped set is the two ARM ABIs. A non-ARM library is still *checkable*
-    # — the emulator build is a real workflow — but it has to have been asked
-    # for, by the same variable that asks the build script for it. Without this
-    # an x86_64 artifact left over from an emulator session sits in the jniLibs
-    # tree, passes every check below, and is packaged into a release: the gate
-    # would have verified it correctly and shipped it anyway.
     case "$abi" in
         arm64-v8a | armeabi-v7a) ;;
         *)
@@ -183,10 +151,6 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
         lib_status=1
     fi
 
-    # 16 KiB pages, on every ABI including 32-bit ARM, where it needs both
-    # -Wl,-z,max-page-size and -Wl,-z,common-page-size. The segment count is
-    # checked too: an alignment test with nothing to test passes, and "no LOAD
-    # segments" is not a pass.
     loads="$(awk '$1 == "LOAD" { print $NF }' <<<"$programs")"
     load_count="$(awk 'NF { count += 1 } END { print count + 0 }' <<<"$loads")"
     if [ -z "$loads" ] || [ "${load_count:-0}" -lt 1 ]; then

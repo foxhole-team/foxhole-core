@@ -33,6 +33,7 @@ pub enum UnavailableReason {
     Config,
     /// The protocol is not compiled into this build of the core.
     Unsupported,
+    Disabled,
     /// Anything else. Read `message`.
     Internal,
 }
@@ -71,6 +72,7 @@ impl UnavailableReason {
             Self::Network => "network",
             Self::Config => "config",
             Self::Unsupported => "unsupported",
+            Self::Disabled => "disabled",
             Self::Internal => "internal",
         }
     }
@@ -81,6 +83,8 @@ impl UnavailableReason {
     /// Advisory. The retry pass runs on events the app reports — a network
     /// change, a reload, an explicit call — so this only decides whether an
     /// attempt is worth making, never how often one happens.
+    /// [`Self::Disabled`] is non-retryable because an attempt would violate the
+    /// user's route gate.
     pub fn is_retryable(self) -> bool {
         matches!(self, Self::Timeout | Self::Network | Self::Internal)
     }
@@ -139,6 +143,18 @@ mod tests {
         let error = io::Error::new(io::ErrorKind::TimedOut, "Arti bootstrap timed out");
         assert_eq!(UnavailableReason::of(&error), UnavailableReason::Timeout);
         assert!(UnavailableReason::of(&error).is_retryable());
+    }
+
+    #[test]
+    fn a_switched_off_overlay_is_not_a_failure_and_is_never_retried() {
+        assert_eq!(UnavailableReason::Disabled.name(), "disabled");
+        assert!(!UnavailableReason::Disabled.is_retryable());
+        let error = io::Error::new(io::ErrorKind::TimedOut, "Arti bootstrap timed out");
+        assert_ne!(
+            UnavailableReason::of(&error),
+            UnavailableReason::Disabled,
+            "nothing that classifies a build failure may produce it"
+        );
     }
 
     #[test]

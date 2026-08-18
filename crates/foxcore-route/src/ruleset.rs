@@ -121,10 +121,12 @@ pub struct RuleSetBundle {
 
 /// Rule-set bytes whose trust comes from the signed application package.
 ///
-/// This type deliberately has no public constructor. A downloaded file must
+/// The one constructor is [`Self::from_signed_package`], re-exported from
+/// `foxcore-runtime`, so any dependent crate can mint one — the type is a
+/// statement of provenance, not an enforcement boundary. A downloaded file must
 /// remain a [`RuleSetBundle`] and pass signature, freshness and rollback
-/// verification; only platform bootstrap code at the APK trust boundary may
-/// create this value.
+/// verification; only platform bootstrap code at the APK trust boundary should
+/// call it.
 #[derive(Debug, Clone)]
 pub struct TrustedRuleSetBundle {
     pub name: String,

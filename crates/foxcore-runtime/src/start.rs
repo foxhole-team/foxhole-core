@@ -133,7 +133,8 @@ impl CoreRuntime {
         let dialer = ProtectedDialer::new(
             callbacks,
             Duration::from_millis(runtime_config.connect_timeout_ms),
-        );
+        )
+        .with_handshake_timeout(Duration::from_millis(handshake_timeout_ms));
         dialer.set_network_handle(network_handle);
         let cancel = CancellationToken::new();
         let metrics = Arc::new(FlowMetrics::default());
@@ -253,6 +254,7 @@ impl CoreRuntime {
                             named_outbounds,
                             thread_dialer.clone(),
                             runtime.handshake_timeout_ms,
+                            OverlayGates::from_traffic(&traffic),
                             &thread_events.sink(),
                             &continuity_sink,
                             &tun,

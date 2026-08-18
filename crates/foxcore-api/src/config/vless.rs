@@ -15,7 +15,21 @@ pub const VLESS_FLOW_VISION: &str = "xtls-rprx-vision";
 /// a shape the implementation actually requires, so a profile that does not meet
 /// one is refused rather than run with the flow quietly dropped — a server told
 /// `flow=xtls-rprx-vision` pads its side no matter what the client then does.
-pub(super) fn validate_vless_flow(config: &VlessConfig) -> Result<(), ConfigError> {
+pub(super) fn validate_vless(config: &VlessConfig) -> Result<(), ConfigError> {
+    if let Some(encryption) = &config.encryption {
+        let params = super::parse_vless_encryption(encryption.expose())
+            .map_err(|error| ConfigError::Invalid(error.to_string()))?;
+        if config.flow.is_some() {
+            return Err(ConfigError::Invalid(
+                "VLESS Vision over VLESS encryption is not implemented; set flow to none".into(),
+            ));
+        }
+        let _ = params;
+    }
+    validate_vless_flow(config)
+}
+
+fn validate_vless_flow(config: &VlessConfig) -> Result<(), ConfigError> {
     let Some(flow) = config.flow.as_deref() else {
         return Ok(());
     };
@@ -68,12 +82,12 @@ pub struct VlessConfig {
     pub packet_encoding: PacketEncoding,
     #[serde(default)]
     pub tls: TlsConfig,
-    /// Optional REALITY security layer. It is mutually exclusive with `tls`
-    /// and runs over raw TCP only. The ClientHello it writes is built from the
-    /// named [`RealityFingerprint`] profile; the set of names is closed and
-    /// small, not a generic uTLS surface.
+    /// Optional REALITY layer; mutually exclusive with `tls` and composed below
+    /// the stream transport using a closed [`RealityFingerprint`] table.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reality: Option<RealityConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub encryption: Option<SecretString>,
 }
 
 /// UDP carriage for VLESS.
@@ -96,30 +110,35 @@ pub enum PacketEncoding {
     Packetaddr,
 }
 
-/// Which ClientHello the REALITY transport writes.
-///
-/// Each variant names a browser build whose hello shape is reproduced from a
-/// table: extension order, GREASE slots, key-exchange groups and padding. The
-/// list is closed on purpose — a name here is a promise that the bytes were
-/// derived from a published capture of that build, so it cannot accept
-/// arbitrary uTLS strings the way Xray's `fingerprint=` does.
-///
-/// `chrome` — the name this field carried when there was only one profile — is
-/// still accepted and means [`Self::Chrome133`], so a profile an installed app
-/// already saved keeps parsing.
+/// Closed set of verified ClientHello tables. Bare `chrome` and `firefox`
+/// aliases track the current table; versioned names pin exact bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RealityFingerprint {
-    /// Chrome 133 on desktop: X25519MLKEM768 first in `supported_groups` and
-    /// `key_share`, ALPS at the 0x44cd code point, ECH GREASE, permuted
-    /// extensions.
     #[default]
-    #[serde(rename = "chrome_133", alias = "chrome")]
+    #[serde(rename = "chrome_151", alias = "chrome")]
+    Chrome151,
+    /// uTLS-compatible Chrome 133 table retained for deployed peers.
+    #[serde(rename = "chrome_133")]
     Chrome133,
     /// Chrome 131. Byte-identical to [`Self::Chrome133`] except that
     /// `application_settings` is sent at the older 0x4469 code point, which is
     /// the only thing that moved between the two builds.
     #[serde(rename = "chrome_131")]
     Chrome131,
+    #[serde(rename = "edge_85", alias = "edge")]
+    Edge85,
+    #[serde(rename = "safari_26_3", alias = "safari")]
+    Safari263,
+    #[serde(rename = "ios_14", alias = "ios")]
+    Ios14,
+    #[serde(rename = "qq_11_1", alias = "qq")]
+    Qq111,
+    #[serde(rename = "firefox_153", alias = "firefox")]
+    Firefox153,
+    #[serde(rename = "firefox_148")]
+    Firefox148,
+    #[serde(rename = "randomized")]
+    Randomized,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
