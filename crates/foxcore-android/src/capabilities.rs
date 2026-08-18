@@ -1424,6 +1424,7 @@ mod schema {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "shipped")]
     const ABI_V1_FIXTURE: &str = include_str!("../../../fixtures/abi/v1/capabilities.json");
 
     #[test]
@@ -1512,6 +1513,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "shipped")]
     #[test]
     fn the_frozen_abi_v1_document_is_still_readable() {
         let old: serde_json::Value = serde_json::from_str(ABI_V1_FIXTURE).unwrap();
@@ -1521,6 +1523,7 @@ mod tests {
         assert!(problems.is_empty(), "ABI v1 regressions: {problems:#?}");
     }
 
+    #[cfg(feature = "shipped")]
     fn compare_abi(
         path: &str,
         old: &serde_json::Value,

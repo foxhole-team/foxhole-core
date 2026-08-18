@@ -233,7 +233,7 @@ flowchart TD
 | Third-party app identity | `KnownAppConfig.signing_digest` — hex SHA-256 of another app's signing cert, so a repackaged app fails closed | `config/policy.rs:212-217`; `AndroidApplicationIdentityResolver.kt:78-96` |
 | Gradle dependencies | per-artifact SHA-256 | `gradle/verification-metadata.xml` |
 | Release APK certificate | `e59de2486084c38f3c77e9df0eb5eff9a4559f3c68024f1208e0e9c04b0df665` | `config/release-cert-sha256.txt` — **build-time check only** |
-| FoxCore revision | `4f58ea19ff6c81c32eac3a9d5124c3dbd314b2ee` | `config/foxcore-revision.txt`; local Gradle checks the sibling Git HEAD and refuses release mismatches (`app/build.gradle.kts:188-245`) |
+| FoxCore revision | exact release commit in `config/foxcore-revision.txt` | local Gradle checks the sibling Git HEAD and refuses release mismatches (`app/build.gradle.kts:188-245`) |
 
 **Not pinned:**
 
@@ -254,5 +254,4 @@ The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 
 ## 2.7 Inconsistencies found
 
-No open inconsistencies remain after rechecking the capability table, README profile count and the
-single-source FoxHole DB key derivation.
+No open inconsistencies remain after this pass.

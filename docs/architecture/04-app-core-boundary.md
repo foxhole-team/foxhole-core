@@ -335,11 +335,3 @@ flowchart LR
 `foxcore-link/src/lib.rs:636-650` exposes the partial subscription import intended for applications.
 The JNI exports remain frozen, but the repository calls the Kotlin parser and the two disagree on
 four schemes. A product switch requires a shared DTO and policy/secret-handling corpus first.
-
-### Other drift
-
-| Finding | Detail |
-|---|---|
-| Link parser ownership | Native exports are compatibility-only; Kotlin remains the production parser. Wiring requires a shared DTO, data-layer migration and tests for secret handling and partial subscription rejection. |
-| Continuity user action | The app decodes and journals `confirmation_required`, but has no typed product call or user action; current translated settings do not request manual confirmation. |
-| DNS activation timing | Live install now handles updates under unchanged trust. Enable and trust rotation intentionally replace the engine; inactive or superseded generations consume the persisted bundle on start. |

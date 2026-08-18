@@ -168,17 +168,10 @@ flowchart LR
     N --> N2["fingerprints: re-derive every digest, runtime_tables.rs:154-169"]
 ```
 
-Details of both stages are in [03 — Updates and data delivery](03-updates-and-data-delivery.md).
-
 ---
 
-## 5.7 Known drift between README and code
+## 5.7 Inconsistencies found
 
-| Claim | Reality |
-|---|---|
-| `README.md:206` — the app "pins this value exactly (`ThreatIntelDocument.SCHEMA`) and rejects any other" | the client accepts a **range**: `schema in 1..SCHEMA` with `SCHEMA = 4` — `core/model/.../ThreatIntelDocument.kt:59-68`. Feed still emits `3`. |
-| `build-adguard-dns-filter.sh:20` — "Both consumers deny unknown manifest fields" | true for the Rust core (`foxcore-route/src/ruleset.rs:204-244`, `deny_unknown_fields`), **false** for the Kotlin client (`ignoreUnknownKeys = true`) |
-| `README.md:314` — "an ephemeral key in verification" | `feeds.yml` generates no ephemeral key; PR/dev builds run with `FOXHOLE_DNS_REQUIRE_SIGNATURE=false` (`feeds.yml:83`) and are verified unsigned |
-| `MIN_APP_VERSION` defaults | `1.0.0-beta1` for DNS/threat-intel vs `1.1.3` for bridges/geoip/fingerprints; CI overrides all to `0.0.1` (`feeds.yml:21`) |
-
-`*-source-info.json` files have no client consumer; they are audit artifacts only.
+- `verify-feeds.sh:118` describes signature verification before manifest-field checks, while the
+  implementation validates those fields first. Both paths still fail closed.
+- `*-source-info.json` files are publication audit artifacts; the client does not consume them.

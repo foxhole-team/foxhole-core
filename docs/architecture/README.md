@@ -55,7 +55,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    A["foxhole_guard<br/>config/foxcore-revision.txt<br/>4f58ea19…b2ee"] -->|"CI + F-Droid recipe<br/>check out that commit"| B["foxhole-core"]
+    A["foxhole_guard<br/>config/foxcore-revision.txt<br/>exact release commit"] -->|"CI + F-Droid recipe<br/>check out that commit"| B["foxhole-core"]
     B -->|"scripts/android-build.sh"| C["libfoxhole_native.so<br/>arm64-v8a shipped"]
     C --> A
     B -->|"fingerprints/*.json"| D["foxhole-db<br/>build-fingerprints.sh"]
@@ -93,4 +93,4 @@ Each document ends with the inconsistencies found while writing it:
 | 2 — Cryptography | 2.7 — no open inconsistencies after the current pass |
 | 3 — Updates | 3.7 — inline vs shared verifiers, permissive Kotlin vs strict Rust JSON parsing, and DNS live/start activation |
 | 4 — Boundary | 4.7 — compatibility-only link/continuity ABI, DNS activation, and the divergent link parsers |
-| 5 — Data repository | 5.7 — threat-intel schema pinning, `deny_unknown_fields` claim, ephemeral-key claim |
+| 5 — Data repository | 5.7 — verifier comment ordering and audit-only source-info files |

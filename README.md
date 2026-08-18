@@ -59,11 +59,8 @@ TUN → flow engine → routing policy → outbound
 > **TLS fingerprint:** a Reality connection sends a browser-faithful
 > ClientHello — nine profiles, seven transcribed from uTLS and two from
 > first-party captures, matching real Chromium on
-> the human-readable part of JA4. **The generic TLS path is not browser-shaped:**
-> it uses rustls' own hello, measured at 10 cipher suites and 11 extensions
-> against Chromium's 15 and 16, so it is distinguishable from a browser. Nothing
-> measured shows a censor keying on that today. It is not reachable by
-> configuration either: rustls implements none of the RSA and CBC suites Chrome
+> the human-readable part of JA4.
+> rustls implements none of the RSA and CBC suites Chrome
 > carries and exposes no API for GREASE or extension order. Under active
 > development and experiment; a different TLS stack (BoringSSL) is a candidate
 > for closing it.
@@ -72,6 +69,7 @@ TUN → flow engine → routing policy → outbound
 
 | Document | Purpose |
 | --- | --- |
+| [Beta architecture](docs/architecture/README.md) | cross-repository architecture, trust boundaries and release data flow for the public beta |
 | [SECURITY.md](SECURITY.md) | vulnerability reporting and security scope |
 | [threat-model.md](docs/threat-model.md) | threat model and security boundaries |
 | [abi.md](docs/abi.md) | FFI contract: handles, threads, panic boundaries, error codes and limits |
