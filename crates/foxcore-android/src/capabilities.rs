@@ -1518,6 +1518,7 @@ mod tests {
     fn the_frozen_abi_v1_document_is_still_readable() {
         let old: serde_json::Value = serde_json::from_str(ABI_V1_FIXTURE).unwrap();
         let new: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
+        assert_eq!(old["core_version"], new["core_version"]);
         let mut problems = Vec::new();
         compare_abi("", &old, &new, &mut problems);
         assert!(problems.is_empty(), "ABI v1 regressions: {problems:#?}");
