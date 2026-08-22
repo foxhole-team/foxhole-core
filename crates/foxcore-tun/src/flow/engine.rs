@@ -4,15 +4,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::netstack::{FlowStack, StackFlow, TcpFlow};
-use foxcore_api::{BlockReason, CoreEvent, FlowContext, IpTransport, RouteAction};
+#[cfg(feature = "wireguard")]
+use foxcore_api::RouteAction;
+use foxcore_api::{BlockReason, CoreEvent, FlowContext, IpTransport};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-use foxcore_trafficmap::{CountingStream, FlowLane, FlowRoute};
+use foxcore_trafficmap::CountingStream;
+#[cfg(feature = "wireguard")]
+use foxcore_trafficmap::{FlowLane, FlowRoute};
 
+use crate::TunDevice;
 use crate::continuity::ContinuityGate;
-use crate::{TunDevice, is_i2p, is_onion};
+#[cfg(feature = "wireguard")]
+use crate::{is_i2p, is_onion};
 
 /// How many relay buffers stay resident between flows.
 ///
