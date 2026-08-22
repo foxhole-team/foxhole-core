@@ -3,7 +3,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ipstack::IpStackUdpStream;
+use crate::netstack::DatagramFlow;
 use foxcore_api::{BlockReason, FlowContext, IpTransport, RouteAction};
 use foxcore_outbound::Outbound;
 use foxcore_route::RouteTable;
@@ -67,7 +67,7 @@ impl FlowEngine {
         }
     }
 
-    pub(crate) fn dispatch_udp(&self, stream: IpStackUdpStream, cancel: CancellationToken) {
+    pub(crate) fn dispatch_udp(&self, stream: DatagramFlow, cancel: CancellationToken) {
         let Ok(permit) = self.udp_slots.clone().try_acquire_owned() else {
             // The TCP arm of this — `dispatch_tcp` — owes the application a
             // reset, because the stack answered a SYN on its behalf and the
@@ -75,9 +75,8 @@ impl FlowEngine {
             // here: a datagram was never accepted, so the honest answer is to
             // drop it, and dropping is also the only answer that costs nothing.
             //
-            // What this must *not* do is grow. The stream is dropped without
-            // being read, which runs `IpStackUdpStream`'s destroy messenger and
-            // takes the session straight back out of the stack's table; no
+            // What this must *not* do is grow. Dropping the datagram flow takes
+            // the session straight back out of the stack's table; no
             // permit is held, no relay task is spawned, no row is opened in the
             // traffic map. The refusal is counted and named instead, which is
             // the only trace a dropped datagram can honestly leave.
@@ -91,7 +90,7 @@ impl FlowEngine {
         });
     }
 
-    async fn handle_udp(&self, mut stream: IpStackUdpStream, cancel: CancellationToken) {
+    async fn handle_udp(&self, mut stream: DatagramFlow, cancel: CancellationToken) {
         let source = stream.local_addr();
         let destination = stream.peer_addr();
         let policy = self.policy.current.load();
@@ -189,8 +188,7 @@ impl FlowEngine {
                     // give the resources back. Breaking here does both: the
                     // outbound session is dropped with this scope, and
                     // `stream` is dropped when `handle_udp` returns, which
-                    // fires `IpStackUdpStream`'s destroy messenger and takes
-                    // the session straight out of the stack's table.
+                    // takes the session straight out of the stack's table.
                     _ = policy_revoked.cancelled() => {
                         metrics.revoke_flow();
                         break;

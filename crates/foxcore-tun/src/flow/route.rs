@@ -3,9 +3,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ipstack::{
-    IpStack, IpStackConfig, IpStackTcpStream, IpStackUdpStream, IpStackUnknownTransport,
-};
+use crate::netstack::{DatagramFlow, FlowStack, StackConfig, TcpFlow, UnknownTransport};
 use foxcore_api::{
     BlockReason, CoreEvent, Destination, FlowContext, IpTransport, RouteAction, RuntimeConfig,
 };
@@ -59,11 +57,10 @@ pub(crate) fn is_ordinary_end(error: &io::Error) -> bool {
 /// all. `idle_timeout_s` reached the stack's UDP sessions and the split table
 /// and stopped there — and it stays there: what arrives here is
 /// `tcp_idle_timeout_s`, whose whole reason for existing is the last paragraph
-/// below. `ipstack`'s own 60-second TCP timer is armed inside
-/// `poll_read`, so a relay parked in its *write* direction — which is exactly
-/// what a far end that stops accepting produces — never re-arms it. Measured
-/// with a black hole applied to established flows: eleven of them sat unchanged
-/// for the last 91 seconds of the run, and `max_tcp_flows` is 1024.
+/// below. Packet-level TCP timers cannot express whether either side of the
+/// outbound relay is making application progress. Measured with a black hole
+/// applied to established flows: eleven of them sat unchanged for the last 91
+/// seconds of the run, and `max_tcp_flows` is 1024.
 ///
 /// Sampled rather than instrumented, because the counters
 /// [`foxcore_trafficmap::CountingStream`] already keeps for the traffic map say
@@ -153,7 +150,7 @@ pub(crate) fn outbound_allowed(outbound: &Outbound, routes: &RouteTable) -> bool
 }
 
 pub(crate) async fn serve_dns_tcp(
-    stream: &mut IpStackTcpStream,
+    stream: &mut TcpFlow,
     policy: Arc<FlowPolicyStore>,
     context: FlowContext,
     metrics: &FlowMetrics,
@@ -210,7 +207,7 @@ pub(crate) async fn serve_dns_tcp(
 }
 
 pub(crate) async fn serve_dns_udp(
-    stream: &mut IpStackUdpStream,
+    stream: &mut DatagramFlow,
     policy: Arc<FlowPolicyStore>,
     context: FlowContext,
     metrics: &FlowMetrics,
@@ -404,11 +401,11 @@ pub(crate) fn build_stack<D>(
     mtu: u16,
     runtime: &RuntimeConfig,
     metrics: &FlowMetrics,
-) -> io::Result<IpStack>
+) -> io::Result<FlowStack>
 where
     D: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let mut config = IpStackConfig::default();
+    let mut config = StackConfig::default();
     config
         .mtu(mtu)
         .map_err(|error| io::Error::other(error.to_string()))?;
@@ -416,8 +413,10 @@ where
         .packet_information(false)
         .udp_timeout(Duration::from_secs(runtime.idle_timeout_s))
         .max_sessions(runtime.max_tcp_flows.saturating_add(runtime.max_udp_flows))
+        .max_tcp_sessions(runtime.max_tcp_flows)
+        .report_tcp_refusals(true)
         .udp_queue_drop_counter(metrics.udp_queue_drop_counter());
-    Ok(IpStack::new(config, device))
+    Ok(FlowStack::new(config, device))
 }
 
 pub(crate) fn context_for(
@@ -441,7 +440,7 @@ pub(crate) fn context_for(
     context
 }
 
-pub(crate) fn answer_icmp(unknown: IpStackUnknownTransport) {
+pub(crate) fn answer_icmp(unknown: UnknownTransport) {
     if u8::from(unknown.ip_protocol()) != IP_PROTOCOL_ICMP {
         return;
     }

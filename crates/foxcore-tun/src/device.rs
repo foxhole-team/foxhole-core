@@ -10,7 +10,7 @@
 //!     device by name (created out-of-band). Used for the host/container e2e test.
 //!
 //! The device is put in non-blocking mode and driven through tokio's [`AsyncFd`], so it
-//! behaves like any other `AsyncRead + AsyncWrite` and plugs straight into `ipstack`.
+//! behaves like any other `AsyncRead + AsyncWrite` and plugs into the bounded netstack actor.
 //!
 //! This module is the only OS-facing unsafe boundary in the TUN crate.
 

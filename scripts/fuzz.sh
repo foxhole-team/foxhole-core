@@ -28,6 +28,7 @@ FUZZ="$HERE/fuzz/Cargo.toml"
 NIGHTLY="${FOXCORE_NIGHTLY:-nightly}"
 
 TARGETS=(
+    netstack_packet
     flow_key_from_packet
     dns_message
     wireguard_message

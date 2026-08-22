@@ -50,7 +50,7 @@ impl EngineConfig {
         }
         if self.tun.mtu < 1280 {
             return Err(ConfigError::Invalid(format!(
-                "TUN MTU {} is below the IPv6/ipstack minimum 1280",
+                "TUN MTU {} is below the IPv6 minimum 1280",
                 self.tun.mtu
             )));
         }

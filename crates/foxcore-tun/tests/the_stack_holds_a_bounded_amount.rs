@@ -4,12 +4,12 @@
 
 use std::time::Duration;
 
-use foxcore_tun::ipstack::{IpStack, IpStackStream, IpStackTcpStream};
+use foxcore_tun::netstack::{FlowStack, StackFlow, TcpConfig, TcpFlow};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 mod tunlab;
 
-use tunlab::{FLAG_ACK, FLAG_PSH, FLAG_RST, FLAG_SYN, Seen};
+use tunlab::{FLAG_ACK, FLAG_FIN, FLAG_PSH, FLAG_RST, FLAG_SYN, Seen};
 
 const MTU: u16 = 1500;
 const PORT: u16 = 8080;
@@ -17,13 +17,23 @@ const SOON: Duration = Duration::from_secs(5);
 
 struct Bench {
     app: tokio::net::UnixDatagram,
-    stack: IpStack,
+    stack: FlowStack,
     _tun_fd_owner: foxcore_tun::TunFdOwner,
 }
 
 impl Bench {
     fn with_sessions(max_sessions: usize) -> Self {
         let (app, stack, tun_fd_owner) = tunlab::stack_over_socketpair_limited(MTU, max_sessions);
+        Self {
+            app,
+            stack,
+            _tun_fd_owner: tun_fd_owner,
+        }
+    }
+
+    fn with_tcp(max_sessions: usize, tcp_config: TcpConfig) -> Self {
+        let (app, stack, tun_fd_owner) =
+            tunlab::stack_over_socketpair_limited_with_tcp(MTU, max_sessions, tcp_config);
         Self {
             app,
             stack,
@@ -48,7 +58,23 @@ impl Bench {
             acknowledgement,
             payload,
         );
-        self.app.send(&packet).await.expect("inject a segment");
+        tokio::time::timeout(SOON, async {
+            loop {
+                match self.app.send(&packet).await {
+                    Ok(_) => return,
+                    // The socketpair standing in for the TUN has a finite
+                    // datagram buffer. A busy-path test may briefly fill that
+                    // host buffer even though the stack is still draining it.
+                    Err(error) if error.raw_os_error() == Some(libc::ENOBUFS) => {
+                        self.drain();
+                        tokio::task::yield_now().await;
+                    }
+                    Err(error) => panic!("inject a segment: {error}"),
+                }
+            }
+        })
+        .await
+        .expect("the stack must keep draining the test TUN");
     }
 
     /// Drain the finite socketpair buffer.
@@ -74,7 +100,7 @@ impl Bench {
     }
 
     /// Open a session and return its stream and next acknowledgement.
-    async fn establish(&mut self, client_port: u16, sequence: u32) -> (IpStackTcpStream, u32) {
+    async fn establish(&mut self, client_port: u16, sequence: u32) -> (TcpFlow, u32) {
         self.send(client_port, FLAG_SYN, sequence, 0, &[]).await;
         let mut buffer = [0_u8; 4096];
         let deadline = tokio::time::Instant::now() + SOON;
@@ -102,7 +128,7 @@ impl Bench {
             .await
             .expect("the stream has to reach accept()")
             .expect("accept the stream");
-        let IpStackStream::Tcp(stream) = accepted else {
+        let StackFlow::Tcp(stream) = accepted else {
             panic!("a TCP segment has to produce a TCP stream");
         };
         (stream, acknowledgement)
@@ -169,6 +195,147 @@ async fn a_full_session_table_refuses_the_new_and_keeps_carrying_the_established
 
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn time_wait_releases_its_slot_while_unrelated_packets_keep_the_actor_busy() {
+    const FIRST: u16 = 40_100;
+    const SECOND: u16 = 40_101;
+
+    let mut bench = Bench::with_sessions(1);
+    let (mut first, _acknowledgement) = bench.establish(FIRST, 1_000).await;
+    let closing = tokio::spawn(async move { first.shutdown().await });
+
+    let deadline = tokio::time::Instant::now() + SOON;
+    let fin = loop {
+        let packets = bench.collect(FIRST, Duration::from_millis(50)).await;
+        if let Some(fin) = packets
+            .into_iter()
+            .find(|packet| packet.flags & FLAG_FIN != 0)
+        {
+            break fin;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "a graceful shutdown must put a FIN on the wire"
+        );
+    };
+    bench
+        .send(
+            FIRST,
+            FLAG_ACK | FLAG_FIN,
+            1_001,
+            fin.sequence.wrapping_add(1),
+            &[],
+        )
+        .await;
+
+    // Invalid IP is deliberate: it keeps the biased TUN-read branch ready but
+    // produces no reply. A TCP miss would emit one RST per packet and turn this
+    // into a test of the macOS UnixDatagram receive buffer instead of the
+    // actor's deadline bookkeeping.
+    let noise = [0xff_u8; 64];
+    let busy_until = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut packets = 0_usize;
+    while !closing.is_finished() && tokio::time::Instant::now() < busy_until {
+        // Keep at least one full read budget queued across the cooperative
+        // yield, so the timer arm at the bottom of the biased select cannot be
+        // the thing that makes the test pass.
+        for _ in 0..256 {
+            match bench.app.try_send(&noise) {
+                Ok(_) => {
+                    packets += 1;
+                }
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::WouldBlock
+                        || error.raw_os_error() == Some(libc::ENOBUFS) =>
+                {
+                    break;
+                }
+                Err(error) => panic!("inject unrelated traffic: {error}"),
+            }
+        }
+        tokio::task::yield_now().await;
+    }
+
+    assert!(packets > 100, "the actor was not kept continuously busy");
+    tokio::time::timeout(Duration::from_millis(100), closing)
+        .await
+        .expect("TIME_WAIT expired but the shutdown waiter was never released")
+        .expect("join graceful shutdown")
+        .expect("graceful shutdown");
+    // The kernel-side datagram buffer is finite; give the actor one bounded
+    // window to drain the last raw packets before injecting the recovery SYN.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    assert!(
+        matches!(
+            tokio::time::timeout(SOON, bench.stack.accept()).await,
+            Ok(Ok(StackFlow::UnknownNetwork(_)))
+        ),
+        "the raw traffic never reached the actor's bounded accept path"
+    );
+
+    let (_recovered, _) = bench.establish(SECOND, 2_000).await;
+}
+
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resetting_a_half_open_handshake_releases_its_reserved_slot() {
+    const HALF_OPEN: u16 = 40_200;
+    const RECOVERED: u16 = 40_201;
+
+    let mut bench = Bench::with_sessions(1);
+    bench.send(HALF_OPEN, FLAG_SYN, 1_000, 0, &[]).await;
+    let syn_ack = bench
+        .collect(HALF_OPEN, Duration::from_millis(100))
+        .await
+        .into_iter()
+        .find(|packet| packet.flags & (FLAG_SYN | FLAG_ACK) == (FLAG_SYN | FLAG_ACK))
+        .expect("the reserved socket must answer the SYN");
+    bench
+        .send(
+            HALF_OPEN,
+            FLAG_RST | FLAG_ACK,
+            1_001,
+            syn_ack.sequence.wrapping_add(1),
+            &[],
+        )
+        .await;
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    let (_recovered, _) = bench.establish(RECOVERED, 2_000).await;
+}
+
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn an_abandoned_half_open_handshake_expires_and_releases_its_slot() {
+    const ABANDONED: u16 = 40_300;
+    const RECOVERED: u16 = 40_301;
+
+    let mut tcp = TcpConfig::default();
+    tcp.handshake_timeout = Duration::from_millis(100);
+    let mut bench = Bench::with_tcp(1, tcp);
+    bench.send(ABANDONED, FLAG_SYN, 1_000, 0, &[]).await;
+    assert!(
+        bench
+            .collect(ABANDONED, Duration::from_millis(50))
+            .await
+            .iter()
+            .any(|packet| packet.flags & FLAG_SYN != 0),
+        "the first flow was never half open"
+    );
+    assert!(
+        bench
+            .collect(ABANDONED, Duration::from_millis(500))
+            .await
+            .iter()
+            .any(|packet| packet.flags & FLAG_RST != 0),
+        "an abandoned handshake must be reset when its reservation expires"
+    );
+
+    let (_recovered, _) = bench.establish(RECOVERED, 2_000).await;
+}
+
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_datagram_at_a_full_table_allocates_no_session() {
     const CAPACITY: usize = 2;
     const HOLDER: u16 = 41_000;
@@ -205,7 +372,7 @@ async fn a_datagram_at_a_full_table_allocates_no_session() {
     .await
     .expect("the table has to take a datagram again once a slot is free");
     assert!(
-        matches!(recovered, IpStackStream::Udp(_)),
+        matches!(recovered, StackFlow::Udp(_)),
         "and it has to be the datagram's own session"
     );
 }

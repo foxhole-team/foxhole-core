@@ -19,17 +19,14 @@ mod flow;
 mod halfclose;
 mod icmp;
 mod ingress;
-/// The userspace TCP/IP stack, forked into this crate.
-///
-/// Public because the measurements that justify the fork drive it directly,
-/// with no engine and no outbound above it — `tests/ipstack_window_never_closes`
-/// and `tests/stack_backpressure`. Nothing outside this crate is expected to
-/// build on it; see [`ipstack`] for what was changed and why.
-pub mod ipstack;
 mod l3;
 mod metrics;
+/// The bounded TUN network stack and its packet-level regression surface.
+pub mod netstack;
 #[cfg(feature = "wireguard")]
 mod relay;
+#[cfg(test)]
+mod smoltcp_poc;
 mod split;
 
 /// Public because the benchmarks that justify it drive it directly — the two

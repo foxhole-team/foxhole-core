@@ -163,6 +163,12 @@ checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
 
 [[package]]
 name = "bitflags"
+version = "1.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
+
+[[package]]
+name = "bitflags"
 version = "2.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
@@ -213,6 +219,12 @@ name = "byte_string"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "11aade7a05aa8c3a351cedc44c3fc45806430543382fcc4743a9b757a2a0b4ed"
+
+[[package]]
+name = "byteorder"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "bytes"
@@ -365,6 +377,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4ae5f15dda3c708c0ade84bfee31ccab44a3da4f88015ed22f63732abe300c8"
 
 [[package]]
+name = "defmt"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2953bfe4f93bbd20cc71198842756f77d161884c99ebbabc41d80231ded88d1"
+dependencies = [
+ "bitflags 1.3.2",
+ "defmt-macros",
+]
+
+[[package]]
+name = "defmt-macros"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bad9c72e7ca2137e0dc3813245a0d282fd6daad32fd800af018306a9169b5fe8"
+dependencies = [
+ "defmt-parser",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "defmt-parser"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "10d60334b3b2e7c9d91ef8150abfb6fa4c1c39ebbcf4a81c2e346aad939fee3e"
+dependencies = [
+ "thiserror",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -511,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-api"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "ipnet",
@@ -524,14 +567,14 @@ dependencies = [
 
 [[package]]
 name = "foxcore-dialer"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-dns"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "ipnet",
 ]
@@ -562,10 +605,11 @@ dependencies = [
 
 [[package]]
 name = "foxcore-link"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "foxcore-api",
+ "getrandom 0.3.4",
  "ipnet",
  "percent-encoding",
  "serde",
@@ -576,7 +620,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-outbound"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "base64",
@@ -591,14 +635,14 @@ dependencies = [
 
 [[package]]
 name = "foxcore-relay"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-route"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aws-lc-rs",
  "foxcore-api",
@@ -611,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-trafficmap"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "foxcore-api",
@@ -623,13 +667,15 @@ dependencies = [
 
 [[package]]
 name = "foxcore-transport"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "async-trait",
+ "aws-lc-rs",
  "base64",
  "bytes",
  "foxcore-api",
  "futures",
+ "getrandom 0.3.4",
  "h2",
  "http",
  "rustls",
@@ -645,7 +691,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-tun"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -658,15 +704,16 @@ dependencies = [
  "foxcore-route",
  "foxcore-trafficmap",
  "foxcore-transport",
+ "getrandom 0.3.4",
  "h2",
  "http",
  "libc",
  "log",
  "parking_lot",
  "proto-wireguard",
- "rand 0.9.5",
  "serde",
  "sha2",
+ "smoltcp",
  "thiserror",
  "tokio",
  "tokio-util",
@@ -831,9 +878,9 @@ dependencies = [
 
 [[package]]
 name = "h2"
-version = "0.4.15"
+version = "0.4.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb093c84e8bd9b188d4c4a8cb6579fc016968d14c99882163cd3ff402a4f155"
+checksum = "839c0e8a181239723652be9062bb56ca5bf5f64011f73b623f6f4fc59086a228"
 dependencies = [
  "atomic-waker",
  "bytes",
@@ -849,10 +896,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "hash32"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47d60b12902ba28e2730cd37e95b8c9223af2808df9e902d4df49588d1470606"
+dependencies = [
+ "byteorder",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
+
+[[package]]
+name = "heapless"
+version = "0.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+dependencies = [
+ "hash32",
+ "stable_deref_trait",
+]
 
 [[package]]
 name = "hkdf"
@@ -1094,6 +1160,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9106e1d747ffd48e6be5bb2d97fa706ed25b144fbee4d5c02eae110cd8d6badd"
 
 [[package]]
+name = "managed"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ca88d725a0a943b096803bd34e73a4437208b6077654cc4ecb2947a5f91618d"
+
+[[package]]
 name = "md-5"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1320,7 +1392,7 @@ dependencies = [
 
 [[package]]
 name = "proto-http"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64",
  "bytes",
@@ -1333,12 +1405,13 @@ dependencies = [
 
 [[package]]
 name = "proto-reality"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aws-lc-rs",
  "base64",
  "foxcore-transport",
  "rand 0.9.5",
+ "serde_json",
  "subtle",
  "tokio",
  "x509-parser",
@@ -1347,7 +1420,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowtls"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1367,7 +1440,7 @@ dependencies = [
 
 [[package]]
 name = "proto-socks"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1380,7 +1453,7 @@ dependencies = [
 
 [[package]]
 name = "proto-wireguard"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "aws-lc-rs",
  "blake2",
@@ -1472,7 +1545,7 @@ version = "0.5.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ed2bf2547551a7053d6fdfafda3f938979645c44812fbfcda098faae3f1a362d"
 dependencies = [
- "bitflags",
+ "bitflags 2.13.1",
 ]
 
 [[package]]
@@ -1762,6 +1835,20 @@ name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+
+[[package]]
+name = "smoltcp"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6f8b28ad56c6e35524a37dd492af5d1a47e31e1a4d175cd12f89c075f01980f"
+dependencies = [
+ "bitflags 1.3.2",
+ "byteorder",
+ "cfg-if",
+ "defmt",
+ "heapless",
+ "managed",
+]
 
 [[package]]
 name = "socket2"

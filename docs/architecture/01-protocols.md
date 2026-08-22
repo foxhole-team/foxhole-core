@@ -8,7 +8,8 @@ Every outbound FoxCore implements, what carries it, what protects it, where it e
 
 ```mermaid
 flowchart TD
-    TUN["Android TUN fd"] --> FE["flow engine<br/>foxcore-tun"]
+    TUN["Android TUN fd"] --> NS["bounded netstack<br/>smoltcp TCP actor<br/>Fox UDP / ICMP"]
+    NS --> FE["flow engine<br/>foxcore-tun"]
     FE --> RT["route decision<br/>foxcore-route"]
     RT -->|Block| BLK["dropped and counted"]
     RT -->|Direct| DIR["protected socket"]
@@ -29,11 +30,46 @@ flowchart TD
 Layer order matters: the security layer sits **below** the stream carrier, so a WebSocket rides
 inside TLS, not the other way round (`crates/foxcore-transport/src/lib.rs:67-96`).
 
-The TUN boundary is bounded in both UDP directions. An established flow retains 32 packets from
-the TUN, while all flows share a 256-packet queue for replies back to it. Both drop newest on full
-and increment the same public loss counter (`foxcore-tun/src/ipstack/mod.rs:262-270`, `:339-347`,
-`:505-510`; `ipstack/stream/udp.rs:228-241`). TCP uses its advertised receive window instead of a
-lossy queue.
+`FlowStack` is the backend-neutral boundary presented to the flow engine
+(`crates/foxcore-tun/src/netstack/mod.rs:249-312`). TCP is exact-pinned to smoltcp 0.14.0 with only
+IP medium, IPv4/IPv6, TCP, Reno and async wake support; smoltcp UDP, DNS, fragmentation and automatic
+ICMP echo are not compiled (`Cargo.toml:83-91`). One Tokio actor owns the smoltcp `Interface`,
+`SocketSet` and tuple map. Before it hands an untrusted SYN to smoltcp it reserves the flow slot,
+bounded accept capacity and the complete buffer charge, listens on the packet's exact destination,
+and publishes the stream only after `Established` (`crates/foxcore-tun/src/netstack/actor.rs:262-282`,
+`:565-617`, `:668-734`, `:818-831`). AnyIP supplies transparent IPv4/IPv6 admission, and the TCP
+random seed comes fail-closed from the OS (`crates/foxcore-tun/src/netstack/actor.rs:262-270`). An
+unpublished handshake holds its reservations for at most 30 seconds; timeout and passive-reset
+states are reset and reaped without waiting for unrelated traffic to stop
+(`crates/foxcore-tun/src/netstack/stream/smoltcp_tcp.rs:22-47`;
+`crates/foxcore-tun/src/netstack/actor.rs:768-823`, `:900-905`).
+
+The packet device has 256-packet ingress and egress bounds, and refuses to dequeue ingress until an
+egress slot is available for smoltcp's paired receive/transmit token
+(`crates/foxcore-tun/src/netstack/actor.rs:31-42`, `:49-99`,
+`:136-180`). Its writer, TCP command, UDP reply and raw-response channels are also bounded; every
+event-loop tick has explicit command and packet budgets before it yields
+(`crates/foxcore-tun/src/netstack/actor.rs:242-282`, `:291-435`). TCP
+admission shares a 64 MiB buffer budget, and each application-facing direction adds only one
+MTU-sized channel chunk to the charged socket buffers
+(`crates/foxcore-tun/src/netstack/actor.rs:668-734`;
+`crates/foxcore-tun/src/netstack/stream/smoltcp_tcp.rs:176-189`).
+
+UDP remains a Fox-owned five-tuple demultiplexer: an established flow retains 32 packets from the
+TUN, all flows share a 256-packet reply queue, and overflow drops newest while incrementing the
+public loss counter (`crates/foxcore-tun/src/netstack/mod.rs:89-130`, `:160-166`;
+`crates/foxcore-tun/src/netstack/stream/udp.rs:20-80`, `:224-240`). DNS interception therefore stays
+in the policy-aware flow engine, and ICMPv4 echo uses the same bounded raw-response path
+(`crates/foxcore-tun/src/netstack/mod.rs:1-9`, `:66-87`). On the WireGuard L3 path four
+256-packet channels feed one TUN writer; `StackDevice` never creates a second writer
+(`crates/foxcore-tun/src/flow/engine.rs:142-229`; `crates/foxcore-tun/src/ingress.rs:118-199`). Fatal
+TUN reader or writer errors reach the engine with their original I/O kind. Cancellation signals the
+stack actor, joins it and its writer with a one-second fallback bound, then shuts down and joins the
+L3 helper set before the generation-owned runtime can release the sole TUN owner
+(`crates/foxcore-tun/src/netstack/mod.rs:270-312`;
+`crates/foxcore-tun/src/netstack/actor.rs:291-303`, `:460-554`;
+`crates/foxcore-tun/src/flow/engine.rs:227-250`;
+`crates/foxcore-runtime/src/start.rs:384-407`).
 
 ---
 
@@ -240,3 +276,12 @@ A permanent "this protocol has no UDP" refusal is counted as `udp_unsupported` +
 Maturity ceiling in this build is `beta`; nothing claims `stable`, and
 `live_interop_verified_this_build: false` (`capabilities.rs:1180-1200`). TUIC, AnyTLS, ShadowTLS and
 AmneziaWG are `experimental`.
+
+---
+
+## 1.8 Inconsistencies found
+
+No open protocol inconsistencies remain after this pass. The previous text and both top-level
+capability tables named the removed embedded `ipstack` fork and omitted the global TCP memory and
+raw-response queue bounds; they now describe the shipping smoltcp actor and Fox-owned UDP/ICMP
+boundary.

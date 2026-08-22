@@ -1,5 +1,5 @@
-use crate::ipstack::{
-    IpStackError, SessionPacketDelivery, SessionPacketSender, TTL, UDP_SESSION_QUEUE_DEPTH,
+use crate::netstack::{
+    SessionPacketDelivery, SessionPacketSender, StackError, TTL, UDP_SESSION_QUEUE_DEPTH,
     UdpPacketSender,
     packet::{IpHeader, NetworkPacket, TransportHeader},
 };
@@ -17,14 +17,16 @@ use tokio::{
     time::Sleep,
 };
 
+const UDP_SESSION_CHANNEL_DEPTH: usize = UDP_SESSION_QUEUE_DEPTH - 1;
+
 /// A UDP stream in the IP stack.
 ///
 /// This type represents a UDP connection and implements `AsyncRead` and `AsyncWrite`
 /// for bidirectional data transfer. UDP streams have a configurable timeout and
-/// automatically handle packet fragmentation based on MTU.
+/// refuse datagrams that cannot fit in one MTU.
 ///
 #[derive(Debug)]
-pub struct IpStackUdpStream {
+pub struct DatagramFlow {
     src_addr: SocketAddr,
     dst_addr: SocketAddr,
     stream_sender: mpsc::Sender<NetworkPacket>,
@@ -44,7 +46,7 @@ pub(crate) struct UdpStreamConfig {
     pub(crate) queue_drops: Arc<AtomicU64>,
 }
 
-impl IpStackUdpStream {
+impl DatagramFlow {
     pub(crate) fn new(
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
@@ -53,10 +55,13 @@ impl IpStackUdpStream {
         config: UdpStreamConfig,
         destroy_messenger: Option<::tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
+        // The first datagram is held separately so the flow can be published
+        // without an extra channel turn. Count it against the advertised
+        // per-flow limit: one initial packet plus this channel is at most 32.
         let (stream_sender, stream_receiver) =
-            mpsc::channel::<NetworkPacket>(UDP_SESSION_QUEUE_DEPTH);
+            mpsc::channel::<NetworkPacket>(UDP_SESSION_CHANNEL_DEPTH);
         let deadline = tokio::time::Instant::now() + config.timeout_interval;
-        IpStackUdpStream {
+        DatagramFlow {
             src_addr,
             dst_addr,
             stream_sender,
@@ -75,23 +80,23 @@ impl IpStackUdpStream {
         SessionPacketSender::udp(self.stream_sender.clone(), self.queue_drops.clone())
     }
 
-    fn create_rev_packet(&self, ttl: u8, mut payload: Vec<u8>) -> std::io::Result<NetworkPacket> {
+    fn create_rev_packet(&self, ttl: u8, payload: Vec<u8>) -> std::io::Result<NetworkPacket> {
         const UHS: usize = 8; // udp header size is 8
         match (self.dst_addr.ip(), self.src_addr.ip()) {
             (std::net::IpAddr::V4(dst), std::net::IpAddr::V4(src)) => {
                 let mut ip_h = Ipv4Header::new(0, ttl, IpNumber::UDP, dst.octets(), src.octets())
-                    .map_err(IpStackError::from)?;
+                    .map_err(StackError::from)?;
                 let line_buffer = self.mtu.saturating_sub((ip_h.header_len() + UHS) as u16);
-                payload.truncate(line_buffer as usize);
+                refuse_oversized_payload(&payload, line_buffer)?;
                 ip_h.set_payload_len(payload.len() + UHS)
-                    .map_err(IpStackError::from)?;
+                    .map_err(StackError::from)?;
                 let udp_header = UdpHeader::with_ipv4_checksum(
                     self.dst_addr.port(),
                     self.src_addr.port(),
                     &ip_h,
                     &payload,
                 )
-                .map_err(IpStackError::from)?;
+                .map_err(StackError::from)?;
                 Ok(NetworkPacket {
                     ip: IpHeader::Ipv4(ip_h),
                     transport: TransportHeader::Udp(udp_header),
@@ -109,8 +114,7 @@ impl IpStackUdpStream {
                     destination: src.octets(),
                 };
                 let line_buffer = self.mtu.saturating_sub((ip_h.header_len() + UHS) as u16);
-
-                payload.truncate(line_buffer as usize);
+                refuse_oversized_payload(&payload, line_buffer)?;
 
                 ip_h.payload_length = (payload.len() + UHS) as u16;
                 let udp_header = UdpHeader::with_ipv6_checksum(
@@ -119,14 +123,14 @@ impl IpStackUdpStream {
                     &ip_h,
                     &payload,
                 )
-                .map_err(IpStackError::from)?;
+                .map_err(StackError::from)?;
                 Ok(NetworkPacket {
                     ip: IpHeader::Ipv6(ip_h),
                     transport: TransportHeader::Udp(udp_header),
                     payload: Some(payload),
                 })
             }
-            _ => Err(IpStackError::InvalidPacket.into()),
+            _ => Err(StackError::InvalidPacket.into()),
         }
     }
 
@@ -164,7 +168,7 @@ impl IpStackUdpStream {
     }
 }
 
-impl AsyncRead for IpStackUdpStream {
+impl AsyncRead for DatagramFlow {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
@@ -200,7 +204,7 @@ impl AsyncRead for IpStackUdpStream {
     }
 }
 
-impl AsyncWrite for IpStackUdpStream {
+impl AsyncWrite for DatagramFlow {
     fn poll_write(
         mut self: Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
@@ -208,7 +212,7 @@ impl AsyncWrite for IpStackUdpStream {
     ) -> std::task::Poll<std::io::Result<usize>> {
         self.reset_timeout();
         // A datagram is atomic, and this used to be the one place that forgot
-        // it. `create_rev_packet` clamps the payload to the MTU, and returning
+        // it. `create_rev_packet` builds exactly one packet, and returning
         // the clamped length told `write_all` that part of the message was
         // still unsent — so it sent the remainder as a **second datagram** with
         // the same ports. A DNS answer over 1372 bytes (DNSSEC, a large TXT, an
@@ -253,12 +257,25 @@ impl AsyncWrite for IpStackUdpStream {
     }
 }
 
-impl Drop for IpStackUdpStream {
+impl Drop for DatagramFlow {
     fn drop(&mut self) {
         if let Some(messenger) = self.destroy_messenger.take() {
             let _ = messenger.send(());
         }
     }
+}
+
+fn refuse_oversized_payload(payload: &[u8], limit: u16) -> std::io::Result<()> {
+    if payload.len() > usize::from(limit) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "datagram of {} bytes exceeds the {limit}-byte MTU payload",
+                payload.len()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -273,21 +290,19 @@ mod tests {
     use tokio::io::AsyncWriteExt;
     use tokio::sync::mpsc;
 
-    use super::{IpStackUdpStream, UdpStreamConfig};
-    use crate::ipstack::{
-        SessionPacketDelivery, UDP_DEVICE_QUEUE_DEPTH, UDP_SESSION_QUEUE_DEPTH, UdpPacketSender,
-    };
+    use super::{DatagramFlow, UDP_SESSION_CHANNEL_DEPTH, UdpStreamConfig};
+    use crate::netstack::{SessionPacketDelivery, UDP_DEVICE_QUEUE_DEPTH, UdpPacketSender};
 
     const MTU: u16 = 1400;
     /// 1400 minus a 20-byte IPv4 header and an 8-byte UDP header.
     const IPV4_LIMIT: usize = 1372;
 
-    fn stream() -> (IpStackUdpStream, mpsc::Receiver<super::NetworkPacket>) {
+    fn stream() -> (DatagramFlow, mpsc::Receiver<super::NetworkPacket>) {
         let (up_tx, up_rx) = mpsc::channel(UDP_DEVICE_QUEUE_DEPTH);
         let drops = Arc::new(AtomicU64::new(0));
         let src: SocketAddr = "10.0.0.2:53000".parse().expect("source address");
         let dst: SocketAddr = "10.0.0.1:53".parse().expect("destination address");
-        let stream = IpStackUdpStream::new(
+        let stream = DatagramFlow::new(
             src,
             dst,
             Vec::new(),
@@ -361,7 +376,7 @@ mod tests {
         let sender = stream.stream_sender();
         let drops = stream.queue_drops.clone();
 
-        for index in 0..UDP_SESSION_QUEUE_DEPTH {
+        for index in 0..UDP_SESSION_CHANNEL_DEPTH {
             let packet = stream
                 .create_rev_packet(64, vec![u8::try_from(index).unwrap_or_default()])
                 .expect("test datagram");

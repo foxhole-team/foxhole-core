@@ -223,7 +223,7 @@ jobs:
       - name: Harness, seeds and corpus
         run: scripts/fuzz.sh check
 
-  # The campaign. Eight parsers that read bytes somebody *else* chose — not our
+  # The campaign. Parsers that read bytes somebody *else* chose — not our
   # config — so this is the only job here that tests the code against an
   # adversary rather than against us. `share_link` is the sharpest of them: a
   # subscription body is parsed before any handshake, so nothing has
@@ -245,6 +245,7 @@ jobs:
       fail-fast: false
       matrix:
         target:
+          - netstack_packet
           - flow_key_from_packet
           - dns_message
           - wireguard_message

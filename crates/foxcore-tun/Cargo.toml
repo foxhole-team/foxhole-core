@@ -9,14 +9,13 @@ description = "TUN device and in-process flow engine for FoxCore"
 
 [features]
 default = ["wireguard"]
+fuzzing = []
 wireguard = ["foxcore-outbound/wireguard", "dep:proto-wireguard"]
 
 [dependencies]
 arc-swap.workspace = true
 bytes.workspace = true
-# The forked userspace stack (`src/ipstack`) needs a packet encoder and a
-# logging facade. Both arrived in the graph as `ipstack 1.0.0`'s own
-# dependencies; the fork keeps them and drops the crate that brought them.
+# The Fox-owned UDP/ICMP packet boundary uses etherparse; smoltcp owns TCP.
 etherparse = { version = "0.19.0", default-features = false, features = ["std"] }
 foxcore-api = { path = "../foxcore-api" }
 foxcore-dialer = { path = "../foxcore-dialer" }
@@ -26,16 +25,17 @@ foxcore-relay = { path = "../foxcore-relay" }
 foxcore-route = { path = "../foxcore-route" }
 foxcore-trafficmap = { path = "../foxcore-trafficmap" }
 foxcore-transport = { path = "../foxcore-transport" }
+getrandom.workspace = true
 h2.workspace = true
 http.workspace = true
 libc.workspace = true
 log = "0.4.33"
 parking_lot = "0.12.5"
 proto-wireguard = { path = "../proto-wireguard", optional = true }
-rand.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 sha2.workspace = true
+smoltcp.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 url.workspace = true
@@ -50,6 +50,7 @@ foxcore-dialer = { path = "../foxcore-dialer" }
 foxcore-outbound = { path = "../foxcore-outbound", features = ["i2p", "wireguard"] }
 proptest = "1.11.0"
 proto-wireguard = { path = "../proto-wireguard", features = ["test-support"] }
+rand.workspace = true
 # `start_paused`: the relay's liveness deadline is four `REKEY_TIMEOUT` windows,
 # and a test that waited them out in wall-clock time would cost twenty seconds
 # to assert one event.

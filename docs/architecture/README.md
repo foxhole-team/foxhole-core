@@ -82,7 +82,8 @@ distributed.
 - Claims are taken from code, not from the repositories' own READMEs. Where a README or a code
   comment disagrees with the code, the document says so in its final section rather than repeating
   the claim.
-- Nothing here was verified by building or running anything.
+- File citations are source-checked against the current tree. Runtime claims still require the
+  repository gates and device evidence; documentation is not treated as test proof.
 
 ### Where the drift lists are
 
@@ -90,6 +91,7 @@ Each document ends with the inconsistencies found while writing it:
 
 | Document | Section |
 |---|---|
+| 1 — Protocols | 1.8 — no open inconsistencies after the smoltcp migration pass |
 | 2 — Cryptography | 2.7 — no open inconsistencies after the current pass |
 | 3 — Updates | 3.7 — inline vs shared verifiers, permissive Kotlin vs strict Rust JSON parsing, and DNS live/start activation |
 | 4 — Boundary | 4.7 — compatibility-only link/continuity ABI, DNS activation, and the divergent link parsers |

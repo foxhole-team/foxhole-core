@@ -21,7 +21,7 @@ pub const PHASE_NONE: u8 = 0;
 pub const PHASE_RUNNING: u8 = 1;
 /// The accept loop observed cancellation and left its select.
 pub const PHASE_LOOP_EXITED: u8 = 2;
-/// `IpStack::shutdown` returned — the stack task is released or given up on.
+/// `FlowStack::shutdown` returned — the stack actor has been joined.
 pub const PHASE_STACK_SHUTDOWN: u8 = 3;
 /// The engine's own future is about to return to the worker thread.
 pub const PHASE_ENGINE_RETURNING: u8 = 4;

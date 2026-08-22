@@ -4,7 +4,7 @@
 
 use std::time::Duration;
 
-use foxcore_tun::ipstack::IpStackStream;
+use foxcore_tun::netstack::StackFlow;
 use tokio::io::AsyncReadExt;
 use tokio::time::Instant;
 
@@ -17,11 +17,13 @@ const READ_BUFFER: usize = 16 * 1024;
 const PORT: u16 = 8080;
 
 /// Accept streams without draining their receive buffers.
-fn hold_without_reading(mut stack: foxcore_tun::ipstack::IpStack) -> tokio::task::JoinHandle<()> {
+fn hold_without_reading(
+    mut stack: foxcore_tun::netstack::FlowStack,
+) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut streams = Vec::new();
         while let Ok(stream) = stack.accept().await {
-            if let IpStackStream::Tcp(stream) = stream {
+            if let StackFlow::Tcp(stream) = stream {
                 streams.push(stream);
             }
         }
@@ -81,7 +83,7 @@ async fn a_reader_that_drains_reopens_the_window() {
     let counted = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let reader_total = counted.clone();
     let reader = tokio::spawn(async move {
-        let Ok(IpStackStream::Tcp(mut stream)) = stack.accept().await else {
+        let Ok(StackFlow::Tcp(mut stream)) = stack.accept().await else {
             return;
         };
         // Start after the window closes.
@@ -138,7 +140,7 @@ async fn a_receive_buffer_below_one_segment_still_carries_the_whole_transfer() {
     let (app, mut stack, _tun_fd_owner) = tunlab::stack_over_socketpair(MTU, Some(1));
 
     let reader = tokio::spawn(async move {
-        let Ok(IpStackStream::Tcp(mut stream)) = stack.accept().await else {
+        let Ok(StackFlow::Tcp(mut stream)) = stack.accept().await else {
             return 0_usize;
         };
         let mut buffer = vec![0_u8; 4096];
@@ -182,7 +184,7 @@ async fn what_arrives_through_a_window_that_keeps_closing_is_what_was_sent() {
 
     // Slow reads force repeated window closure and reopening.
     let reader = tokio::spawn(async move {
-        let Ok(IpStackStream::Tcp(mut stream)) = stack.accept().await else {
+        let Ok(StackFlow::Tcp(mut stream)) = stack.accept().await else {
             return Vec::new();
         };
         let mut received = Vec::new();
@@ -247,7 +249,7 @@ async fn a_peer_that_ignores_the_window_is_dropped_rather_than_buffered() {
     let (app, mut stack, _tun_fd_owner) = tunlab::stack_over_socketpair(MTU, None);
 
     let held = tokio::spawn(async move {
-        let Ok(IpStackStream::Tcp(stream)) = stack.accept().await else {
+        let Ok(StackFlow::Tcp(stream)) = stack.accept().await else {
             return 0_usize;
         };
         // Sample the peak while the flood runs.
@@ -280,6 +282,7 @@ async fn a_peer_that_ignores_the_window_is_dropped_rather_than_buffered() {
         };
         let mut sequence = 1_001_u32;
         let mut offered = 0;
+        let mut replies = [0_u8; 4096];
         let deadline = Instant::now() + Duration::from_secs(3);
         while Instant::now() < deadline && offered < 8 * 1024 * 1024 {
             let packet = tunlab::segment(
@@ -293,6 +296,7 @@ async fn a_peer_that_ignores_the_window_is_dropped_rather_than_buffered() {
                 Ok(_) => {
                     sequence = sequence.wrapping_add(payload.len() as u32);
                     offered += payload.len();
+                    while app.try_recv(&mut replies).is_ok() {}
                 }
                 Err(error) if error.raw_os_error() == Some(libc::ENOBUFS) => {
                     tokio::task::yield_now().await;

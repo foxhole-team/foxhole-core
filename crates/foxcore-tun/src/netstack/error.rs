@@ -2,7 +2,7 @@
 ///
 /// This enum represents all possible errors that can occur when working with the IP stack.
 #[derive(thiserror::Error, Debug)]
-pub enum IpStackError {
+pub enum StackError {
     /// The transport protocol is not supported.
     #[error("The transport protocol is not supported")]
     UnsupportedTransportProtocol,
@@ -40,18 +40,16 @@ pub enum IpStackError {
     InvalidMtuSize(u16),
 }
 
-impl From<tokio::sync::mpsc::error::SendError<crate::ipstack::stream::IpStackStream>>
-    for IpStackError
-{
-    fn from(_: tokio::sync::mpsc::error::SendError<crate::ipstack::stream::IpStackStream>) -> Self {
-        IpStackError::SendError
+impl From<tokio::sync::mpsc::error::SendError<crate::netstack::stream::StackFlow>> for StackError {
+    fn from(_: tokio::sync::mpsc::error::SendError<crate::netstack::stream::StackFlow>) -> Self {
+        StackError::SendError
     }
 }
 
-impl From<IpStackError> for std::io::Error {
-    fn from(e: IpStackError) -> Self {
+impl From<StackError> for std::io::Error {
+    fn from(e: StackError) -> Self {
         match e {
-            IpStackError::IoError(e) => e,
+            StackError::IoError(e) => e,
             _ => std::io::Error::other(e),
         }
     }
@@ -62,7 +60,7 @@ impl From<IpStackError> for std::io::Error {
 /// This type is used throughout the IP stack for any operation which may produce an error.
 ///
 /// [`Result`]: std::result::Result
-pub type Result<T, E = IpStackError> = std::result::Result<T, E>;
+pub type Result<T, E = StackError> = std::result::Result<T, E>;
 
 #[cfg(test)]
 mod tests {
@@ -70,6 +68,6 @@ mod tests {
 
     #[test]
     fn the_error_is_send_and_sync_without_unsafe_promises() {
-        assert_send_sync::<super::IpStackError>();
+        assert_send_sync::<super::StackError>();
     }
 }

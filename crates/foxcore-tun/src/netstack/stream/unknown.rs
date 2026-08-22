@@ -1,5 +1,5 @@
-use crate::ipstack::{
-    IpStackError, PacketSender, TTL,
+use crate::netstack::{
+    RawPacketSender, StackError, TTL,
     packet::{IpHeader, NetworkPacket, TransportHeader},
 };
 use etherparse::{IpNumber, Ipv4Header, Ipv6FlowLabel, Ipv6Header};
@@ -11,29 +11,29 @@ use std::net::IpAddr;
 /// (e.g., ICMP, IGMP, ESP, etc.). It provides methods to inspect the packet details
 /// and send responses.
 ///
-pub struct IpStackUnknownTransport {
+pub struct UnknownTransport {
     src_addr: IpAddr,
     dst_addr: IpAddr,
     payload: Vec<u8>,
     protocol: IpNumber,
     mtu: u16,
-    packet_sender: PacketSender,
+    packet_sender: RawPacketSender,
 }
 
-impl IpStackUnknownTransport {
+impl UnknownTransport {
     pub(crate) fn new(
         src_addr: IpAddr,
         dst_addr: IpAddr,
         payload: Vec<u8>,
         ip: &IpHeader,
         mtu: u16,
-        packet_sender: PacketSender,
+        packet_sender: RawPacketSender,
     ) -> Self {
         let protocol = match ip {
             IpHeader::Ipv4(ip) => ip.protocol,
             IpHeader::Ipv6(ip) => ip.next_header,
         };
-        IpStackUnknownTransport {
+        UnknownTransport {
             src_addr,
             dst_addr,
             payload,
@@ -69,40 +69,28 @@ impl IpStackUnknownTransport {
 
     /// Send a response packet.
     ///
-    /// This method sends one or more packets with the given payload, automatically
-    /// fragmenting the data if it exceeds the MTU.
+    /// Payloads above the MTU are refused; this stack does not synthesize IP
+    /// fragments.
     ///
     pub fn send(&self, mut payload: Vec<u8>) -> std::io::Result<()> {
-        loop {
-            let packet = self.create_rev_packet(&mut payload)?;
-            self.packet_sender
-                .send(packet)
-                .map_err(|e| std::io::Error::other(format!("send error: {e}")))?;
-            if payload.is_empty() {
-                return Ok(());
-            }
-        }
+        let packet = self.create_rev_packet(&mut payload)?;
+        self.packet_sender.send(packet)
     }
 
     /// Create a reverse packet for sending a response.
     ///
     /// This method creates a packet with swapped source and destination addresses,
-    /// suitable for sending responses to received packets. If the payload exceeds
-    /// the MTU, only a portion of the payload is consumed and included in the packet.
+    /// suitable for sending responses to received packets.
     ///
     pub fn create_rev_packet(&self, payload: &mut Vec<u8>) -> std::io::Result<NetworkPacket> {
         match (self.dst_addr, self.src_addr) {
             (std::net::IpAddr::V4(dst), std::net::IpAddr::V4(src)) => {
                 let mut ip_h = Ipv4Header::new(0, TTL, self.protocol, dst.octets(), src.octets())
-                    .map_err(IpStackError::from)?;
+                    .map_err(StackError::from)?;
                 let line_buffer = self.mtu.saturating_sub(ip_h.header_len() as u16);
 
-                let p = if payload.len() > line_buffer as usize {
-                    payload.drain(0..line_buffer as usize).collect::<Vec<u8>>()
-                } else {
-                    std::mem::take(payload)
-                };
-                ip_h.set_payload_len(p.len()).map_err(IpStackError::from)?;
+                let p = take_payload_within_mtu(payload, line_buffer)?;
+                ip_h.set_payload_len(p.len()).map_err(StackError::from)?;
                 Ok(NetworkPacket {
                     ip: IpHeader::Ipv4(ip_h),
                     transport: TransportHeader::Unknown,
@@ -114,26 +102,96 @@ impl IpStackUnknownTransport {
                     traffic_class: 0,
                     flow_label: Ipv6FlowLabel::ZERO,
                     payload_length: 0,
-                    next_header: IpNumber::UDP,
+                    next_header: self.protocol,
                     hop_limit: TTL,
                     source: dst.octets(),
                     destination: src.octets(),
                 };
                 let line_buffer = self.mtu.saturating_sub(ip_h.header_len() as u16);
-                let p = if payload.len() > line_buffer as usize {
-                    payload.drain(0..line_buffer as usize).collect::<Vec<u8>>()
-                } else {
-                    std::mem::take(payload)
-                };
-                ip_h.set_payload_length(p.len())
-                    .map_err(IpStackError::from)?;
+                let p = take_payload_within_mtu(payload, line_buffer)?;
+                ip_h.set_payload_length(p.len()).map_err(StackError::from)?;
                 Ok(NetworkPacket {
                     ip: IpHeader::Ipv6(ip_h),
                     transport: TransportHeader::Unknown,
                     payload: Some(p),
                 })
             }
-            _ => Err(IpStackError::InvalidPacket.into()),
+            _ => Err(StackError::InvalidPacket.into()),
         }
+    }
+}
+
+fn take_payload_within_mtu(payload: &mut Vec<u8>, limit: u16) -> std::io::Result<Vec<u8>> {
+    if payload.len() > usize::from(limit) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "response of {} bytes exceeds the {limit}-byte MTU payload",
+                payload.len()
+            ),
+        ));
+    }
+    Ok(std::mem::take(payload))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    fn transport(
+        src_addr: IpAddr,
+        dst_addr: IpAddr,
+        protocol: IpNumber,
+        mtu: u16,
+    ) -> (UnknownTransport, mpsc::Receiver<NetworkPacket>) {
+        let (sender, receiver) = mpsc::channel(1);
+        (
+            UnknownTransport {
+                src_addr,
+                dst_addr,
+                payload: Vec::new(),
+                protocol,
+                mtu,
+                packet_sender: RawPacketSender::new(sender),
+            },
+            receiver,
+        )
+    }
+
+    #[test]
+    fn ipv6_response_preserves_the_transport_protocol() {
+        let (transport, _receiver) = transport(
+            "2001:db8::1".parse().unwrap(),
+            "2001:db8::2".parse().unwrap(),
+            IpNumber::IPV6_ICMP,
+            1280,
+        );
+        let mut payload = vec![1, 2, 3];
+
+        let packet = transport.create_rev_packet(&mut payload).unwrap();
+        let IpHeader::Ipv6(header) = packet.ip else {
+            panic!("expected IPv6 response");
+        };
+        assert_eq!(header.next_header, IpNumber::IPV6_ICMP);
+    }
+
+    #[test]
+    fn oversized_raw_response_is_refused_without_partial_packets() {
+        let (transport, mut receiver) = transport(
+            "10.0.0.1".parse().unwrap(),
+            "10.0.0.2".parse().unwrap(),
+            IpNumber::ICMP,
+            1280,
+        );
+
+        assert_eq!(
+            transport.send(vec![0; 1261]).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert!(matches!(
+            receiver.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
     }
 }

@@ -112,6 +112,15 @@ name = "aws-lc-sys"
 allow = ["ISC", "OpenSSL", "Apache-2.0"]
 
 [[licenses.exceptions]]
+# Same reviewed, crate-scoped Zero-Clause BSD decision as deny.toml.
+name = "smoltcp"
+allow = ["0BSD"]
+
+[[licenses.exceptions]]
+name = "managed"
+allow = ["0BSD"]
+
+[[licenses.exceptions]]
 # notify 8.2.0. Not an incidental entry in the graph: tor-config depends on it
 # unconditionally (`[dependencies.notify]`, not optional, no feature), for
 # src/file_watcher.rs — so every Tor build links CC0 code. CC0-1.0 is a

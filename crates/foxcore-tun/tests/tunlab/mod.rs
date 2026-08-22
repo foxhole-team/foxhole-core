@@ -213,8 +213,8 @@ pub fn datagram_from(
 /// A TCP segment the core sent to our client port.
 ///
 /// The sequence number matters: the stack picks a random ISN, and an ACK that
-/// does not name it leaves the session short of `Established` — which is the one
-/// state `ipstack`'s `poll_shutdown` will send a FIN from. A test that
+/// does not name it leaves the session short of `Established` — the state from
+/// which an orderly shutdown can send a FIN. A test that
 /// hard-codes the acknowledgement passes or fails on the stack's choice of
 /// starting number rather than on the behaviour under test.
 ///
@@ -268,10 +268,10 @@ pub fn stack_over_socketpair(
     read_buffer_size: Option<usize>,
 ) -> (
     tokio::net::UnixDatagram,
-    foxcore_tun::ipstack::IpStack,
+    foxcore_tun::netstack::FlowStack,
     foxcore_tun::TunFdOwner,
 ) {
-    stack_over_socketpair_holding(mtu, read_buffer_size, None)
+    stack_over_socketpair_holding(mtu, read_buffer_size, None, None)
 }
 
 /// The same stack with its session table capped at a number the test can
@@ -286,22 +286,35 @@ pub fn stack_over_socketpair_limited(
     max_sessions: usize,
 ) -> (
     tokio::net::UnixDatagram,
-    foxcore_tun::ipstack::IpStack,
+    foxcore_tun::netstack::FlowStack,
     foxcore_tun::TunFdOwner,
 ) {
-    stack_over_socketpair_holding(mtu, None, Some(max_sessions))
+    stack_over_socketpair_holding(mtu, None, Some(max_sessions), None)
+}
+
+pub fn stack_over_socketpair_limited_with_tcp(
+    mtu: u16,
+    max_sessions: usize,
+    tcp_config: foxcore_tun::netstack::TcpConfig,
+) -> (
+    tokio::net::UnixDatagram,
+    foxcore_tun::netstack::FlowStack,
+    foxcore_tun::TunFdOwner,
+) {
+    stack_over_socketpair_holding(mtu, None, Some(max_sessions), Some(tcp_config))
 }
 
 fn stack_over_socketpair_holding(
     mtu: u16,
     read_buffer_size: Option<usize>,
     max_sessions: Option<usize>,
+    tcp_config: Option<foxcore_tun::netstack::TcpConfig>,
 ) -> (
     tokio::net::UnixDatagram,
-    foxcore_tun::ipstack::IpStack,
+    foxcore_tun::netstack::FlowStack,
     foxcore_tun::TunFdOwner,
 ) {
-    use foxcore_tun::ipstack::{IpStack, IpStackConfig, TcpConfig};
+    use foxcore_tun::netstack::{FlowStack, StackConfig};
 
     let (app, device) = UnixDatagram::pair().expect("socketpair");
     app.set_nonblocking(true).expect("nonblocking");
@@ -312,18 +325,21 @@ fn stack_over_socketpair_holding(
     let (device, tun_fd_owner) =
         TunDevice::from_owned_fd(OwnedFd::from(device)).expect("wrap the device side");
 
-    let mut config = IpStackConfig::default();
+    let mut config = StackConfig::default();
     config.mtu(mtu).expect("mtu");
     config.packet_information(false);
+    let has_tcp_config = tcp_config.is_some() || read_buffer_size.is_some();
+    let mut tcp = tcp_config.unwrap_or_default();
     if let Some(read_buffer_size) = read_buffer_size {
-        let mut tcp = TcpConfig::default();
         tcp.read_buffer_size = read_buffer_size;
+    }
+    if has_tcp_config {
         config.with_tcp_config(tcp);
     }
     if let Some(max_sessions) = max_sessions {
         config.max_sessions(max_sessions);
     }
-    (app, IpStack::new(config, device), tun_fd_owner)
+    (app, FlowStack::new(config, device), tun_fd_owner)
 }
 
 pub fn engine(metrics: Arc<FlowMetrics>, runtime: RuntimeConfig) -> FlowEngine {
@@ -465,10 +481,8 @@ pub struct Lab {
 }
 
 impl Lab {
-    /// Multi-thread on purpose: `ipstack`'s `Drop` blocks on its session task
-    /// through `block_in_place`, which is not available on a current-thread
-    /// runtime — the same property that makes abandoning a stream more expensive
-    /// than closing it.
+    /// Multi-thread on purpose: the production data plane runs its stack actor,
+    /// packet writer and relays independently, including under backpressure.
     pub fn start(metrics: Arc<FlowMetrics>, runtime: RuntimeConfig) -> Self {
         Self::start_engine(engine(metrics, runtime))
     }
@@ -594,10 +608,9 @@ impl Lab {
     ///
     /// The lab injects packets and answers nothing on its own, which is right
     /// for every question about a flow the core ends. It is wrong for a question
-    /// about a **half-closed** one: a FIN nobody acknowledges is retransmitted
-    /// and then abandoned by `ipstack`, so the session reaches `Closed` in about
-    /// a second and the relay ends on the stack's own timer rather than on the
-    /// behaviour under test. A real application's stack acknowledges the FIN
+    /// about a **half-closed** one: a FIN nobody acknowledges measures the
+    /// stack's retransmission path rather than the relay behaviour under test.
+    /// A real application's stack acknowledges the FIN
     /// immediately and only *then* decides whether to close — a browser holding
     /// the socket in its connection pool never does.
     ///

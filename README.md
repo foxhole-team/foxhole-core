@@ -60,10 +60,10 @@ TUN → flow engine → routing policy → outbound
 > ClientHello — nine profiles, seven transcribed from uTLS and two from
 > first-party captures, matching real Chromium on
 > the human-readable part of JA4.
-> rustls implements none of the RSA and CBC suites Chrome
-> carries and exposes no API for GREASE or extension order. Under active
-> development and experiment; a different TLS stack (BoringSSL) is a candidate
-> for closing it.
+> rustls exposes no API for GREASE or extension order, so REALITY keeps its
+> compiled Fox-owned ClientHello generator. Direct BoringSSL is deliberately not
+> another backend: it would add an Android C++/FFI path without replacing
+> REALITY, Quinn, or the non-Chromium profiles.
 
 ### Documentation
 
@@ -82,7 +82,7 @@ TUN → flow engine → routing policy → outbound
 
 | Layer | Implementation |
 | --- | --- |
-| **TUN** | `ipstack`, TCP/UDP flow engine, ICMPv4 echo, bounded flow and UDP packet queues |
+| **TUN** | exact-pinned smoltcp TCP actor, Fox-owned UDP demux and ICMPv4 echo, bounded flow/packet memory |
 | **Routing** | compiled indexes, O(1) package policy, Direct/VPN/Tor/Block, I2P gate |
 | **DNS** | UDP/TCP, DoT, DoH, cache, stale cache, fake-IP |
 | **Android protected dialer** | Android callback `protect(fd)` → bind to the selected Android `Network` → connect/send |
@@ -95,7 +95,7 @@ TUN → flow engine → routing policy → outbound
 | **Proxy server** | SOCKS5 / HTTP CONNECT, mandatory authentication, network binding, JNI entry points |
 | **Android / Native ABI** | versioned C/JNI ABI, capabilities JSON, safe handles |
 
-Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for. Each UDP flow retains at most 32 packets while its outbound is busy, and all UDP flows share a 256-packet queue back to the TUN; overflow is dropped and counted.
+Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for. TCP admission also shares a 64 MiB buffer budget, and a handshake that never establishes releases its reservation after 30 seconds. Each UDP flow retains at most 32 packets while its outbound is busy; UDP and raw responses use bounded 256-packet queues back to the TUN, and UDP overflow is dropped and counted.
 
 ---
 

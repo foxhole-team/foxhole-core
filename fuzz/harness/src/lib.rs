@@ -1,4 +1,4 @@
-//! Bodies for the eight fuzz targets in `../fuzz_targets`.
+//! Bodies for the fuzz targets in `../fuzz_targets`.
 //!
 //! They live in a plain library, not inside `fuzz_target!`, for one reason:
 //! `cargo fuzz` needs a nightly toolchain and a linked libFuzzer runtime, and
@@ -13,7 +13,7 @@
 //! it, so a violation surfaces as a crash the fuzzer reports rather than as a
 //! wrong answer that flows on into the data plane.
 //!
-//! Seven of the eight are sans-io and keep nothing between iterations, so what
+//! All but `shadowtls_server_stream` are sans-io and keep nothing between iterations, so what
 //! they reach is "one message, parsed once". `shadowtls_server_stream` is the
 //! exception and exists because of it: it feeds one decoder a *sequence* of
 //! segments and looks at the state between them, which is the only way the
@@ -45,7 +45,17 @@ fn poll_once<F: Future>(future: F) -> Option<F::Output> {
 }
 
 // ---------------------------------------------------------------------------
-// 1. foxcore-tun: FlowKey::from_packet
+// 1. foxcore-tun: bounded netstack packet adapter
+// ---------------------------------------------------------------------------
+
+/// Every packet handed to the userspace stack crosses this parser before its
+/// transport is selected or any per-flow state is allocated.
+pub fn netstack_packet(packet: &[u8]) {
+    let _ = foxcore_tun::netstack::fuzz_parse_packet(packet);
+}
+
+// ---------------------------------------------------------------------------
+// 2. foxcore-tun: FlowKey::from_packet
 // ---------------------------------------------------------------------------
 
 /// Every packet read off the tun goes through this before anything else does.
@@ -136,7 +146,7 @@ pub fn flow_key_from_packet(packet: &[u8]) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. foxcore-dns: the message parser
+// 3. foxcore-dns: the message parser
 // ---------------------------------------------------------------------------
 
 /// Capacity small enough that eviction runs inside a fuzz iteration.

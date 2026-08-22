@@ -3,7 +3,7 @@ use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use crate::ipstack::{IpStack, IpStackStream, IpStackTcpStream};
+use crate::netstack::{FlowStack, StackFlow, TcpFlow};
 use foxcore_api::{BlockReason, CoreEvent, FlowContext, IpTransport, RouteAction};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::Semaphore;
@@ -229,7 +229,7 @@ impl FlowEngine {
         result
     }
 
-    async fn accept_loop(&self, mut stack: IpStack, cancel: CancellationToken) -> io::Result<()> {
+    async fn accept_loop(&self, mut stack: FlowStack, cancel: CancellationToken) -> io::Result<()> {
         self.metrics.set_connected(true);
         crate::enginephase::mark(crate::enginephase::PHASE_RUNNING);
         let result = loop {
@@ -240,13 +240,13 @@ impl FlowEngine {
                 accepted = stack.accept() => {
                     match accepted {
                         Ok(stream) => self.dispatch(stream, cancel.clone()),
-                        Err(error) => break Err(io::Error::other(error.to_string())),
+                        Err(error) => break Err(error.into()),
                     }
                 }
             }
         };
         crate::enginephase::mark(crate::enginephase::PHASE_LOOP_EXITED);
-        stack.shutdown();
+        stack.shutdown().await;
         crate::enginephase::mark(crate::enginephase::PHASE_STACK_SHUTDOWN);
         self.metrics.set_connected(false);
         crate::enginephase::mark(crate::enginephase::PHASE_ENGINE_RETURNING);
@@ -371,11 +371,14 @@ impl FlowEngine {
         }
     }
 
-    fn dispatch(&self, stream: IpStackStream, cancel: CancellationToken) {
+    fn dispatch(&self, stream: StackFlow, cancel: CancellationToken) {
         match stream {
-            IpStackStream::Tcp(stream) => self.dispatch_tcp(stream, cancel),
-            IpStackStream::Udp(stream) => self.dispatch_udp(stream, cancel),
-            IpStackStream::UnknownTransport(stream) => {
+            StackFlow::Tcp(stream) => self.dispatch_tcp(stream, cancel),
+            StackFlow::TcpRefused { local, peer } => {
+                self.refuse_for_flow_limit(IpTransport::Tcp, local, peer);
+            }
+            StackFlow::Udp(stream) => self.dispatch_udp(stream, cancel),
+            StackFlow::UnknownTransport(stream) => {
                 // The local ICMP responder answers without going through `decide`,
                 // so the global kill switch has to be checked here as well.
                 if self.policy.current.load().routes.kill_switch() {
@@ -384,20 +387,16 @@ impl FlowEngine {
                     answer_icmp(stream);
                 }
             }
-            IpStackStream::UnknownNetwork(_) => self.metrics.flow_error(),
+            StackFlow::UnknownNetwork(_) => self.metrics.flow_error(),
         }
     }
 
     /// End a session towards the application instead of dropping it.
     ///
-    /// `ipstack 1.0.0` sends nothing when a stream is dropped — `impl Drop for
-    /// IpStackTcpStream` tears down the session task and emits neither FIN nor
-    /// RST. The userspace stack has already answered the SYN by the time the
-    /// core decides it cannot carry the flow, so an abandoned session leaves the
-    /// application holding a connection that is established and will never
-    /// answer. Measured through the tunnel: `curl` to a closed port completed
-    /// its connect in 0.6 ms and then sat until its own twelve-second timeout —
-    /// "the app hangs" where the truth was "there is nowhere to send this".
+    /// The userspace stack has already answered the SYN by the time the core
+    /// decides it cannot carry the flow, so the application must receive an
+    /// explicit transport end. Measured through the tunnel, silently abandoning
+    /// such a session made `curl` wait for its own twelve-second timeout.
     ///
     /// Every path that gives up on a flow after the stack accepted it goes
     /// through here: unattributable, refused by policy, and undiallable. The
@@ -407,7 +406,7 @@ impl FlowEngine {
     /// Bounded, because a close is a handshake and the peer that has to answer
     /// it is the application. A client that never ACKs the FIN must not hold
     /// this task — and the flow slot under it — open.
-    async fn close_towards_app(stream: &mut IpStackTcpStream) {
+    async fn close_towards_app(stream: &mut TcpFlow) {
         let _ = tokio::time::timeout(CLIENT_CLOSE_TIMEOUT, stream.shutdown()).await;
     }
 
@@ -417,20 +416,16 @@ impl FlowEngine {
     /// Used where the core is reclaiming a session it has already half-closed —
     /// the remote sent FIN, `copy_bidirectional` passed that on as a FIN to the
     /// application, and the application has neither closed nor written since.
-    /// `shutdown` on such a stream cannot complete, because `ipstack`'s
-    /// `poll_shutdown` stays `Pending` until the session reaches `Closed` and
-    /// only the application's own FIN takes it there. Waiting the bounded two
-    /// seconds and then *dropping* would leave that application writing into a
-    /// hole: `impl Drop for IpStackTcpStream` sends neither FIN nor RST, which
-    /// is the silence `cba1e8a` spent four fixes removing from the other
-    /// abandonment paths.
+    /// `shutdown` on such a stream stays pending until the application's own FIN
+    /// completes the state machine. Waiting is bounded, then an explicit reset
+    /// makes the outcome immediate and independent of drop timing.
     ///
     /// So the graceful attempt is made first — an application that is simply
     /// slow gets the orderly end it is owed — and a reset follows only when it
     /// was not taken. Nothing of a live direction is lost by the reset: the
     /// window that got us here is thirty seconds in which this flow moved not
     /// one byte in either direction.
-    async fn close_or_reset_towards_app(stream: &mut IpStackTcpStream) {
+    async fn close_or_reset_towards_app(stream: &mut TcpFlow) {
         if tokio::time::timeout(CLIENT_CLOSE_TIMEOUT, stream.shutdown())
             .await
             .is_err()
@@ -439,19 +434,8 @@ impl FlowEngine {
         }
     }
 
-    fn dispatch_tcp(&self, mut stream: IpStackTcpStream, cancel: CancellationToken) {
+    fn dispatch_tcp(&self, mut stream: TcpFlow, cancel: CancellationToken) {
         let Ok(permit) = self.tcp_slots.clone().try_acquire_owned() else {
-            // The fifth abandonment path, and the last one. `cba1e8a` found
-            // four ways a flow could be given up on after the stack had already
-            // answered its SYN, and closed all four with `close_towards_app`.
-            // This one was not among them because it is not a decision *about*
-            // the flow — the flow is never looked at — so it dropped the stream
-            // here, and `impl Drop for IpStackTcpStream` sends neither FIN nor
-            // RST. What the application got was `connect()` succeeding in
-            // microseconds followed by silence until its own timeout, which is
-            // the exact symptom that made a working fail-closed core read as a
-            // broken tunnel every time it was measured.
-            //
             // Refused before the stack accepts wherever that is possible: the
             // stack's session table is capped at `max_tcp_flows +
             // max_udp_flows` (see `build_stack`), so a device that keeps
@@ -471,7 +455,7 @@ impl FlowEngine {
         });
     }
 
-    async fn handle_tcp(&self, mut stream: IpStackTcpStream, cancel: CancellationToken) {
+    async fn handle_tcp(&self, mut stream: TcpFlow, cancel: CancellationToken) {
         let source = stream.local_addr();
         let destination = stream.peer_addr();
         let policy = self.policy.current.load();
@@ -655,12 +639,6 @@ impl FlowEngine {
                     // above, and the kill switch makes those branches common.
                     result = relay => {
                         if let Err(error) = result {
-                            // Whatever ended it, the session towards the app is
-                            // still open and `ipstack` will not close it on
-                            // drop. This is the fourth of the four abandonment
-                            // paths `cba1e8a` found, and the only one that was
-                            // not reachable from the test that proved the other
-                            // three.
                             failed = true;
                             // Counted apart from `flow_errors` and reported
                             // with its own reason: this is the core refusing,

@@ -17,6 +17,7 @@ use foxcore_fuzz_harness::seeds;
 /// targets exist.
 fn run(target: &str, input: &[u8]) {
     match target {
+        "netstack_packet" => foxcore_fuzz_harness::netstack_packet(input),
         "flow_key_from_packet" => foxcore_fuzz_harness::flow_key_from_packet(input),
         "dns_message" => foxcore_fuzz_harness::dns_message(input),
         "wireguard_message" => foxcore_fuzz_harness::wireguard_message(input),

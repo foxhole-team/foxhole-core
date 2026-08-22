@@ -2,21 +2,17 @@
 //!
 //! # Why this did not exist, and why it has to
 //!
-//! `foxcore-tun` has 61 `log::` call sites, one of which is the documented
-//! answer to a whole class of silent failures: a persistent tun read error used
-//! to stop packets arriving forever while every counter the app can see still
-//! read healthy, and the fix was to count it and say so. It was never said. The
-//! `log` facade discards every record when no logger is installed, and none
-//! ever was — so the core shipped 61 diagnostics that could not be read, on a
-//! device, by anyone, including their author.
+//! A persistent TUN read error can stop packets while every counter the app can
+//! see still reads healthy. The `log` facade discards that diagnostic when no
+//! logger is installed, and none existed before this Android bridge.
 //!
 //! # Why only warn and above
 //!
-//! Because of what the other records contain. Forty-nine of the sixty-one are
-//! `debug` or `trace`, and they interpolate `NetworkTuple` — the source and
-//! destination address and port of the user's traffic — once per packet or per
-//! session. Installing a logger without a ceiling would turn a privacy VPN into
-//! something that writes its user's connection list to a system log.
+//! This is a process-global logger, so a future dependency could otherwise make
+//! verbose records visible without an Android-side code change. The current
+//! warn/error set contains only TUN error counts and lengths, a TUIC timing
+//! clamp, and a fingerprint-document refusal; none carries a traffic tuple,
+//! hostname or secret.
 //!
 //! The ceiling is enforced twice, deliberately. `log`'s `release_max_level_warn`
 //! feature compiles `debug` and `trace` out of the release artifact entirely, so
@@ -24,9 +20,8 @@
 //! filter, which covers debug builds and anything the feature resolution might
 //! change underneath us. One of those alone is a promise; both is a property.
 //!
-//! Records at `warn` and above no longer carry addresses either — see
-//! `ipstack::redacted`, which replaced the tuple with a per-process salted hash
-//! so two lines about one flow still match each other and nothing else.
+//! Any new warn/error record is therefore part of the release privacy surface
+//! and must preserve that property.
 
 use std::ffi::CString;
 

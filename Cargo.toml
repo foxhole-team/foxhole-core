@@ -80,6 +80,15 @@ sha2 = "0.10.9"
 sha1 = "0.10.7"
 sha3 = "0.10.8"
 shadowsocks = { version = "1.24.0", default-features = false, features = ["aead-cipher", "aead-cipher-2022"] }
+smoltcp = { version = "=0.14.0", default-features = false, features = [
+    "std",
+    "medium-ip",
+    "proto-ipv4",
+    "proto-ipv6",
+    "socket-tcp",
+    "socket-tcp-reno",
+    "async",
+] }
 subtle = "2.6.1"
 thiserror = "2.0.18"
 tokio = { version = "1.52.3", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "sync"] }

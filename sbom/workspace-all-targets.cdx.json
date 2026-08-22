@@ -992,6 +992,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/bitflags@1.3.2",
+      "name": "bitflags",
+      "version": "1.3.2",
+      "purl": "pkg:cargo/bitflags@1.3.2",
+      "scope": "required",
+      "description": "A macro to generate structures which behave like bitflags.\n",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/bitflags/bitflags"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/bitflags@2.13.1",
       "name": "bitflags",
       "version": "2.13.1",
@@ -2615,6 +2639,78 @@
         {
           "type": "vcs",
           "url": "https://github.com/ia0/data-encoding"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/defmt-macros@1.1.1",
+      "name": "defmt-macros",
+      "version": "1.1.1",
+      "purl": "pkg:cargo/defmt-macros@1.1.1",
+      "scope": "required",
+      "description": "defmt macros",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/knurling-rs/defmt"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/defmt-parser@1.0.0",
+      "name": "defmt-parser",
+      "version": "1.0.0",
+      "purl": "pkg:cargo/defmt-parser@1.0.0",
+      "scope": "required",
+      "description": "Parsing library for defmt format strings",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/knurling-rs/defmt"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/defmt@1.1.1",
+      "name": "defmt",
+      "version": "1.1.1",
+      "purl": "pkg:cargo/defmt@1.1.1",
+      "scope": "required",
+      "description": "A highly efficient logging framework that targets resource-constrained devices, like microcontrollers",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/knurling-rs/defmt"
         },
         {
           "type": "distribution",
@@ -4420,6 +4516,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/hash32@0.3.1",
+      "name": "hash32",
+      "version": "0.3.1",
+      "purl": "pkg:cargo/hash32@0.3.1",
+      "scope": "required",
+      "description": "32-bit hashing algorithms",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/japaric/hash32"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/hashbrown@0.12.3",
       "name": "hashbrown",
       "version": "0.12.3",
@@ -4531,6 +4651,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/djc/hashlink"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/heapless@0.9.3",
+      "name": "heapless",
+      "version": "0.9.3",
+      "purl": "pkg:cargo/heapless@0.9.3",
+      "scope": "required",
+      "description": "`static` friendly data structures that don't require dynamic memory allocation",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rust-embedded/heapless"
         },
         {
           "type": "distribution",
@@ -5947,6 +6091,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/maidsafe/lru_time_cache"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/managed@0.8.0",
+      "name": "managed",
+      "version": "0.8.0",
+      "purl": "pkg:cargo/managed@0.8.0",
+      "scope": "required",
+      "description": "An interface for logically owning objects, whether or not heap allocation is available.",
+      "licenses": [
+        {
+          "expression": "0BSD"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/m-labs/rust-managed.git"
         },
         {
           "type": "distribution",
@@ -9639,6 +9807,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/servo/rust-smallvec"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/smoltcp@0.14.0",
+      "name": "smoltcp",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/smoltcp@0.14.0",
+      "scope": "required",
+      "description": "A TCP/IP stack designed for bare-metal, real-time systems without a heap.",
+      "licenses": [
+        {
+          "expression": "0BSD"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/smoltcp-rs/smoltcp.git"
         },
         {
           "type": "distribution",
@@ -14715,6 +14907,10 @@
       ]
     },
     {
+      "ref": "pkg:cargo/bitflags@1.3.2",
+      "dependsOn": []
+    },
+    {
       "ref": "pkg:cargo/bitflags@2.13.1",
       "dependsOn": []
     },
@@ -15167,6 +15363,28 @@
     {
       "ref": "pkg:cargo/data-encoding@2.11.0",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/defmt-macros@1.1.1",
+      "dependsOn": [
+        "pkg:cargo/defmt-parser@1.0.0",
+        "pkg:cargo/proc-macro2@1.0.106",
+        "pkg:cargo/quote@1.0.46",
+        "pkg:cargo/syn@2.0.118"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/defmt-parser@1.0.0",
+      "dependsOn": [
+        "pkg:cargo/thiserror@2.0.18"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/defmt@1.1.1",
+      "dependsOn": [
+        "pkg:cargo/bitflags@1.3.2",
+        "pkg:cargo/defmt-macros@1.1.1"
+      ]
     },
     {
       "ref": "pkg:cargo/der-parser@10.0.0",
@@ -15754,6 +15972,7 @@
         "pkg:cargo/foxcore-trafficmap@0.0.2",
         "pkg:cargo/foxcore-transport@0.0.2",
         "pkg:cargo/fst@0.4.7",
+        "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/libc@0.2.186",
@@ -15765,6 +15984,7 @@
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/sha2@0.10.9",
+        "pkg:cargo/smoltcp@0.14.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
         "pkg:cargo/tokio@1.52.3",
@@ -15979,6 +16199,12 @@
       ]
     },
     {
+      "ref": "pkg:cargo/hash32@0.3.1",
+      "dependsOn": [
+        "pkg:cargo/byteorder@1.5.0"
+      ]
+    },
+    {
       "ref": "pkg:cargo/hashbrown@0.12.3",
       "dependsOn": []
     },
@@ -16002,6 +16228,13 @@
       "ref": "pkg:cargo/hashlink@0.11.1",
       "dependsOn": [
         "pkg:cargo/hashbrown@0.16.1"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/heapless@0.9.3",
+      "dependsOn": [
+        "pkg:cargo/hash32@0.3.1",
+        "pkg:cargo/stable_deref_trait@1.2.1"
       ]
     },
     {
@@ -16385,6 +16618,10 @@
     },
     {
       "ref": "pkg:cargo/lru_time_cache@0.11.11",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/managed@0.8.0",
       "dependsOn": []
     },
     {
@@ -17769,6 +18006,17 @@
     {
       "ref": "pkg:cargo/smallvec@1.15.2",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/smoltcp@0.14.0",
+      "dependsOn": [
+        "pkg:cargo/bitflags@1.3.2",
+        "pkg:cargo/byteorder@1.5.0",
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/defmt@1.1.1",
+        "pkg:cargo/heapless@0.9.3",
+        "pkg:cargo/managed@0.8.0"
+      ]
     },
     {
       "ref": "pkg:cargo/socket2@0.6.4",

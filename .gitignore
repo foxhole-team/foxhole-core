@@ -6,6 +6,12 @@
 # reviewed named seeds stay public; crash inputs are uploaded by CI on failure
 # and return through review before they become regression fixtures.
 fuzz/corpus/*/*
+!fuzz/corpus/netstack_packet/ipv4_tcp_syn
+!fuzz/corpus/netstack_packet/ipv4_udp
+!fuzz/corpus/netstack_packet/ipv4_options
+!fuzz/corpus/netstack_packet/ipv4_icmp
+!fuzz/corpus/netstack_packet/ipv6_tcp_syn
+!fuzz/corpus/netstack_packet/ipv6_extensions
 !fuzz/corpus/flow_key_from_packet/ipv4_udp
 !fuzz/corpus/flow_key_from_packet/ipv4_tcp
 !fuzz/corpus/flow_key_from_packet/ipv4_icmp
