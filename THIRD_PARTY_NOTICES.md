@@ -79,11 +79,15 @@ application code is embedded.
 
 - Project: `cfal/shoes`
 - Reference commit: `386b11532424b8665ee3e46340c6236fb3c47595`
+- Follow-up hardening references:
+  `caf9a29cec3e9cc72bf19bbfb0986e17f8221ab2` (bounded handshake plaintext) and
+  `47a222e90c15fb1bb4a75923e63b37c17b04302d` (combined outgoing buffer budget)
 - Copyright (c) 2021-2023 Alex Lau <github@alau.ca>
 - Adapted areas: modern VMess AEAD KDF/framing and compatibility test vectors;
   client-only REALITY TLS 1.3 state machine and crypto test vectors. FoxHole Core
   removes upstream server/TUN/routing code, secret-bearing debug traces and the
-  crawler fallback; it additionally verifies the TLS server Finished message.
+  crawler fallback; it additionally verifies the TLS server Finished message
+  and carries the two bounded-buffer hardening invariants listed above.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

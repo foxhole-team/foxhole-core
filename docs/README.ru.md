@@ -80,7 +80,7 @@ TUN → flow engine → routing policy → outbound
 
 | Слой | Реализация |
 | --- | --- |
-| **TUN** | `ipstack`, TCP/UDP flow engine, ICMPv4 echo, ограниченные таблицы потоков |
+| **TUN** | `ipstack`, TCP/UDP flow engine, ICMPv4 echo, ограниченные таблицы потоков и очереди UDP-пакетов |
 | **Маршрутизация** | скомпилированные индексы, O(1) package policy, Direct/VPN/Tor/Block, I2P gate |
 | **DNS** | UDP/TCP, DoT, DoH, cache, stale cache, fake-IP |
 | **Android protected dialer** | Android-callback `protect(fd)` → привязка к выбранному Android `Network` → connect/send |
@@ -94,7 +94,10 @@ TUN → flow engine → routing policy → outbound
 | **Android / Native ABI** | версионированный C/JNI ABI, capabilities JSON, безопасные handles |
 
 Таблицы потоков ограничены количеством по умолчанию 1024 TCP и
-512 UDP. Поток сверх лимита отклоняется и учитывается.
+512 UDP. Поток сверх лимита отклоняется и учитывается. Каждый UDP-поток
+удерживает не больше 32 пакетов, пока занят его outbound, а все UDP-потоки
+делят очередь из 256 пакетов обратно к TUN; переполнение отбрасывается и
+учитывается счётчиком.
 
 ---
 

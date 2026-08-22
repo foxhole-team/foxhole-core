@@ -1,5 +1,6 @@
 use crate::ipstack::{
-    IpStackError, PacketSender, SessionPacketSender, TTL, UDP_SESSION_QUEUE_DEPTH,
+    IpStackError, SessionPacketDelivery, SessionPacketSender, TTL, UDP_SESSION_QUEUE_DEPTH,
+    UdpPacketSender,
     packet::{IpHeader, NetworkPacket, TransportHeader},
 };
 use etherparse::{IpNumber, Ipv4Header, Ipv6FlowLabel, Ipv6Header, UdpHeader};
@@ -29,7 +30,7 @@ pub struct IpStackUdpStream {
     stream_sender: mpsc::Sender<NetworkPacket>,
     stream_receiver: mpsc::Receiver<NetworkPacket>,
     queue_drops: Arc<AtomicU64>,
-    up_pkt_sender: PacketSender,
+    up_pkt_sender: UdpPacketSender,
     first_payload: Option<Vec<u8>>,
     timeout: Pin<Box<Sleep>>,
     timeout_interval: Duration,
@@ -48,7 +49,7 @@ impl IpStackUdpStream {
         src_addr: SocketAddr,
         dst_addr: SocketAddr,
         payload: Vec<u8>,
-        up_pkt_sender: PacketSender,
+        up_pkt_sender: UdpPacketSender,
         config: UdpStreamConfig,
         destroy_messenger: Option<::tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
@@ -227,10 +228,14 @@ impl AsyncWrite for IpStackUdpStream {
             )));
         }
         let packet = self.create_rev_packet(TTL, buf.to_vec())?;
-        self.up_pkt_sender
-            .send(packet)
-            .or(Err(std::io::ErrorKind::UnexpectedEof))?;
-        std::task::Poll::Ready(Ok(buf.len()))
+        match self.up_pkt_sender.send(packet) {
+            SessionPacketDelivery::Delivered | SessionPacketDelivery::Dropped => {
+                std::task::Poll::Ready(Ok(buf.len()))
+            }
+            SessionPacketDelivery::Closed => {
+                std::task::Poll::Ready(Err(std::io::ErrorKind::UnexpectedEof.into()))
+            }
+        }
     }
 
     fn poll_flush(
@@ -269,28 +274,28 @@ mod tests {
     use tokio::sync::mpsc;
 
     use super::{IpStackUdpStream, UdpStreamConfig};
-    use crate::ipstack::{SessionPacketDelivery, UDP_SESSION_QUEUE_DEPTH};
+    use crate::ipstack::{
+        SessionPacketDelivery, UDP_DEVICE_QUEUE_DEPTH, UDP_SESSION_QUEUE_DEPTH, UdpPacketSender,
+    };
 
     const MTU: u16 = 1400;
     /// 1400 minus a 20-byte IPv4 header and an 8-byte UDP header.
     const IPV4_LIMIT: usize = 1372;
 
-    fn stream() -> (
-        IpStackUdpStream,
-        mpsc::UnboundedReceiver<super::NetworkPacket>,
-    ) {
-        let (up_tx, up_rx) = mpsc::unbounded_channel();
+    fn stream() -> (IpStackUdpStream, mpsc::Receiver<super::NetworkPacket>) {
+        let (up_tx, up_rx) = mpsc::channel(UDP_DEVICE_QUEUE_DEPTH);
+        let drops = Arc::new(AtomicU64::new(0));
         let src: SocketAddr = "10.0.0.2:53000".parse().expect("source address");
         let dst: SocketAddr = "10.0.0.1:53".parse().expect("destination address");
         let stream = IpStackUdpStream::new(
             src,
             dst,
             Vec::new(),
-            up_tx,
+            UdpPacketSender::new(up_tx, drops.clone()),
             UdpStreamConfig {
                 mtu: MTU,
                 timeout_interval: Duration::from_secs(30),
-                queue_drops: Arc::new(AtomicU64::new(0)),
+                queue_drops: drops,
             },
             None,
         );
@@ -379,5 +384,43 @@ mod tests {
             );
         }
         assert_eq!(drops.load(Ordering::Relaxed), OVERFLOW);
+    }
+
+    /// Remote replies used to enter the stack's global unbounded packet queue.
+    /// A blocked TUN writer therefore let every active UDP flow grow the process
+    /// without a ceiling even though the opposite direction was already bounded.
+    #[tokio::test]
+    async fn a_stalled_tun_writer_has_one_global_bound_and_counts_the_drop() {
+        let (mut stream, rx) = stream();
+        let drops = stream.queue_drops.clone();
+
+        for value in 0..UDP_DEVICE_QUEUE_DEPTH {
+            stream
+                .write_all(&[u8::try_from(value).unwrap_or_default()])
+                .await
+                .expect("fill the device queue");
+        }
+        assert_eq!(rx.len(), UDP_DEVICE_QUEUE_DEPTH);
+
+        stream
+            .write_all(&[0xff])
+            .await
+            .expect("UDP loss is reported by metrics, not as a partial write");
+
+        assert_eq!(rx.len(), UDP_DEVICE_QUEUE_DEPTH);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn a_closed_tun_writer_is_an_error_not_a_silent_drop() {
+        let (mut stream, rx) = stream();
+        drop(rx);
+
+        let error = stream
+            .write_all(&[7])
+            .await
+            .expect_err("a closed stack packet path must stop the UDP relay");
+
+        assert_eq!(error.kind(), std::io::ErrorKind::UnexpectedEof);
     }
 }

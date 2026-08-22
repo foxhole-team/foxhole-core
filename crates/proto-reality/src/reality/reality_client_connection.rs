@@ -13,7 +13,7 @@ use super::common::{
     HANDSHAKE_TYPE_CERTIFICATE, HANDSHAKE_TYPE_CERTIFICATE_VERIFY,
     HANDSHAKE_TYPE_COMPRESSED_CERTIFICATE, HANDSHAKE_TYPE_ENCRYPTED_EXTENSIONS,
     HANDSHAKE_TYPE_FINISHED, HELLO_SESSION_ID_LEN, HELLO_SESSION_ID_OFFSET, MAX_TLS_CIPHERTEXT_LEN,
-    OUTGOING_BUFFER_LIMIT, PLAINTEXT_READ_BUF_CAPACITY, TLS_MAX_RECORD_SIZE,
+    MAX_TLS_PLAINTEXT_LEN, PLAINTEXT_READ_BUF_CAPACITY, TLS_MAX_RECORD_SIZE,
     TLS_RECORD_HEADER_SIZE,
 };
 use super::hello_profile::{
@@ -60,6 +60,20 @@ fn handshake_state_error(expected: &str) -> io::Error {
         io::ErrorKind::InvalidData,
         format!("REALITY connection is not in the state required to process {expected}"),
     )
+}
+
+// Matches the 64 KiB handshake cap in Xray's REALITY implementation.
+const MAX_HANDSHAKE_PLAINTEXT: usize = 4 * MAX_TLS_PLAINTEXT_LEN;
+
+fn append_handshake_plaintext(accumulated: &mut Vec<u8>, plaintext: &[u8]) -> io::Result<()> {
+    if accumulated.len().saturating_add(plaintext.len()) > MAX_HANDSHAKE_PLAINTEXT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "REALITY handshake exceeds maximum size",
+        ));
+    }
+    accumulated.extend_from_slice(plaintext);
+    Ok(())
 }
 
 /// Configuration for REALITY client connections
@@ -251,9 +265,9 @@ impl RealityClientConnection {
             cipher_suite: None,
             tls_read_buffer: vec![0_u8; TLS_MAX_RECORD_SIZE].into_boxed_slice(),
             ciphertext_read_buf: SlideBuffer::new(CIPHERTEXT_READ_BUF_CAPACITY),
-            ciphertext_write_buf: Vec::with_capacity(OUTGOING_BUFFER_LIMIT),
+            ciphertext_write_buf: Vec::new(),
             plaintext_read_buf: SlideBuffer::new(PLAINTEXT_READ_BUF_CAPACITY),
-            plaintext_write_buf: Vec::with_capacity(OUTGOING_BUFFER_LIMIT),
+            plaintext_write_buf: Vec::new(),
             received_close_notify: false,
             fatal_error: None,
         };
@@ -684,7 +698,7 @@ impl RealityClientConnection {
 
         handshake_seq += 1;
 
-        accumulated_plaintext.extend_from_slice(&plaintext);
+        append_handshake_plaintext(&mut accumulated_plaintext, &plaintext)?;
 
         // Continue from the first incomplete message so split TLS records are
         // parsed correctly instead of treating a fragment as a new message.
@@ -998,7 +1012,10 @@ impl RealityClientConnection {
 
     /// Get a writer for buffering plaintext to be encrypted
     pub fn writer(&mut self) -> RealityWriter<'_> {
-        RealityWriter::new(&mut self.plaintext_write_buf)
+        RealityWriter::new(
+            &mut self.plaintext_write_buf,
+            self.ciphertext_write_buf.len(),
+        )
     }
 
     /// Write buffered TLS messages to the provided writer
@@ -1046,6 +1063,23 @@ impl RealityClientConnection {
     /// Check if handshake is still in progress
     pub fn is_handshaking(&self) -> bool {
         !matches!(self.handshake_state, HandshakeState::Complete)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn complete_for_test(mut self) -> io::Result<Self> {
+        let cipher_suite = CipherSuite::AES_128_GCM_SHA256;
+        let key = vec![0_u8; cipher_suite.key_len()];
+        let iv = vec![0_u8; cipher_suite.nonce_len()];
+
+        self.handshake_state = HandshakeState::Complete;
+        self.app_read_key = Some(AeadKey::new(cipher_suite, &key)?);
+        self.app_read_iv = Some(iv.clone());
+        self.app_write_key = Some(AeadKey::new(cipher_suite, &key)?);
+        self.app_write_iv = Some(iv);
+        self.cipher_suite = Some(cipher_suite);
+        self.ciphertext_write_buf.clear();
+        self.plaintext_write_buf.clear();
+        Ok(self)
     }
 
     /// Check if the connection wants to read more TLS data
@@ -1218,6 +1252,40 @@ mod tests {
 
     fn fresh_connection() -> RealityClientConnection {
         RealityClientConnection::new(config()).unwrap()
+    }
+
+    #[test]
+    fn handshake_plaintext_accepts_the_exact_limit() {
+        let mut accumulated = vec![0x41; MAX_HANDSHAKE_PLAINTEXT - 1];
+
+        append_handshake_plaintext(&mut accumulated, &[0x42]).unwrap();
+
+        assert_eq!(accumulated.len(), MAX_HANDSHAKE_PLAINTEXT);
+        assert_eq!(accumulated[MAX_HANDSHAKE_PLAINTEXT - 1], 0x42);
+    }
+
+    #[test]
+    fn handshake_plaintext_rejects_one_byte_over_before_extending() {
+        let mut accumulated = vec![0x41; MAX_HANDSHAKE_PLAINTEXT];
+        let before = accumulated.clone();
+
+        let error = append_handshake_plaintext(&mut accumulated, &[0x42]).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(accumulated, before);
+    }
+
+    #[test]
+    fn connection_writer_accounts_for_its_pending_ciphertext() {
+        let mut connection = fresh_connection().complete_for_test().unwrap();
+        connection
+            .ciphertext_write_buf
+            .resize(crate::reality::common::OUTGOING_BUFFER_LIMIT - 3, 0x17);
+
+        let accepted = connection.writer().write(b"hello").unwrap();
+
+        assert_eq!(accepted, 3);
+        assert_eq!(connection.plaintext_write_buf, b"hel");
     }
 
     /// A state machine driven by a remote server must fail the connection, not

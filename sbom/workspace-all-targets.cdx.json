@@ -4372,10 +4372,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/h2@0.4.15",
+      "bom-ref": "pkg:cargo/h2@0.4.18",
       "name": "h2",
-      "version": "0.4.15",
-      "purl": "pkg:cargo/h2@0.4.15",
+      "version": "0.4.18",
+      "purl": "pkg:cargo/h2@0.4.18",
       "scope": "required",
       "description": "An HTTP/2 client and server",
       "licenses": [
@@ -15722,7 +15722,7 @@
         "pkg:cargo/foxcore-api@0.0.2",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/getrandom@0.3.4",
-        "pkg:cargo/h2@0.4.15",
+        "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/rcgen@0.14.8",
         "pkg:cargo/rustls-pki-types@1.15.0",
@@ -15754,7 +15754,7 @@
         "pkg:cargo/foxcore-trafficmap@0.0.2",
         "pkg:cargo/foxcore-transport@0.0.2",
         "pkg:cargo/fst@0.4.7",
-        "pkg:cargo/h2@0.4.15",
+        "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/log@0.4.33",
@@ -15955,7 +15955,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/h2@0.4.15",
+      "ref": "pkg:cargo/h2@0.4.18",
       "dependsOn": [
         "pkg:cargo/atomic-waker@1.1.2",
         "pkg:cargo/bytes@1.12.1",
@@ -16891,7 +16891,7 @@
         "pkg:cargo/foxcore-api@0.0.2",
         "pkg:cargo/foxcore-dialer@0.0.2",
         "pkg:cargo/foxcore-transport@0.0.2",
-        "pkg:cargo/h2@0.4.15",
+        "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/thiserror@2.0.18",

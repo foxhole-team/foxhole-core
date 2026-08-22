@@ -82,7 +82,7 @@ TUN → flow engine → routing policy → outbound
 
 | Layer | Implementation |
 | --- | --- |
-| **TUN** | `ipstack`, TCP/UDP flow engine, ICMPv4 echo, bounded flow tables |
+| **TUN** | `ipstack`, TCP/UDP flow engine, ICMPv4 echo, bounded flow and UDP packet queues |
 | **Routing** | compiled indexes, O(1) package policy, Direct/VPN/Tor/Block, I2P gate |
 | **DNS** | UDP/TCP, DoT, DoH, cache, stale cache, fake-IP |
 | **Android protected dialer** | Android callback `protect(fd)` → bind to the selected Android `Network` → connect/send |
@@ -95,7 +95,7 @@ TUN → flow engine → routing policy → outbound
 | **Proxy server** | SOCKS5 / HTTP CONNECT, mandatory authentication, network binding, JNI entry points |
 | **Android / Native ABI** | versioned C/JNI ABI, capabilities JSON, safe handles |
 
-Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for.
+Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for. Each UDP flow retains at most 32 packets while its outbound is busy, and all UDP flows share a 256-packet queue back to the TUN; overflow is dropped and counted.
 
 ---
 

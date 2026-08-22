@@ -25,8 +25,16 @@ flowchart TD
     RU --> LC
 ```
 
-`aws-lc-rs` is the single primitive provider. rustls was moved off `ring` explicitly **because ring
-has no ML-KEM** (`crates/foxcore-transport/src/tls.rs:454-466`).
+Fox-owned generic TLS explicitly builds rustls configurations with the `aws-lc-rs` provider because
+`ring` has no ML-KEM (`crates/foxcore-transport/src/tls.rs:454-502`). The dependency graph still
+contains `ring` through Arti, Shadowsocks compatibility and a negative ECH test; it is not the
+provider selected by FoxCore's TLS builder.
+
+Direct BoringSSL is deliberately not another backend. A rustls `CryptoProvider` controls suites,
+groups, signatures, randomness and key loading, but not ClientHello extension order or layout. A
+full BoringSSL `libssl` path would therefore be a separate unstable C++/FFI transport on Android; it
+would not replace the hand-written REALITY record layer, Quinn, or Firefox/Safari profile shapes.
+The BoringSSL-derived primitives needed here already arrive through `aws-lc-rs`.
 
 ---
 
@@ -146,6 +154,12 @@ sequenceDiagram
 (`reality_util.rs:34-54`). `auth_key`, `public_key`, `short_id` and `server_name` are zeroized on
 drop (`reality_client_connection.rs:138-169`).
 
+Untrusted handshake plaintext is accumulated only up to 64 KiB and the limit is checked before the
+buffer grows (`reality_client_connection.rs:65-78`, `:698`). After the handshake, pending encrypted
+records plus buffered application plaintext share one 64 KiB budget; a blocked network therefore
+backpressures the application rather than growing two independent queues
+(`reality_client_connection.rs:1012-1018`; `reality_reader_writer.rs:61-85`).
+
 `server_name` is the SNI written into the parroted hello and must be an ASCII DNS name — IP literals
 are rejected. There is **no client-side "dest" or fallback-target concept**; that is server-side
 REALITY. This client only writes the SNI and refuses anything that is not a REALITY-signed
@@ -254,4 +268,6 @@ The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 
 ## 2.7 Inconsistencies found
 
-No open inconsistencies remain after this pass.
+- The previous text called `aws-lc-rs` the only primitive provider, while the actual dependency
+  graph still contains `ring`. Fox-owned TLS selects aws-lc-rs; removing every transitive `ring`
+  consumer is a separate supply-chain task and is not a reason to add BoringSSL.

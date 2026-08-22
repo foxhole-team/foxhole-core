@@ -29,6 +29,12 @@ flowchart TD
 Layer order matters: the security layer sits **below** the stream carrier, so a WebSocket rides
 inside TLS, not the other way round (`crates/foxcore-transport/src/lib.rs:67-96`).
 
+The TUN boundary is bounded in both UDP directions. An established flow retains 32 packets from
+the TUN, while all flows share a 256-packet queue for replies back to it. Both drop newest on full
+and increment the same public loss counter (`foxcore-tun/src/ipstack/mod.rs:262-270`, `:339-347`,
+`:505-510`; `ipstack/stream/udp.rs:228-241`). TCP uses its advertised receive window instead of a
+lossy queue.
+
 ---
 
 ## 1.2 Config identifiers

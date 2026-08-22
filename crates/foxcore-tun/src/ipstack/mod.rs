@@ -71,11 +71,39 @@ use tokio::{
 ///
 /// TCP input is bounded by its advertised receive window, and dropping a
 /// segment here would turn that working backpressure into a retransmission
-/// stall. UDP has no window and deliberately does **not** use this alias; its
-/// bounded/drop-counted path is [`SessionPacketSender::Udp`].
+/// stall. UDP has no window and deliberately does **not** use this alias; both
+/// of its directions use [`UdpPacketSender`].
 pub(crate) type PacketSender = UnboundedSender<NetworkPacket>;
 pub(crate) type PacketReceiver = UnboundedReceiver<NetworkPacket>;
 pub(crate) type SessionCollection = std::collections::HashMap<NetworkTuple, SessionPacketSender>;
+
+/// A lossy, bounded packet path for UDP.
+///
+/// UDP cannot push back through a TUN device or ask the remote peer to retry.
+/// A full queue therefore drops the newest datagram and records that loss while
+/// keeping memory bounded.
+#[derive(Clone, Debug)]
+pub(crate) struct UdpPacketSender {
+    sender: mpsc::Sender<NetworkPacket>,
+    dropped: Arc<AtomicU64>,
+}
+
+impl UdpPacketSender {
+    pub(crate) fn new(sender: mpsc::Sender<NetworkPacket>, dropped: Arc<AtomicU64>) -> Self {
+        Self { sender, dropped }
+    }
+
+    pub(crate) fn send(&self, packet: NetworkPacket) -> SessionPacketDelivery {
+        match self.sender.try_send(packet) {
+            Ok(()) => SessionPacketDelivery::Delivered,
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                SessionPacketDelivery::Dropped
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => SessionPacketDelivery::Closed,
+        }
+    }
+}
 
 /// Delivery path for packets that belong to an existing stack session.
 ///
@@ -86,10 +114,7 @@ pub(crate) type SessionCollection = std::collections::HashMap<NetworkTuple, Sess
 #[derive(Clone, Debug)]
 pub(crate) enum SessionPacketSender {
     Tcp(PacketSender),
-    Udp {
-        sender: mpsc::Sender<NetworkPacket>,
-        dropped: Arc<AtomicU64>,
-    },
+    Udp(UdpPacketSender),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,7 +130,7 @@ impl SessionPacketSender {
     }
 
     pub(crate) fn udp(sender: mpsc::Sender<NetworkPacket>, dropped: Arc<AtomicU64>) -> Self {
-        Self::Udp { sender, dropped }
+        Self::Udp(UdpPacketSender::new(sender, dropped))
     }
 
     pub(crate) fn send(&self, packet: NetworkPacket) -> SessionPacketDelivery {
@@ -114,14 +139,7 @@ impl SessionPacketSender {
                 Ok(()) => SessionPacketDelivery::Delivered,
                 Err(_) => SessionPacketDelivery::Closed,
             },
-            Self::Udp { sender, dropped } => match sender.try_send(packet) {
-                Ok(()) => SessionPacketDelivery::Delivered,
-                Err(mpsc::error::TrySendError::Full(_)) => {
-                    dropped.fetch_add(1, Ordering::Relaxed);
-                    SessionPacketDelivery::Dropped
-                }
-                Err(mpsc::error::TrySendError::Closed(_)) => SessionPacketDelivery::Closed,
-            },
+            Self::Udp(sender) => sender.send(packet),
         }
     }
 }
@@ -244,6 +262,14 @@ const ACCEPT_QUEUE_CEILING: usize = 256;
 /// is the only bounded and protocol-honest outcome.
 pub(crate) const UDP_SESSION_QUEUE_DEPTH: usize = 32;
 
+/// Datagrams retained across all UDP flows while the TUN writer is busy.
+///
+/// This is deliberately global: one slow descriptor must not grant every UDP
+/// session another private device queue. At the Android MTU it holds at most
+/// about 350 KiB of packet bytes before dropping newest and incrementing the
+/// same public UDP-loss counter as a full per-flow queue.
+pub(crate) const UDP_DEVICE_QUEUE_DEPTH: usize = 256;
+
 /// How deep the accept queue is for a stack of `max_sessions`.
 ///
 /// Never zero (`mpsc::channel` will not build one, and a stack that can accept
@@ -313,9 +339,10 @@ pub struct IpStackConfig {
     /// refusal for that case — a reset, for the same reason and with the same
     /// appearance on the wire.
     pub max_sessions: usize,
-    /// Shared counter incremented when an established UDP flow's bounded input
-    /// queue is full. `FlowEngine` installs its public metrics counter here;
-    /// standalone stack users still get a private counter and the same bound.
+    /// Shared counter incremented when either bounded UDP queue is full:
+    /// per-flow input from the TUN or global output back to it. `FlowEngine`
+    /// installs its public metrics counter here; standalone stack users still
+    /// get a private counter and the same bounds.
     pub(crate) udp_queue_drops: Arc<AtomicU64>,
 }
 
@@ -478,6 +505,9 @@ fn run<Device: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     // `process_upstream_recv` for what allocating it per packet cost.
     let mut up_scratch = Vec::with_capacity(config.mtu as usize + offset);
     let (up_pkt_sender, mut up_pkt_receiver) = mpsc::unbounded_channel::<NetworkPacket>();
+    let (udp_up_pkt_sender, mut udp_up_pkt_receiver) =
+        mpsc::channel::<NetworkPacket>(UDP_DEVICE_QUEUE_DEPTH);
+    let udp_up_pkt_sender = UdpPacketSender::new(udp_up_pkt_sender, config.udp_queue_drops.clone());
 
     tokio::spawn(async move {
         // A read error used to be spelled `Ok(n) = device.read(..)`, which
@@ -519,7 +549,7 @@ fn run<Device: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                         log::warn!("short tun read: {n} bytes with a {offset}-byte header");
                         continue;
                     };
-                    if let Err(e) = process_device_read(packet, &mut sessions, &session_remove_tx, &up_pkt_sender, &config, &accept_sender).await {
+                    if let Err(e) = process_device_read(packet, &mut sessions, &session_remove_tx, &up_pkt_sender, &udp_up_pkt_sender, &config, &accept_sender).await {
                         let io_err: std::io::Error = e.into();
                         if io_err.kind() == std::io::ErrorKind::ConnectionRefused {
                             log::trace!("Received junk data: {io_err}");
@@ -533,6 +563,9 @@ fn run<Device: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
                     log::debug!("session destroyed: {network_tuple}");
                 }
                 Some(packet) = up_pkt_receiver.recv() => {
+                    process_upstream_recv(packet, &mut device, &mut up_scratch, #[cfg(unix)]pi).await?;
+                }
+                Some(packet) = udp_up_pkt_receiver.recv() => {
                     process_upstream_recv(packet, &mut device, &mut up_scratch, #[cfg(unix)]pi).await?;
                 }
                 // Without this the loop panics rather than ends once both
@@ -603,6 +636,7 @@ async fn process_device_read(
     sessions: &mut SessionCollection,
     session_remove_tx: &UnboundedSender<NetworkTuple>,
     up_pkt_sender: &PacketSender,
+    udp_up_pkt_sender: &UdpPacketSender,
     config: &IpStackConfig,
     accept_sender: &AcceptSender,
 ) -> Result<()> {
@@ -684,7 +718,13 @@ async fn process_device_read(
                 return Ok(());
             };
             let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-            let ip_stack_stream = create_stream(packet, config, up_pkt_sender.clone(), Some(tx))?;
+            let ip_stack_stream = create_stream(
+                packet,
+                config,
+                up_pkt_sender.clone(),
+                udp_up_pkt_sender.clone(),
+                Some(tx),
+            )?;
             let session_remove_tx = session_remove_tx.clone();
             tokio::spawn(async move {
                 rx.await.ok();
@@ -725,6 +765,7 @@ fn create_stream(
     packet: NetworkPacket,
     cfg: &IpStackConfig,
     up_pkt_sender: PacketSender,
+    udp_up_pkt_sender: UdpPacketSender,
     msgr: Option<::tokio::sync::oneshot::Sender<()>>,
 ) -> Result<IpStackStream> {
     let src_addr = packet.src_addr();
@@ -748,7 +789,7 @@ fn create_stream(
                 src_addr,
                 dst_addr,
                 payload,
-                up_pkt_sender,
+                udp_up_pkt_sender,
                 UdpStreamConfig {
                     mtu: cfg.mtu,
                     timeout_interval: cfg.udp_timeout,
