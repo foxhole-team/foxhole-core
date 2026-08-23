@@ -1,39 +1,24 @@
 #!/usr/bin/env bash
-# Build the Android library twice and compare the bytes.
-#
-# The claim "reproducible build" is worth exactly as much as the last time
-# someone ran this. It is not in CI: two release builds of this workspace cost
-# about twenty minutes and several gigabytes of target directory, which is a
-# per-release check rather than a per-commit one.
-#
-# Two runs, chosen because they fail differently:
-#
-#   clean  — same source path, target directory removed in between. Catches
-#            anything that leaks the build *order* or a stale intermediate into
-#            the artifact.
-#   moved  — the source tree copied to a different absolute path, with its own
-#            target directory. Catches an absolute path compiled into the
-#            binary, which is the usual reason two developers get different
-#            bytes from the same commit.
-#
-# What neither run can catch: both use the same CARGO_HOME, and registry paths
-# are compiled into the artifact, so this proves reproducibility for one
-# machine's layout rather than across independent builders.
+# Compare a clean release build with one from a moved checkout and CARGO_HOME.
+# Kept as a release gate because two cold Android builds are too costly for CI.
 #
 # Usage:
 #   scripts/reproducible-build.sh                 # both runs, arm64-v8a
 #   FOXCORE_ANDROID_ABIS="arm64-v8a armeabi-v7a" scripts/reproducible-build.sh
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 
 ABIS="${FOXCORE_ANDROID_ABIS:-arm64-v8a}"
-WORK="${FOXCORE_REPRO_WORK:-${TMPDIR:-/tmp}/foxcore-repro.$$}"
+WORK_REQUESTED="${FOXCORE_REPRO_WORK:-${TMPDIR:-/tmp}/foxcore-repro.$$}"
+case "$WORK_REQUESTED" in
+    /*) ;;
+    *) WORK_REQUESTED="$PWD/$WORK_REQUESTED" ;;
+esac
+PRIMARY_CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 
-# A release target directory for one ABI is roughly 4.5 GiB, and the moved run
-# needs its own. Refusing early is better than dying half way through a
-# twenty-minute build and leaving both.
+# Two cold targets need roughly 6 GiB per ABI.
 available_gib() {
     df -g "$ROOT" 2>/dev/null | awk 'NR == 2 { print $4 }' ||
         df -BG "$ROOT" 2>/dev/null | awk 'NR == 2 { gsub(/G/, "", $4); print $4 }'
@@ -46,7 +31,8 @@ if [ -n "$space" ] && [ "$space" -lt "$needed" ]; then
     exit 1
 fi
 
-mkdir -p "$WORK"
+mkdir -p "$WORK_REQUESTED"
+WORK="$(cd "$WORK_REQUESTED" && pwd -P)"
 echo "workspace for this run: $WORK"
 
 sha256() {
@@ -57,14 +43,28 @@ sha256() {
     fi
 }
 
+path_leak_count() {
+    local lib="$1"
+    shift
+    {
+        strings -a "$lib" |
+            grep -E '/(Users|home|root|builds)/|^/(private|tmp|var/folders)/' || true
+        for host_root in "$@"; do
+            [ -n "$host_root" ] || continue
+            strings -a "$lib" | grep -F "$host_root" || true
+        done
+    } | sort -u | wc -l | tr -d ' '
+}
+
 run() {
-    local name="$1" source="$2"
+    local name="$1" source="$2" cargo_home="$3"
     echo
     echo "== $name: building from $source =="
     mkdir -p "$WORK/$name"
     (
         cd "$source" || exit 1
-        FOXCORE_ANDROID_ABIS="$ABIS" FOXCORE_JNI_OUTPUT="$WORK/$name" \
+        CARGO_HOME="$cargo_home" \
+            FOXCORE_ANDROID_ABIS="$ABIS" FOXCORE_JNI_OUTPUT="$WORK/$name" \
             ./scripts/android-build.sh
     ) >"$WORK/$name.log" 2>&1 || {
         echo "$name failed; see $WORK/$name.log" >&2
@@ -74,22 +74,28 @@ run() {
     grep -E 'ELF gate|Finished' "$WORK/$name.log" | tail -3
 }
 
-# Run one: the repository itself, from a removed target directory.
 for abi_target in aarch64-linux-android armv7-linux-androideabi; do
     rm -rf "$ROOT/target/$abi_target"
 done
-run clean "$ROOT" || exit 1
+run clean "$ROOT" "$PRIMARY_CARGO_HOME" || exit 1
 
-# Run two: the same source at a different absolute path, own target directory.
-# .git is excluded so the copy is source only; target is excluded so the second
-# run really is cold.
-rm -rf "$WORK/moved-src"
-mkdir -p "$WORK/moved-src"
-rsync -a --exclude target --exclude .git "$ROOT/" "$WORK/moved-src/" || exit 1
+# Exclude `.git` and `target` so the moved build is source-only and cold.
+MOVED_SOURCE="$WORK_REQUESTED/moved-src"
+MOVED_CARGO_HOME="$WORK_REQUESTED/moved-cargo-home"
+rm -rf "$MOVED_SOURCE"
+mkdir -p "$MOVED_SOURCE"
+rsync -a --exclude target --exclude .git "$ROOT/" "$MOVED_SOURCE/" || exit 1
+rm -rf "$MOVED_CARGO_HOME"
+mkdir -p "$MOVED_CARGO_HOME"
+for cache in registry git; do
+    if [ -e "$PRIMARY_CARGO_HOME/$cache" ]; then
+        cp -al "$PRIMARY_CARGO_HOME/$cache" "$MOVED_CARGO_HOME/" || exit 1
+    fi
+done
 for abi_target in aarch64-linux-android armv7-linux-androideabi; do
     rm -rf "$ROOT/target/$abi_target"
 done
-run moved "$WORK/moved-src" || exit 1
+run moved "$MOVED_SOURCE" "$MOVED_CARGO_HOME" || exit 1
 
 echo
 echo "== comparison =="
@@ -108,8 +114,6 @@ for abi in $ABIS; do
         echo "$abi: DIFFERS" >&2
         echo "   clean $(sha256 "$a")" >&2
         echo "   moved $(sha256 "$b")" >&2
-        # Naming the first divergent offset turns "not reproducible" into
-        # something someone can actually look at.
         cmp "$a" "$b" >&2 || true
         status=1
     fi
@@ -118,10 +122,22 @@ done
 echo
 echo "absolute paths compiled into the artifact:"
 for abi in $ABIS; do
-    lib="$WORK/clean/$abi/libfoxhole_native.so"
-    [ -f "$lib" ] || continue
-    count="$(strings -a "$lib" | grep -cE '^/(Users|home|root|private)/' || true)"
-    echo "   $abi: $count"
+    clean_lib="$WORK/clean/$abi/libfoxhole_native.so"
+    moved_lib="$WORK/moved/$abi/libfoxhole_native.so"
+    [ -f "$clean_lib" ] && [ -f "$moved_lib" ] || continue
+    clean_count="$(
+        path_leak_count "$clean_lib" "$ROOT" "$PRIMARY_CARGO_HOME" \
+            "${RUSTUP_HOME:-$HOME/.rustup}"
+    )"
+    moved_count="$(
+        path_leak_count "$moved_lib" "$MOVED_SOURCE" "$WORK/moved-src" \
+            "$MOVED_CARGO_HOME" "$WORK/moved-cargo-home" \
+            "${RUSTUP_HOME:-$HOME/.rustup}"
+    )"
+    echo "   $abi: clean=$clean_count moved=$moved_count"
+    if [ "$clean_count" != "0" ] || [ "$moved_count" != "0" ]; then
+        status=1
+    fi
 done
 
 echo

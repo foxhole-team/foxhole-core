@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Set the workspace and native capabilities version to 0.0.3 while retaining
+  ABI v1 and configuration schema v1.
+- Preserve the unread tail of a UDP datagram when a public `DatagramFlow`
+  caller supplies a short or zero-capacity `ReadBuf`; the first datagram and
+  queued datagrams now share the same regression-covered partial-read path.
+- Move the isolated smoltcp transparent-accept proof out of the production
+  source tree and make it an explicitly named integration contract test.
+- Remap checkout, Cargo-home and Rustup-home paths during Android release
+  compilation. The ELF gate now rejects build-host paths, and the reproducible
+  build check compares libraries built from different checkout and Cargo-home
+  paths before accepting their bytes.
 - Replace the embedded `ipstack` fork with exact-pinned smoltcp 0.14.0 TCP,
   driven by a Fox-owned bounded Tokio actor. Transparent IPv4/IPv6 admission,
   SYN refusal, zero-window backpressure, FIN/RST, WireGuard packet-tunnel
@@ -18,7 +29,4 @@
   ciphertext to 64 KiB, including backpressure regression coverage.
 - Update `h2` to 0.4.18, closing the excessive-small-DATA-frame denial-of-service
   advisory and taking the subsequent HPACK and end-of-stream fixes.
-- Keep rustls with aws-lc-rs as the Fox-owned TLS/QUIC backend. Direct BoringSSL
-  is not added: a rustls primitive provider cannot change ClientHello shape, and
-  a full libssl integration would add an unstable Android C++/FFI backend without
-  replacing REALITY, Quinn, or non-Chromium fingerprint profiles.
+- Keep rustls with aws-lc-rs as the Fox-owned TLS/QUIC backend.

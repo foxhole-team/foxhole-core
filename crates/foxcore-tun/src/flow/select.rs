@@ -23,14 +23,7 @@ enum DatagramSendOutcome {
     Revoked,
 }
 
-/// Wait for the outbound to accept one datagram without making teardown wait
-/// for the outbound too.
-///
-/// `DatagramSession::send` is allowed to apply backpressure. That is useful,
-/// but awaiting it directly inside the stream-read branch hid all three stop
-/// signals in the outer `select!`: a full protocol queue could keep a revoked
-/// app or an entire stopped generation alive indefinitely. Dropping the send
-/// future is the session contract's cancellation mechanism.
+/// Send with backpressure while keeping every teardown signal observable.
 async fn send_datagram_until_stopped(
     session: &foxcore_transport::BoxDatagramSession,
     datagram: Datagram,
@@ -51,14 +44,7 @@ async fn send_datagram_until_stopped(
 }
 
 impl FlowEngine {
-    /// A dial the VPN lane could not complete.
-    ///
-    /// This is the data plane's only view of "the tunnel is down": the session
-    /// itself lives inside the outbound. With `split_tunnel_on_vpn_failure`
-    /// off, that is the moment the direct lane has to go down with it, because
-    /// the reason to turn the flag off is to not have clearnet traffic continue
-    /// while the tunnel is dead. With it on — the default — nothing happens
-    /// here at all, and per-app `direct` rules keep working exactly as before.
+    /// Report the data plane's authoritative VPN-lane failure.
     pub(crate) fn report_dial_failure(&self, lane: FlowLane) {
         if lane == FlowLane::Vpn {
             let _ = self
@@ -69,17 +55,7 @@ impl FlowEngine {
 
     pub(crate) fn dispatch_udp(&self, stream: DatagramFlow, cancel: CancellationToken) {
         let Ok(permit) = self.udp_slots.clone().try_acquire_owned() else {
-            // The TCP arm of this — `dispatch_tcp` — owes the application a
-            // reset, because the stack answered a SYN on its behalf and the
-            // application is holding a connection. There is no equivalent debt
-            // here: a datagram was never accepted, so the honest answer is to
-            // drop it, and dropping is also the only answer that costs nothing.
-            //
-            // What this must *not* do is grow. Dropping the datagram flow takes
-            // the session straight back out of the stack's table; no
-            // permit is held, no relay task is spawned, no row is opened in the
-            // traffic map. The refusal is counted and named instead, which is
-            // the only trace a dropped datagram can honestly leave.
+            // UDP has no accepted connection to reset; drop and record the refusal.
             self.refuse_for_flow_limit(IpTransport::Udp, stream.local_addr(), stream.peer_addr());
             return;
         };
@@ -124,10 +100,7 @@ impl FlowEngine {
             metrics.close_flow();
             return;
         }
-        // The datagram half of the same gate: 853 is DNS over QUIC as well as
-        // DNS over TLS. Android's Private DNS probe is the TCP one, so this arm
-        // is not what closes D14 — it is what keeps the guarantee a statement
-        // about the question rather than about the transport that carried it.
+        // Port 853 must not bypass filtering over QUIC either.
         if policy.dns_proxy.is_some()
             && policy
                 .dns_config
@@ -167,28 +140,13 @@ impl FlowEngine {
                 stream.peer_addr(),
             );
         }
-        // This flow's own stop signal, beside the snapshot's — see the TCP arm
-        // in `handle_tcp` for why there are two and why they mean the same
-        // thing.
         let flow_revoked = tracked.flow().revocation();
         if let Some(session) = self.open_datagram(&outbound, &context, lane).await {
-            // Sized to what the link can actually deliver, not to the largest
-            // number a UDP length field can hold. Datagrams reach this stream
-            // from tun packets, so the ceiling is the MTU less both headers —
-            // 1372 bytes at the Android MTU of 1400. The old 64 KiB was 47×
-            // that, per flow, and `max_udp_flows` is 512: about 32 MB of
-            // resident memory that could never be filled.
+            // TUN datagrams cannot exceed the link payload.
             let mut buffer = vec![0_u8; stream.max_payload()];
             loop {
                 tokio::select! {
                     _ = cancel.cancelled() => break,
-                    // A datagram flow has no reset to send — there is no
-                    // connection state at the far end to tear down — so what a
-                    // revocation owes it is to stop carrying traffic and to
-                    // give the resources back. Breaking here does both: the
-                    // outbound session is dropped with this scope, and
-                    // `stream` is dropped when `handle_udp` returns, which
-                    // takes the session straight out of the stack's table.
                     _ = policy_revoked.cancelled() => {
                         metrics.revoke_flow();
                         break;
@@ -251,17 +209,7 @@ impl FlowEngine {
         metrics.close_flow();
     }
 
-    /// Open the datagram session for a UDP flow, telling the two failure modes
-    /// apart.
-    ///
-    /// An outbound that cannot carry this flow as datagrams — HTTP CONNECT and
-    /// Naive have no UDP at all, and Vision on UDP/443 and Shadowsocks over a
-    /// stream transport refuse the individual flow — is answering correctly for
-    /// this profile, permanently. Counting that as a dial error
-    /// made a working fail-closed core look like a network fault and kept the
-    /// refusal out of the audit trail entirely (D7, found on device); a UI
-    /// watching `dial_errors` climb has no way to tell "your proxy is
-    /// unreachable" from "this proxy has no UDP, by design".
+    /// Open a datagram session, distinguishing unsupported UDP from dial failure.
     pub(super) async fn open_datagram(
         &self,
         outbound: &Outbound,
@@ -311,17 +259,8 @@ impl FlowEngine {
         true
     }
 
-    /// One bounded platform lookup, shared by routing and by telemetry.
-    ///
-    /// The deadline is carried into the blocking closure because
-    /// `tokio::time::timeout` cancels the *future*, not the blocking task
-    /// underneath it: dropping the join handle abandons the work, it does not
-    /// stop it. On a two-thread blocking pool that is how a long session leaves
-    /// a queue of platform calls nobody will read, and shutting the runtime
-    /// down then runs every one of them — which is how `nativeStop` came to
-    /// hang for minutes after half an hour of traffic (D13). A task that
-    /// reaches the front of the queue after its caller gave up, or after the
-    /// generation ended, does nothing and returns.
+    /// Run one bounded platform lookup; the inner deadline also bounds orphaned
+    /// `spawn_blocking` work after the async timeout drops its join handle.
     async fn resolve_identity(
         &self,
         transport: IpTransport,
@@ -360,18 +299,7 @@ impl FlowEngine {
         Some(identity)
     }
 
-    /// Find out who owns a flow that is already running, for the map alone.
-    ///
-    /// Per-app bytes are a product requirement, and they used to depend on the
-    /// policy happening to need identity for *routing*: with no per-app rules
-    /// nothing resolved, and every snapshot reported zero packages (D12).
-    ///
-    /// Resolving it here rather than inline is the difference between a feature
-    /// and a regression — inline would put a platform round trip in front of
-    /// every connection's first byte. Late is fine: totals are computed from
-    /// the row's owner at snapshot and at close, so a package that lands a few
-    /// milliseconds after the flow opens still accounts for all of its bytes.
-    /// Failure is fine too; this never decides anything.
+    /// Resolve ownership after routing so telemetry never delays a flow.
     pub(crate) fn attribute_for_telemetry(
         &self,
         flow: Arc<foxcore_trafficmap::LiveFlow>,
@@ -393,40 +321,20 @@ impl FlowEngine {
         });
     }
 
-    /// Which outbound carries this flow, and by which route.
-    ///
-    /// The route is recorded here rather than derived later because this is the
-    /// only place that knows all three parts of it at once: the lane the policy
-    /// chose, the protocol that ended up carrying it, and — for a group — the
-    /// member the selector was on at this instant. Reading the member back off
-    /// the selector when a screen renders would report the server the group has
-    /// since failed over to, not the one that moved these bytes.
+    /// Select the outbound and snapshot the exact route used for telemetry.
     pub(crate) fn select_route(
         &self,
         context: &FlowContext,
         routes: &RouteTable,
     ) -> Result<SelectedRoute, BlockReason> {
         let Some(outbound) = self.select_outbound(context, routes) else {
-            // A kill-switch block is reported distinctly: the operator needs to
-            // see "everything is off" rather than a pile of per-flow denials.
             return Err(if routes.kill_switch() {
                 BlockReason::KillSwitch
             } else {
                 BlockReason::Policy
             });
         };
-        // An outbound that could not be built refuses its own flows here,
-        // before anything is dialled and before any other lane is consulted.
-        //
-        // Refusing rather than dialling keeps the failure honest in two ways.
-        // The flow is not counted as a dial error — that counter is about the
-        // network, and this is the core declining to carry traffic it has
-        // nothing to carry it with (the D7 lesson). And no dial failure means
-        // no `VpnFailure` interruption from this path, so an overlay that never
-        // built cannot suspend a lane that is working. What it must never do is
-        // answer the flow from somewhere else: a VPN that failed to build and
-        // whose apps quietly went out clearnet is the outcome the whole
-        // isolation contract exists to prevent.
+        // A missing lane is a fail-closed refusal, not a network dial failure.
         if let Outbound::Deferred(deferred) = outbound.as_ref()
             && !deferred.is_available()
         {
@@ -442,13 +350,10 @@ impl FlowEngine {
                 RouteAction::Direct => FlowLane::Direct,
                 RouteAction::Tor => FlowLane::Tor,
                 RouteAction::I2p => FlowLane::I2p,
-                // Block never reaches here: `select_outbound` returned None.
                 RouteAction::Block | RouteAction::Outbound(_) => FlowLane::Vpn,
             }
         };
-        // Held lanes refuse before anything is dialled. Never a downgrade to
-        // another lane: a suspended VPN whose flows quietly went out direct is
-        // the exact outcome turning the flag off exists to prevent.
+        // Held lanes never downgrade to another route.
         if self.continuity.is_held(lane) {
             return Err(BlockReason::ContinuityHeld);
         }
@@ -485,16 +390,10 @@ impl FlowEngine {
         }
         match action {
             RouteAction::Direct => Some(self.direct.clone()),
-            // Returned above; refusing rather than asserting, because this runs
-            // per flow and a panic aborts the process in release.
             RouteAction::Block => None,
             RouteAction::Tor => self.outbounds.tor().cloned(),
             RouteAction::I2p => self.outbounds.i2p().cloned(),
-            // The primary is an L3 tunnel in packet-tunnel mode, so it is not in
-            // the registry at all and the entry under this id is a placeholder.
-            // A stream flow that reached the stack with this action lost a race
-            // with a policy reload; answering it from the registry would put the
-            // traffic on the open network. Refusing is the only safe answer.
+            // A stream reaching an L3 primary after reload must fail closed.
             RouteAction::Outbound(id) if self.packet_tunnel && is_primary_outbound(&id.0) => None,
             RouteAction::Outbound(id) => self
                 .outbounds

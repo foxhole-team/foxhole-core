@@ -42,7 +42,7 @@ random seed comes fail-closed from the OS (`crates/foxcore-tun/src/netstack/acto
 unpublished handshake holds its reservations for at most 30 seconds; timeout and passive-reset
 states are reset and reaped without waiting for unrelated traffic to stop
 (`crates/foxcore-tun/src/netstack/stream/smoltcp_tcp.rs:22-47`;
-`crates/foxcore-tun/src/netstack/actor.rs:768-823`, `:900-905`).
+`crates/foxcore-tun/src/netstack/actor.rs:763-818`, `:895-900`).
 
 The packet device has 256-packet ingress and egress bounds, and refuses to dequeue ingress until an
 egress slot is available for smoltcp's paired receive/transmit token
@@ -58,17 +58,21 @@ MTU-sized channel chunk to the charged socket buffers
 UDP remains a Fox-owned five-tuple demultiplexer: an established flow retains 32 packets from the
 TUN, all flows share a 256-packet reply queue, and overflow drops newest while incrementing the
 public loss counter (`crates/foxcore-tun/src/netstack/mod.rs:89-130`, `:160-166`;
-`crates/foxcore-tun/src/netstack/stream/udp.rs:20-80`, `:224-240`). DNS interception therefore stays
-in the policy-aware flow engine, and ICMPv4 echo uses the same bounded raw-response path
+`crates/foxcore-tun/src/netstack/stream/udp.rs:20-88`, `:218-244`). `DatagramFlow` is public
+(`crates/foxcore-tun/src/netstack/mod.rs:32-33`) and its `AsyncRead` adapter never discards a datagram
+tail: a short buffer advances `read_offset`, and later reads finish that payload before dequeuing the
+next; a zero-capacity buffer consumes nothing (`crates/foxcore-tun/src/netstack/stream/udp.rs:169-214`,
+regression at `:334-383`). DNS interception therefore stays in the policy-aware flow engine, and
+ICMPv4 echo uses the same bounded raw-response path
 (`crates/foxcore-tun/src/netstack/mod.rs:1-9`, `:66-87`). On the WireGuard L3 path four
 256-packet channels feed one TUN writer; `StackDevice` never creates a second writer
-(`crates/foxcore-tun/src/flow/engine.rs:142-229`; `crates/foxcore-tun/src/ingress.rs:118-199`). Fatal
+(`crates/foxcore-tun/src/flow/engine.rs:142-200`; `crates/foxcore-tun/src/ingress.rs:118-199`). Fatal
 TUN reader or writer errors reach the engine with their original I/O kind. Cancellation signals the
 stack actor, joins it and its writer with a one-second fallback bound, then shuts down and joins the
 L3 helper set before the generation-owned runtime can release the sole TUN owner
 (`crates/foxcore-tun/src/netstack/mod.rs:270-312`;
 `crates/foxcore-tun/src/netstack/actor.rs:291-303`, `:460-554`;
-`crates/foxcore-tun/src/flow/engine.rs:227-250`;
+`crates/foxcore-tun/src/flow/engine.rs:202-223`;
 `crates/foxcore-runtime/src/start.rs:384-407`).
 
 ---
@@ -203,7 +207,7 @@ selection (`dns/proxy.rs:671-711`).
 ## 1.6 Fail-closed
 
 The core never redirects protected traffic to `Direct` when the required route is unavailable.
-Stated intent: "no silent downgrade when a protected route fails" (`foxhole-core/README.md:120`).
+Stated intent: "no silent downgrade when a protected route fails" (`README.md:110-119`).
 
 ```mermaid
 stateDiagram-v2
@@ -227,10 +231,10 @@ stateDiagram-v2
 | Path | Mechanism | Cite |
 |---|---|---|
 | **Global kill switch** | stage 0 of routing, ahead of every allowance — including explicitly allowed apps, `.onion`/`.i2p` auto-routes and locally answered ICMP echo | `config/policy.rs:63-67`; `foxcore-route/src/lib.rs:185-190`; LAN ingress `foxcore-runtime/src/lan.rs:73-76` |
-| **`.onion` / `.i2p`** | refused rather than forwarded when fake-IP is off — "private overlay DNS is never forwarded to an upstream resolver". Tor/I2P routing *requires* `dns.mode='fake_ip'` or the profile is rejected at load | `foxcore-tun/src/dns/proxy.rs:248-268`, `:308-322`; `config/engine.rs:262-281` |
-| **Overlay switched off** | `gated()` turns a Tor/I2P action into `Block` immediately; `.onion`/`.i2p` hosts are force-routed to the overlay lane *before* the route table and return `None` ⇒ Block if the lane is gated or absent | `foxcore-route/src/lib.rs:301-315`; `foxcore-tun/src/flow/select.rs:438-449`, `:475-486` |
-| **Failed outbound build** | becomes a `DeferredOutbound` under the same id; the engine still starts and flows get `BlockReason::LaneUnavailable` — "never answered by another lane" | `foxcore-runtime/src/registry.rs:86-97`; `flow/select.rs:421-437` |
-| **L3 packet-tunnel primary** | a WireGuard primary has no stream semantics, so the registry's `default` is a flagged direct socket that every consumer refuses: flow engine, DNS interceptor, LAN proxy, and two config-load rules | `foxcore-outbound/src/lib.rs:207-219`; `flow/select.rs:494-499`; `dns/proxy.rs:671-690`; `lan.rs:80-92`; `engine.rs:207-217`, `:234-245` |
+| **`.onion` / `.i2p`** | refused rather than forwarded when fake-IP is off — "private overlay DNS is never forwarded to an upstream resolver". Tor/I2P routing *requires* `dns.mode='fake_ip'` or the profile is rejected at load | `foxcore-tun/src/dns/proxy.rs:248-268`, `:308-322`; `config/engine.rs:232-249` |
+| **Overlay switched off** | `gated()` turns a Tor/I2P action into `Block` immediately; `.onion`/`.i2p` hosts are force-routed to the overlay lane *before* the route table and return `None` ⇒ Block if the lane is gated or absent | `foxcore-route/src/lib.rs:301-315`; `foxcore-tun/src/flow/select.rs:344-358`, `:379-389` |
+| **Failed outbound build** | becomes a `DeferredOutbound` under the same id; the engine still starts and flows get `BlockReason::LaneUnavailable` — "never answered by another lane" | `foxcore-runtime/src/registry.rs:86-97`; `flow/select.rs:337-343` |
+| **L3 packet-tunnel primary** | a WireGuard primary has no stream semantics, so the registry's `default` is a flagged direct socket that every consumer refuses: flow engine, DNS interceptor, LAN proxy, and two config-load rules | `foxcore-outbound/src/lib.rs:207-219`; `flow/select.rs:396-397`; `dns/proxy.rs:671-690`; `lan.rs:80-92`; `engine.rs:193-218` |
 | **Network moved, no protected socket** | `socket = None` is the fail-closed state — packets dropped and counted, never queued; a bounded run of receive errors closes the tunnel until a rebind | `foxcore-tun/src/relay/engine.rs:149-152`, `:253-260`, `:289-317` |
 | **Continuity hold** | turning off a continuity flag holds the lane blocked and raises `ConfirmationRequired`. There is deliberately no third outcome where packets keep moving; the removed `stop_engine_leaving_network_open` value is now *rejected* under `deny_unknown_fields` | `config/policy.rs:96-119`, `:139-146`, `:188-230` |
 | **Shared UID / quarantine** | an Android shared UID resolving to a mixed decision fails closed to Block; quarantined and unknown apps never reach the network | `foxcore-route/src/lib.rs:289-297`, `:206-212` |
@@ -256,7 +260,7 @@ stateDiagram-v2
 
 A permanent "this protocol has no UDP" refusal is counted as `udp_unsupported` + `block_flow`,
 **not** as a dial error, so a working fail-closed core does not read as a network fault
-(`flow/select.rs:258-283`).
+(`flow/select.rs:212-233`).
 
 ---
 
@@ -284,4 +288,6 @@ AmneziaWG are `experimental`.
 No open protocol inconsistencies remain after this pass. The previous text and both top-level
 capability tables named the removed embedded `ipstack` fork and omitted the global TCP memory and
 raw-response queue bounds; they now describe the shipping smoltcp actor and Fox-owned UDP/ICMP
-boundary.
+boundary. The 497-line transparent-accept proof was also a `#[cfg(test)]` module under `src/`; it is
+now the integration contract `crates/foxcore-tun/tests/smoltcp_transparent_accept_contract.rs:1-497`,
+with no production module surface.

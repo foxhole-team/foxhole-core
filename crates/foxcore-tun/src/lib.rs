@@ -1,12 +1,6 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 #![deny(clippy::undocumented_unsafe_blocks)]
-// Raised for the Tor build. Compiling `proto-tor` widens the outbound enum
-// enough that the resolver's future — `exchange` awaiting an upstream awaiting
-// a dial awaiting a Tor circuit — overflows rustc's default query depth while
-// it computes the layout. Nothing here recurses; the type is simply deep, and
-// the whole `tor` feature failed to build without this. Found by checking the
-// feature rather than by anyone asking for it, which is also why "three
-// runtimes switch seamlessly" had nothing to run on.
+// Tor's nested outbound future exceeds rustc's default type-layout query depth.
 #![recursion_limit = "256"]
 
 mod arena;
@@ -25,24 +19,15 @@ mod metrics;
 pub mod netstack;
 #[cfg(feature = "wireguard")]
 mod relay;
-#[cfg(test)]
-mod smoltcp_poc;
 mod split;
 
-/// Public because the benchmarks that justify it drive it directly — the two
-/// hops it serves are private and need a descriptor. See
-/// `benches/packet_path.rs`.
+/// Reusable packet storage exposed for `benches/packet_path.rs`.
 pub use arena::PacketArena;
 pub use continuity::{ContinuityConfirm, ContinuityExpiry, ContinuityGate, ContinuityOutcome};
 pub use device::{TunDevice, TunFdOwner, live_devices, open_named_fd, wait_for_devices_released};
 pub use flow::{FlowEngine, FlowEngineContext, FlowPolicyStore, PolicyGates};
-/// The name the traffic map had while it only tracked connections. Kept so the
-/// test harness outside this track keeps building; new code should say
-/// [`TrafficMap`].
+/// Compatibility alias; new code should use [`TrafficMap`].
 pub use foxcore_trafficmap::TrafficMap as ConnectionTracker;
-// The traffic map is its own crate: it observes the data plane and must not be
-// reachable *from* it in the other direction. Re-exported here so the engine's
-// consumers keep one import path for the types they hand to `FlowEngine`.
 pub use foxcore_trafficmap::{
     ConnectionRow, CountingStream, DEFAULT_CONNECTION_ROWS, FlowHandle, FlowLane, FlowRoute,
     LiveFlow, PackageTraffic, PacketAccounting, PacketKey, RevokeTarget, TrafficMap,
@@ -65,10 +50,8 @@ fn has_overlay_suffix(domain: &str, suffix: &str) -> bool {
     let suffix = suffix.as_bytes();
     match domain.len().checked_sub(suffix.len()) {
         None => false,
-        // The bare TLD itself.
         Some(0) => domain.eq_ignore_ascii_case(suffix),
-        // Otherwise the suffix must start on a label boundary, so that
-        // `nototonion` never matches `onion`.
+        // Require a label boundary so `nototonion` never matches `onion`.
         Some(offset) => domain[offset - 1] == b'.' && domain[offset..].eq_ignore_ascii_case(suffix),
     }
 }

@@ -425,15 +425,17 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-Release ABI:
+Release archive ABIs:
 
 ```text
 arm64-v8a
+armeabi-v7a
 ```
 
-arm64 only, deliberately: no live traffic, protocol matrix or Tor leg was ever
-verified on 32-bit ARM, so shipping it would mean shipping untested. `armeabi-v7a`
-and `x86_64` build and pass the ELF gate; neither is published.
+Both ARM libraries are rebuilt, ELF-gated and packaged by the core release workflow.
+`x86_64` remains an explicit emulator build and is not published. FoxHole Guard's APK
+currently defaults to `arm64-v8a`; that app packaging choice does not remove
+`armeabi-v7a` from the standalone FoxCore release archive.
 
 Native build gates:
 
@@ -449,7 +451,10 @@ Native build gates:
 
 ## 🔏 Release integrity
 
-A `main` release is accepted only when its source tree is identical to a successful full `dev` gate. The release workflow publishes the exact Android libraries retained by that gate; it does not rebuild them on `main`.
+A `main` release is accepted only when its source tree is identical to a successful full `dev` gate.
+The dev artifact is not retained: `main` rebuilds both Android libraries from the same pinned
+Rust, NDK and lockfile inputs, then re-checks the rollback manifest, ABI, SBOM and hashes before
+signing or publishing anything.
 
 Each release archive contains the gated JNI libraries, their rollback manifest,
 the committed CycloneDX SBOMs and `Cargo.lock`. The release also contains

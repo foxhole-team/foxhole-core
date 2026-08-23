@@ -26,7 +26,7 @@ flowchart TD
 ```
 
 Fox-owned generic TLS explicitly builds rustls configurations with the `aws-lc-rs` provider because
-`ring` has no ML-KEM (`crates/foxcore-transport/src/tls.rs:454-502`). The dependency graph still
+`ring` has no ML-KEM (`crates/foxcore-transport/src/tls.rs:454-505`). The dependency graph still
 contains `ring` through Arti, Shadowsocks compatibility and a negative ECH test; it is not the
 provider selected by FoxCore's TLS builder.
 
@@ -151,14 +151,15 @@ sequenceDiagram
 | TLS 1.3 schedule | in-crate HKDF-Expand-Label / Derive-Secret, SHA-256 or SHA-384 per suite | `reality_tls13_keys.rs:24-140` |
 
 `short_id` is hex, ≤16 chars, even length, **right-padded with zeros** to 8 bytes
-(`reality_util.rs:34-54`). `auth_key`, `public_key`, `short_id` and `server_name` are zeroized on
-drop (`reality_client_connection.rs:138-169`).
+(`reality_util.rs:34-54`). Handshake secrets and transcripts are zeroized with their state; the
+connection also zeroizes its configured public key, short id, server name and I/O buffers on drop
+(`reality_client_connection.rs:139-170`, `:195-205`).
 
 Untrusted handshake plaintext is accumulated only up to 64 KiB and the limit is checked before the
-buffer grows (`reality_client_connection.rs:65-78`, `:698`). After the handshake, pending encrypted
+buffer grows (`reality_client_connection.rs:56-68`, `:648`). After the handshake, pending encrypted
 records plus buffered application plaintext share one 64 KiB budget; a blocked network therefore
 backpressures the application rather than growing two independent queues
-(`reality_client_connection.rs:1012-1018`; `reality_reader_writer.rs:61-85`).
+(`reality_client_connection.rs:931-936`; `reality_reader_writer.rs:65-70`).
 
 `server_name` is the SNI written into the parroted hello and must be an ASCII DNS name — IP literals
 are rejected. There is **no client-side "dest" or fallback-target concept**; that is server-side
@@ -183,12 +184,14 @@ flowchart TD
     end
 ```
 
-The two must not be conflated. The core's own README is explicit that the generic TLS path is
-distinguishable from a browser — measured at 10 cipher suites and 11 extensions against Chromium's
-15 and 16 — and that it is not reachable by configuration
-(`foxhole-core/README.md:59-68`). `chromium_tls_fingerprint` is reported as `unsupported`.
+The two must not be conflated. The generic builder can select protocol versions, ALPN and
+key-exchange groups, but it exposes no browser-profile selector and does not control GREASE or
+extension ordering (`crates/foxcore-transport/src/tls.rs:447-505`). The capabilities document
+therefore reports `chromium_tls_fingerprint` as unsupported on the generic Naive/rustls path
+(`crates/foxcore-android/src/capabilities.rs:991-1007`). REALITY does not use that builder: it writes
+the selected profile's ClientHello bytes itself.
 
-**Profiles implemented** (`capabilities.rs:1102-1114`): `chrome_151`, `chrome_133`, `chrome_131`,
+**Profiles implemented** (`capabilities.rs:1102-1117`): `chrome_151`, `chrome_133`, `chrome_131`,
 `edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`, `firefox_153`, `firefox_148`, plus `random` (one
 modern table chosen per process) and `randomized` (a fresh generated hello per connection). Seven
 tables are transcribed from uTLS; `chrome_151` and `firefox_153` come from first-party captures.
@@ -239,22 +242,22 @@ flowchart TD
 |---|---|---|
 | FoxHole DB manifest key | ECDSA P-256 SPKI, PEM literal | `app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeDb.kt:47-53` |
 | …its DER SHA-256 | `3acd123f…98d69` | `FoxholeDb.kt:55-56` |
-| …base64 for the Rust core | derived from the PEM | `FoxholeDb.kt:58-64`; consumed at `DnsFilterAssetInstaller.kt:255-258` |
+| …base64 for the Rust core | derived from the PEM | `FoxholeDb.kt:58-64`; consumed at `DnsFilterAssetInstaller.kt:255` |
 | TLS server SPKI pin | base64 SHA-256 of `subjectPublicKeyInfo`, must decode to 32 B; **replaces** WebPKI verification when set | field `config/tls.rs:19`; check `foxcore-transport/src/tls.rs:543-568` |
-| DNS rule-set signing key | per-source, from config; base64 SPKI or raw P-256 point, 1..4096 B; `ECDSA_P256_SHA256_ASN1` | `config/dns.rs:102-134`; `foxcore-route/src/ruleset.rs:13`, `:250-296` |
+| DNS rule-set signing key | per-source, from config; base64 SPKI or raw P-256 point, 1..4096 B; `ECDSA_P256_SHA256_ASN1` | `config/dns.rs:102-134`; `foxcore-route/src/ruleset.rs:13`, `:248-295` |
 | Per-fingerprint-table digest | `fingerprint_sha256`, re-derived in the core before install | `runtime_tables.rs:137`, `:154-169` |
 | Threat-intel source digest | `sourceSha256: 6052636f…4864e` | `app/src/main/assets/sentinel/threat-intel.source.json:7` |
-| Third-party app identity | `KnownAppConfig.signing_digest` — hex SHA-256 of another app's signing cert, so a repackaged app fails closed | `config/policy.rs:212-217`; `AndroidApplicationIdentityResolver.kt:78-96` |
+| Third-party app identity | `KnownAppConfig.signing_digest` — hex SHA-256 of another app's signing cert, so a repackaged app fails closed | `config/policy.rs:212-217`; `AndroidApplicationIdentityResolver.kt:84-99` |
 | Gradle dependencies | per-artifact SHA-256 | `gradle/verification-metadata.xml` |
 | Release APK certificate | `e59de2486084c38f3c77e9df0eb5eff9a4559f3c68024f1208e0e9c04b0df665` | `config/release-cert-sha256.txt` — **build-time check only** |
-| FoxCore revision | exact release commit in `config/foxcore-revision.txt` | local Gradle checks the sibling Git HEAD and refuses release mismatches (`app/build.gradle.kts:188-245`) |
+| FoxCore revision | exact release commit in `config/foxcore-revision.txt` | local Gradle checks the sibling Git HEAD and refuses release mismatches (`app/build.gradle.kts:184-230`) |
 
 **Not pinned:**
 
 - **Tor directory authorities** — arti owns them; no key material in either repo.
 - **APK signing certificate at runtime** — there is no literal. `AppUpdateApkVerifier` requires the
   candidate's `apkContentsSigners` digest set to equal the **currently installed app's**, fail-closed
-  on an empty set (`AppUpdateApkVerifier.kt:63-97`). `signingCertificateHistory` is deliberately not
+  on an empty set (`AppUpdateApkVerifier.kt:49-80`). `signingCertificateHistory` is deliberately not
   used, so a rotated-away key is refused.
 - **No OkHttp `CertificatePinner`** anywhere. Transport hardening is
   `android:usesCleartextTraffic="false"` plus the public-HTTPS URL policy.

@@ -3,15 +3,7 @@ use std::io::{BufRead, Read, Write};
 use super::common::OUTGOING_BUFFER_LIMIT;
 use crate::slide_buffer::SlideBuffer;
 
-/// Reader for accessing decrypted plaintext from REALITY connections
-///
-/// This reader provides a view over a SlideBuffer and consumes data from it
-/// as it is read. The SlideBuffer handles efficient memory management.
-///
-/// Mirrors rustls::Reader behavior for fill_buf():
-/// - Ok(data) when data is available
-/// - Ok(&[]) when close_notify received (clean EOF)
-/// - Err(WouldBlock) when no data and connection still active
+/// Decrypted REALITY reader with rustls-compatible EOF and WouldBlock behavior.
 pub struct RealityReader<'a> {
     buffer: &'a mut SlideBuffer,
     received_close_notify: bool,
@@ -41,13 +33,10 @@ impl<'a> Read for RealityReader<'a> {
 impl<'a> BufRead for RealityReader<'a> {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
         if !self.buffer.is_empty() {
-            // Data available
             Ok(self.buffer.as_slice())
         } else if self.received_close_notify {
-            // Clean EOF - close_notify received (mirrors rustls behavior)
             Ok(&[])
         } else {
-            // No data, connection still active
             Err(std::io::ErrorKind::WouldBlock.into())
         }
     }

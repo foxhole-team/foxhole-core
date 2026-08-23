@@ -25,6 +25,11 @@ const UDP_SESSION_CHANNEL_DEPTH: usize = UDP_SESSION_QUEUE_DEPTH - 1;
 /// for bidirectional data transfer. UDP streams have a configurable timeout and
 /// refuse datagrams that cannot fit in one MTU.
 ///
+/// `AsyncRead` cannot report a datagram length separately. When a caller's
+/// `ReadBuf` is smaller than the current datagram, subsequent reads return its
+/// remaining bytes before the next datagram; no accepted payload bytes are
+/// discarded. Each successful `poll_write` still emits exactly one datagram.
+///
 #[derive(Debug)]
 pub struct DatagramFlow {
     src_addr: SocketAddr,
@@ -33,7 +38,8 @@ pub struct DatagramFlow {
     stream_receiver: mpsc::Receiver<NetworkPacket>,
     queue_drops: Arc<AtomicU64>,
     up_pkt_sender: UdpPacketSender,
-    first_payload: Option<Vec<u8>>,
+    read_payload: Option<Vec<u8>>,
+    read_offset: usize,
     timeout: Pin<Box<Sleep>>,
     timeout_interval: Duration,
     mtu: u16,
@@ -55,9 +61,7 @@ impl DatagramFlow {
         config: UdpStreamConfig,
         destroy_messenger: Option<::tokio::sync::oneshot::Sender<()>>,
     ) -> Self {
-        // The first datagram is held separately so the flow can be published
-        // without an extra channel turn. Count it against the advertised
-        // per-flow limit: one initial packet plus this channel is at most 32.
+        // The initial packet plus this channel must stay within the queue cap.
         let (stream_sender, stream_receiver) =
             mpsc::channel::<NetworkPacket>(UDP_SESSION_CHANNEL_DEPTH);
         let deadline = tokio::time::Instant::now() + config.timeout_interval;
@@ -68,7 +72,8 @@ impl DatagramFlow {
             stream_receiver,
             queue_drops: config.queue_drops,
             up_pkt_sender,
-            first_payload: Some(payload),
+            read_payload: Some(payload),
+            read_offset: 0,
             timeout: Box::pin(tokio::time::sleep_until(deadline)),
             timeout_interval: config.timeout_interval,
             mtu: config.mtu,
@@ -134,11 +139,7 @@ impl DatagramFlow {
         }
     }
 
-    /// The largest datagram this stream can put on the tun as one packet.
-    ///
-    /// `create_rev_packet` builds option-less headers, so the only variable is
-    /// the address family: 20 bytes of IPv4 or 40 of IPv6, plus the 8-byte UDP
-    /// header. At the Android MTU of 1400 that is 1372 bytes for IPv4.
+    /// Largest payload that fits one option-less UDP/IP packet at this MTU.
     pub fn max_payload(&self) -> usize {
         const UDP_HEADER: usize = 8;
         const IPV4_HEADER: usize = 20;
@@ -150,14 +151,12 @@ impl DatagramFlow {
         usize::from(self.mtu).saturating_sub(ip_header + UDP_HEADER)
     }
 
-    /// Returns the local socket address of the UDP stream.
-    ///
+    /// Return the local socket address.
     pub fn local_addr(&self) -> SocketAddr {
         self.src_addr
     }
 
-    /// Returns the remote socket address of the UDP stream.
-    ///
+    /// Return the remote socket address.
     pub fn peer_addr(&self) -> SocketAddr {
         self.dst_addr
     }
@@ -165,6 +164,22 @@ impl DatagramFlow {
     fn reset_timeout(&mut self) {
         let deadline = tokio::time::Instant::now() + self.timeout_interval;
         self.timeout.as_mut().reset(deadline);
+    }
+
+    fn read_pending_payload(&mut self, buf: &mut tokio::io::ReadBuf<'_>) {
+        let Some(payload) = self.read_payload.as_ref() else {
+            return;
+        };
+        let end = self
+            .read_offset
+            .saturating_add(buf.remaining())
+            .min(payload.len());
+        buf.put_slice(&payload[self.read_offset..end]);
+        self.read_offset = end;
+        if self.read_offset == payload.len() {
+            self.read_payload = None;
+            self.read_offset = 0;
+        }
     }
 }
 
@@ -174,14 +189,11 @@ impl AsyncRead for DatagramFlow {
         cx: &mut std::task::Context<'_>,
         buf: &mut tokio::io::ReadBuf<'_>,
     ) -> std::task::Poll<std::io::Result<()>> {
-        // Both reads clamp to `buf.remaining()`. That used to be described here
-        // as the only thing standing between a 64 KiB caller buffer and a panic
-        // in `put_slice`; the clamps are the reason there is no panic, and both
-        // callers now size their buffer to the MTU, which is the most a
-        // datagram assembled from a tun packet can carry anyway.
-        if let Some(p) = self.first_payload.take() {
-            let length = p.len().min(buf.remaining());
-            buf.put_slice(&p[..length]);
+        if buf.remaining() == 0 {
+            return std::task::Poll::Ready(Ok(()));
+        }
+        if self.read_payload.is_some() {
+            self.read_pending_payload(buf);
             return std::task::Poll::Ready(Ok(()));
         }
         if matches!(self.timeout.as_mut().poll(cx), std::task::Poll::Ready(_)) {
@@ -192,10 +204,8 @@ impl AsyncRead for DatagramFlow {
 
         match self.stream_receiver.poll_recv(cx) {
             std::task::Poll::Ready(Some(p)) => {
-                if let Some(payload) = p.payload {
-                    let length = payload.len().min(buf.remaining());
-                    buf.put_slice(&payload[..length]);
-                }
+                self.read_payload = p.payload;
+                self.read_pending_payload(buf);
                 std::task::Poll::Ready(Ok(()))
             }
             std::task::Poll::Ready(None) => std::task::Poll::Ready(Ok(())),
@@ -211,16 +221,7 @@ impl AsyncWrite for DatagramFlow {
         buf: &[u8],
     ) -> std::task::Poll<std::io::Result<usize>> {
         self.reset_timeout();
-        // A datagram is atomic, and this used to be the one place that forgot
-        // it. `create_rev_packet` builds exactly one packet, and returning
-        // the clamped length told `write_all` that part of the message was
-        // still unsent — so it sent the remainder as a **second datagram** with
-        // the same ports. A DNS answer over 1372 bytes (DNSSEC, a large TXT, an
-        // EDNS0 buffer of 4096) reached the resolver as two fragments of a
-        // message that has no fragmentation, and the domain simply failed to
-        // resolve. Refusing is the honest answer: `EMSGSIZE` is what a real UDP
-        // socket returns here, and the DNS interceptor answers with the
-        // truncation bit set so the client retries over TCP, which it serves.
+        // UDP is atomic: refuse oversize writes instead of emitting a second datagram.
         let limit = self.max_payload();
         if buf.len() > limit {
             return std::task::Poll::Ready(Err(std::io::Error::new(
@@ -285,9 +286,9 @@ mod tests {
         Arc,
         atomic::{AtomicU64, Ordering},
     };
-    use std::time::Duration;
+    use std::{future::poll_fn, pin::Pin, time::Duration};
 
-    use tokio::io::AsyncWriteExt;
+    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt, ReadBuf};
     use tokio::sync::mpsc;
 
     use super::{DatagramFlow, UDP_SESSION_CHANNEL_DEPTH, UdpStreamConfig};
@@ -297,7 +298,9 @@ mod tests {
     /// 1400 minus a 20-byte IPv4 header and an 8-byte UDP header.
     const IPV4_LIMIT: usize = 1372;
 
-    fn stream() -> (DatagramFlow, mpsc::Receiver<super::NetworkPacket>) {
+    fn stream_with_first_payload(
+        first_payload: Vec<u8>,
+    ) -> (DatagramFlow, mpsc::Receiver<super::NetworkPacket>) {
         let (up_tx, up_rx) = mpsc::channel(UDP_DEVICE_QUEUE_DEPTH);
         let drops = Arc::new(AtomicU64::new(0));
         let src: SocketAddr = "10.0.0.2:53000".parse().expect("source address");
@@ -305,7 +308,7 @@ mod tests {
         let stream = DatagramFlow::new(
             src,
             dst,
-            Vec::new(),
+            first_payload,
             UdpPacketSender::new(up_tx, drops.clone()),
             UdpStreamConfig {
                 mtu: MTU,
@@ -317,11 +320,66 @@ mod tests {
         (stream, up_rx)
     }
 
+    fn stream() -> (DatagramFlow, mpsc::Receiver<super::NetworkPacket>) {
+        stream_with_first_payload(Vec::new())
+    }
+
     #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
     #[tokio::test]
     async fn the_limit_is_the_mtu_less_both_headers() {
         let (stream, _rx) = stream();
         assert_eq!(stream.max_payload(), IPV4_LIMIT);
+    }
+
+    #[tokio::test]
+    async fn a_small_read_buffer_preserves_the_first_datagram_tail() {
+        let payload: Vec<u8> = (0..17).collect();
+        let (mut stream, _rx) = stream_with_first_payload(payload.clone());
+
+        let mut empty = [];
+        let mut empty_buf = ReadBuf::new(&mut empty);
+        poll_fn(|cx| Pin::new(&mut stream).poll_read(cx, &mut empty_buf))
+            .await
+            .expect("empty read");
+        assert_eq!(empty_buf.filled().len(), 0);
+
+        let mut received = Vec::new();
+        for chunk_size in [3, 5, 2, 7] {
+            let mut chunk = vec![0; chunk_size];
+            stream
+                .read_exact(&mut chunk)
+                .await
+                .expect("read the complete first datagram in small chunks");
+            received.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(received, payload);
+    }
+
+    #[tokio::test]
+    async fn a_small_read_buffer_preserves_a_queued_datagram_tail() {
+        let (mut stream, _rx) = stream();
+        let sender = stream.stream_sender();
+        let mut first = [0_u8; 1];
+        assert_eq!(stream.read(&mut first).await.expect("initial datagram"), 0);
+
+        let payload: Vec<u8> = (20..37).collect();
+        let packet = stream
+            .create_rev_packet(64, payload.clone())
+            .expect("queued test datagram");
+        assert_eq!(sender.send(packet), SessionPacketDelivery::Delivered);
+
+        let mut received = Vec::new();
+        for chunk_size in [4, 1, 6, 6] {
+            let mut chunk = vec![0; chunk_size];
+            stream
+                .read_exact(&mut chunk)
+                .await
+                .expect("read the complete queued datagram in small chunks");
+            received.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(received, payload);
     }
 
     #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]

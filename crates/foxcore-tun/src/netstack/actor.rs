@@ -756,12 +756,7 @@ fn receive_buffer_bytes(tuple: NetworkTuple, config: &StackConfig) -> usize {
         .saturating_sub(ip_header + 20)
         .max(1);
     let requested = config.tcp_config.read_buffer_size.max(maximum_segment);
-    // smoltcp intentionally does not implement silly-window avoidance. A
-    // remainder smaller than one segment would otherwise be advertised as a
-    // permanently non-zero window that a conventional full-MSS sender cannot
-    // use. Charge and allocate the largest whole-segment window no larger than
-    // requested; the legacy one-byte test remains useful through the one-MSS
-    // floor, without reopening an unbounded channel above the socket.
+    // smoltcp lacks silly-window avoidance; expose only whole-segment capacity.
     (requested / maximum_segment).max(1) * maximum_segment
 }
 

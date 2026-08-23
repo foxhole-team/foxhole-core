@@ -1,43 +1,27 @@
-// TLS constants and utilities for REALITY client/server implementations
-
 use std::io::{self, Error, ErrorKind};
 
-// TLS ContentType values
 pub const CONTENT_TYPE_CHANGE_CIPHER_SPEC: u8 = 0x14;
 pub const CONTENT_TYPE_ALERT: u8 = 0x15;
 pub const CONTENT_TYPE_HANDSHAKE: u8 = 0x16;
 pub const CONTENT_TYPE_APPLICATION_DATA: u8 = 0x17;
 
-// TLS alert levels and descriptions
 pub const ALERT_LEVEL_WARNING: u8 = 0x01;
 pub const ALERT_DESC_CLOSE_NOTIFY: u8 = 0x00;
 
-// TLS 1.2 version bytes (0x03, 0x03) used in TLS 1.3 record layer for compatibility
 pub const VERSION_TLS_1_2_MAJOR: u8 = 0x03;
 pub const VERSION_TLS_1_2_MINOR: u8 = 0x03;
 
 pub const VERSION_TLS_1_0_MAJOR: u8 = 0x03;
 pub const VERSION_TLS_1_0_MINOR: u8 = 0x01;
 
-/// Byte offset of `legacy_session_id` inside a ClientHello or ServerHello
-/// *handshake message* (record header excluded).
-///
-/// `1 + 3 + 2 + 32 + 1`: handshake type, 24-bit length, `legacy_version`,
-/// `random`, and the one-byte session-id length. The number used to be spelled
-/// `39` in two files that must agree byte for byte — the hello builder and the
-/// REALITY AAD, which zeroes exactly this window before deriving the encrypted
-/// session id. If the two ever disagreed the server would authenticate against
-/// a different AAD than the client signed, and the failure would look like a
-/// bad short id rather than a layout bug. `construct_client_hello` asserts the
-/// constant against the hello it just built, so a change to the fields above
-/// fails at construction instead of on the wire.
+/// Offset of `legacy_session_id` in a hello handshake message (record excluded).
+/// Shared by the hello builder and REALITY AAD; construction asserts this layout.
 pub const HELLO_SESSION_ID_OFFSET: usize = 1 + 3 + 2 + 32 + 1;
 
 /// REALITY always sends a 32-byte session id: 16 bytes of encrypted metadata
 /// plus 16 bytes of tag.
 pub const HELLO_SESSION_ID_LEN: usize = 32;
 
-// TLS 1.3 handshake message types
 #[cfg(any(test, feature = "testkit"))]
 pub const HANDSHAKE_TYPE_SERVER_HELLO: u8 = 2;
 pub const HANDSHAKE_TYPE_ENCRYPTED_EXTENSIONS: u8 = 8;
@@ -49,38 +33,12 @@ pub const HANDSHAKE_TYPE_COMPRESSED_CERTIFICATE: u8 = 25;
 pub const HANDSHAKE_TYPE_CERTIFICATE_VERIFY: u8 = 15;
 pub const HANDSHAKE_TYPE_FINISHED: u8 = 20;
 
-// TLS 1.3 record size limits per RFC 8446
-//
-// The TLS record header's `length` field specifies the size of the ENCRYPTED payload.
-// Per RFC 8446, the TLS 1.3 limit is stricter than TLS 1.2:
-//
-// - TLS 1.3: Plaintext limit = 16,384 bytes (2^14)
-//   Encryption overhead allowance = 256 bytes
-//   Ciphertext limit = 16,384 + 256 = 16,640 bytes
-//
-// - TLS 1.2: Plaintext limit = 16,384 bytes (2^14)
-//   Encryption overhead allowance = 2,048 bytes
-//   Ciphertext limit = 16,384 + 2,048 = 18,432 bytes
-//
-// REALITY uses TLS 1.3, so we MUST use the TLS 1.3 limit. Using the larger
-// TLS 1.2 limit causes "record overflow" errors in libraries like utls.
+// RFC 8446 limits TLS 1.3 ciphertext to 2^14 bytes plus 256 bytes overhead.
 
 /// Maximum TLS 1.3 ciphertext payload size (16,640 bytes)
 pub const MAX_TLS_CIPHERTEXT_LEN: usize = 16384 + 256;
 
-/// Maximum plaintext payload size for a single TLS 1.3 record
-///
-/// RFC 8446 Section 5.1: "The record layer fragments information blocks into
-/// TLSPlaintext records carrying data in chunks of 2^14 bytes or less."
-///
-/// This is the hard limit enforced by TLS implementations.
-/// The 256-byte allowance in MAX_TLS_CIPHERTEXT_LEN is for:
-/// - AEAD tag (16 bytes for AES-GCM)
-/// - Content type byte (1 byte)
-/// - Optional padding (up to 239 bytes)
-///
-/// We MUST NOT exceed 16384 bytes of actual plaintext per record, or clients
-/// will reject with "record overflow" error.
+/// RFC 8446 §5.1 maximum plaintext payload for one TLS 1.3 record.
 pub const MAX_TLS_PLAINTEXT_LEN: usize = 16384;
 
 /// TLS record header size (ContentType + ProtocolVersion + Length)
@@ -98,13 +56,7 @@ pub const PLAINTEXT_READ_BUF_CAPACITY: usize = TLS_MAX_RECORD_SIZE * 2;
 /// Combined limit for queued plaintext and ciphertext (matches rustls DEFAULT_BUFFER_LIMIT)
 pub const OUTGOING_BUFFER_LIMIT: usize = 64 * 1024;
 
-/// Strip TLS 1.3 content type trailer from decrypted plaintext slice.
-///
-/// TLS 1.3 format: content || type_byte
-/// Returns (content_type, valid_content_length) without modifying the slice.
-///
-/// This is the zero-allocation version for use with in-place decryption.
-/// NOTE: Does NOT strip padding zeros - our implementation doesn't add padding.
+/// Return the TLS 1.3 content type and unpadded length without allocation.
 #[inline]
 #[cfg(test)]
 pub fn strip_content_type_slice(plaintext: &[u8]) -> io::Result<(u8, usize)> {
@@ -112,7 +64,6 @@ pub fn strip_content_type_slice(plaintext: &[u8]) -> io::Result<(u8, usize)> {
         return Err(Error::new(ErrorKind::InvalidData, "Empty plaintext"));
     }
 
-    // No padding in our implementation
     let content_type = plaintext[plaintext.len() - 1];
 
     if content_type != CONTENT_TYPE_HANDSHAKE
@@ -128,17 +79,7 @@ pub fn strip_content_type_slice(plaintext: &[u8]) -> io::Result<(u8, usize)> {
     Ok((content_type, plaintext.len() - 1))
 }
 
-/// Strip TLS 1.3 content type trailer from decrypted plaintext.
-///
-/// TLS 1.3 format: content || type_byte
-/// Returns the actual content type and modifies plaintext to contain only content.
-///
-/// NOTE: This function does NOT strip padding zeros. Our REALITY implementation
-/// does not add padding, so stripping zeros could corrupt data that legitimately
-/// ends with zero bytes. Use `strip_content_type_with_padding` for messages from
-/// external implementations that may use padding.
-///
-/// Only used by tests - the hot path uses `strip_content_type_slice` for zero-allocation.
+/// Remove this implementation's unpadded TLS 1.3 content-type trailer.
 #[cfg(test)]
 pub fn strip_content_type(plaintext: &mut Vec<u8>) -> io::Result<u8> {
     let (content_type, valid_len) = strip_content_type_slice(plaintext)?;
@@ -146,19 +87,12 @@ pub fn strip_content_type(plaintext: &mut Vec<u8>) -> io::Result<u8> {
     Ok(content_type)
 }
 
-/// Strip TLS 1.3 content type trailer and padding from decrypted plaintext.
-///
-/// TLS 1.3 format: content || type_byte || padding_zeros
-/// Returns the actual content type and modifies plaintext to contain only content.
-///
-/// Use this for messages from external TLS implementations that
-/// may add optional padding per RFC 8446 Section 5.4.
+/// Remove RFC 8446 §5.4 padding and the TLS 1.3 content-type trailer.
 pub fn strip_content_type_with_padding(plaintext: &mut Vec<u8>) -> io::Result<u8> {
     if plaintext.is_empty() {
         return Err(Error::new(ErrorKind::InvalidData, "Empty plaintext"));
     }
 
-    // Remove trailing zeros (padding) per RFC 8446 Section 5.4
     while plaintext.last() == Some(&0) {
         plaintext.pop();
     }

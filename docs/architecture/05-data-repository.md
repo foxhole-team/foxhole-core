@@ -7,9 +7,7 @@ Five independent feeds, one signing key, one publication set.
 
 ## 5.1 Build model
 
-One scheduled GitHub Actions job builds the feeds together and publishes them as one set. Four are
-published today; the fifth, TLS fingerprint tables, is built and gated but withheld until the core
-revision it mirrors is public.
+One scheduled GitHub Actions job builds all five feeds together and publishes them as one set.
 
 ```mermaid
 flowchart TD
@@ -35,8 +33,8 @@ flowchart TD
     V -->|fail| X["nothing published"]
 ```
 
-`build-all-feeds.sh:14-18` always ends with `verify-feeds.sh`. CI runs the same gate at
-`.github/workflows/feeds.yml:159`, after signing and before the Pages deploy.
+`build-all-feeds.sh:8-18` builds every feed and always ends with `verify-feeds.sh`. CI runs the same
+gate at `.github/workflows/feeds.yml:159`, after signing and before the Pages deploy.
 
 ---
 
@@ -81,12 +79,12 @@ Notable per-builder detail:
 
 | Script | Detail |
 |---|---|
-| `build-adguard-dns-filter.sh:199-215` | the **only** builder that pre-checks the signing key: derives the pubkey DER SHA-256 from the private key and refuses a mismatch before signing; re-verifies its own signature afterwards (`:322-325`) |
-| `build-adguard-dns-filter.sh:244` | binds `key_sha256` into the manifest |
+| `build-adguard-dns-filter.sh:198-220` | the **only** builder that pre-checks the signing key: derives the pubkey DER SHA-256 from the private key and refuses a mismatch before signing; re-verifies its own signature afterwards (`:322-325`) |
+| `build-adguard-dns-filter.sh:222-247` | binds `key_sha256` into the manifest |
 | `build-bridges.sh:41-68` | `curl --max-filesize 262144`, re-emitted with `jq --sort-keys --indent 2`. **Not byte-reproducible:** `--sort-keys` orders object keys, not array elements, so two builds of an unchanged upstream can emit the same bridge set in a different order and hash differently |
-| `build-threat-intel.sh:96-275` | embedded Python/PyYAML converter, emits document `schema: 3` (`:256`) |
-| `build-geoip.sh:131-148` | only manifest with an `artifacts` **array** and a top-level `version` copied from upstream `package.json` |
-| `build-fingerprints.sh:118-132` | derives per-profile `fingerprint_sha256` via `jq -cSa` over the `fingerprint` object |
+| `build-threat-intel.sh:96-275` | embedded Python/PyYAML converter, emits document `schema: 3` (`:242-249`) |
+| `build-geoip.sh:118-147` | only manifest with an `artifacts` **array** and a top-level `version` copied from upstream `package.json` |
+| `build-fingerprints.sh:77-119` | derives per-profile `fingerprint_sha256` via `jq -cSa` over the `fingerprint` object |
 
 ---
 
@@ -110,7 +108,7 @@ flowchart LR
 | Key DER SHA-256 | `3acd123f1fd03f8aee97b2e71029ba1f6efdd9c17703419d7cda78a790198d69` |
 | Bound into DNS manifest | `manifest.json` → `key_sha256` (same value) |
 | Signing secret | repo secret `FOXHOLE_DNS_SIGNING_KEY_PEM`, `main` publication only |
-| Signing sites | `build-adguard-dns-filter.sh:318-344`, `build-bridges.sh:119-146`, `build-threat-intel.sh:391-423`, `build-geoip.sh:169-196`, `build-fingerprints.sh:214-241` |
+| Signing sites | `build-adguard-dns-filter.sh:318-344`, `build-bridges.sh:118-145`, `build-threat-intel.sh:377-409`, `build-geoip.sh:167-194`, `build-fingerprints.sh:195-222` |
 
 The `.sig` files are produced only into `public/`; they are never committed. `feeds.yml:35` asserts
 `test ! -e manifest.json.sig` on the tree. The committed root snapshots therefore **cannot** be
@@ -143,10 +141,10 @@ flowchart TD
 
 Feed order: DNS → bridges → threat-intel → geoip → fingerprints (`verify-feeds.sh:173-191`).
 
-> **Ordering note.** The comment at `verify-feeds.sh:118` says "Authenticate bytes before trusting
-> manifest fields", but the schema/format/name/`key_sha256` checks at `:99-116` run *before* the
-> signature check at `:119-127`. Failures accumulate and the script still exits non-zero, so the
-> outcome is unaffected — but the code does not do what the comment claims.
+Structural checks intentionally run before signature verification so the local publisher gate can
+aggregate candidate diagnostics (`verify-feeds.sh:99-127`). A publishable run still requires every
+detached signature to verify; none of the parsed fields is accepted by a consumer on the strength
+of this diagnostic ordering.
 
 ---
 
@@ -164,7 +162,7 @@ flowchart LR
     K3 --> K4["size + sha256"]
     K4 --> K5["artifact structure re-parse"]
     K5 --> N["Rust core"]
-    N --> N1["DNS: full re-verify, ruleset.rs:250"]
+    N --> N1["DNS: full re-verify, ruleset.rs:248-295"]
     N --> N2["fingerprints: re-derive every digest, runtime_tables.rs:154-169"]
 ```
 
@@ -172,6 +170,6 @@ flowchart LR
 
 ## 5.7 Inconsistencies found
 
-- `verify-feeds.sh:118` describes signature verification before manifest-field checks, while the
-  implementation validates those fields first. Both paths still fail closed.
-- `*-source-info.json` files are publication audit artifacts; the client does not consume them.
+No open publication-gate inconsistency was found in this pass. `*-source-info.json` files are
+publication audit artifacts by design; the client consumes the signed manifests and artifacts,
+not these provenance companions.

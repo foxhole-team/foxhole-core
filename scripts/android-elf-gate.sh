@@ -2,7 +2,8 @@
 # Refuse Android JNI artifacts that would only fail when loaded on a device.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+ROOT_LOGICAL="$(cd "$(dirname "$0")/.." && pwd -L)"
+ROOT="$(cd "$(dirname "$0")/.." && pwd -P)"
 LIB_ROOT="${1:-"$ROOT/target/android-jni"}"
 JNI_SOURCE="$ROOT/crates/foxcore-android/src"
 # Kept in step with scripts/android-build.sh.
@@ -26,6 +27,44 @@ NDK="$(find_ndk)" || {
     echo "Android NDK $NDK_VERSION was not found; set ANDROID_NDK_HOME." >&2
     exit 1
 }
+
+absolute_input_path() {
+    local path="$1"
+    case "$path" in
+        /*) printf '%s\n' "$path" ;;
+        *) printf '%s\n' "$ROOT_LOGICAL/$path" ;;
+    esac
+}
+
+logical_path() {
+    local path="$1"
+    if [ -d "$path" ]; then
+        (cd "$path" && pwd -L)
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+physical_path() {
+    local path="$1"
+    if [ -d "$path" ]; then
+        (cd "$path" && pwd -P)
+    else
+        printf '%s\n' "$path"
+    fi
+}
+
+LIB_ROOT_RAW="$(absolute_input_path "$LIB_ROOT")"
+LIB_ROOT_LOGICAL="$(logical_path "$LIB_ROOT_RAW")"
+LIB_ROOT_PHYSICAL="$(physical_path "$LIB_ROOT_RAW")"
+CARGO_HOME_RAW="$(absolute_input_path "${CARGO_HOME:-$HOME/.cargo}")"
+CARGO_HOME_LOGICAL="$(logical_path "$CARGO_HOME_RAW")"
+CARGO_HOME_PHYSICAL="$(physical_path "$CARGO_HOME_RAW")"
+RUSTUP_HOME_RAW="$(absolute_input_path "${RUSTUP_HOME:-$HOME/.rustup}")"
+RUSTUP_HOME_LOGICAL="$(logical_path "$RUSTUP_HOME_RAW")"
+RUSTUP_HOME_PHYSICAL="$(physical_path "$RUSTUP_HOME_RAW")"
+NDK_LOGICAL="$(logical_path "$NDK")"
+NDK_PHYSICAL="$(physical_path "$NDK")"
 
 READELF=""
 for candidate in "$NDK"/toolchains/llvm/prebuilt/*/bin/llvm-readelf; do
@@ -96,6 +135,36 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
     programs="$("$READELF" -lW "$lib")"
     symbols="$("$READELF" -Ws "$lib")"
 
+    leaked_host_paths="$(
+        {
+            # These roots are distinctive enough to find even when a panic or
+            # linker string prefixes the path. `/private/` and `/tmp/` stay
+            # anchored because dependency paths such as `src/private/de.rs`
+            # are valid virtual paths after remapping.
+            strings -a "$lib" |
+                grep -E '/(Users|home|root|builds)/|^/(private|tmp|var/folders)/' || true
+            for host_root in \
+                "$ROOT_LOGICAL" \
+                "$ROOT" \
+                "$LIB_ROOT_RAW" \
+                "$LIB_ROOT_LOGICAL" \
+                "$LIB_ROOT_PHYSICAL" \
+                "$CARGO_HOME_RAW" \
+                "$CARGO_HOME_LOGICAL" \
+                "$CARGO_HOME_PHYSICAL" \
+                "$RUSTUP_HOME_RAW" \
+                "$RUSTUP_HOME_LOGICAL" \
+                "$RUSTUP_HOME_PHYSICAL" \
+                "$HOME/" \
+                "$NDK" \
+                "$NDK_LOGICAL" \
+                "$NDK_PHYSICAL"; do
+                [ -n "$host_root" ] || continue
+                strings -a "$lib" | grep -F "$host_root" || true
+            done
+        } | sort -u | sed -n '1,5p'
+    )"
+
     case "$abi" in
         arm64-v8a) machine="AArch64" ;;
         armeabi-v7a) machine="ARM" ;;
@@ -150,6 +219,11 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
         echo "$abi: stack is executable or malformed" >&2
         lib_status=1
     fi
+    if [ -n "$leaked_host_paths" ]; then
+        echo "$abi: build-host paths are embedded in the Rust library:" >&2
+        printf '   %s\n' "$leaked_host_paths" >&2
+        lib_status=1
+    fi
 
     loads="$(awk '$1 == "LOAD" { print $NF }' <<<"$programs")"
     load_count="$(awk 'NF { count += 1 } END { print count + 0 }' <<<"$loads")"
@@ -176,7 +250,7 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
 
     if [ "$lib_status" -eq 0 ]; then
         exported="$(printf '%s\n' "$EXPECTED_EXPORTS" | awk 'NF { count += 1 } END { print count + 0 }')"
-        echo "$abi: ELF gate PASS (jni_exports=$exported, load_align=16KiB)"
+        echo "$abi: ELF gate PASS (jni_exports=$exported, load_align=16KiB, host_paths=0)"
     else
         echo "$abi: ELF gate FAIL" >&2
         status=1

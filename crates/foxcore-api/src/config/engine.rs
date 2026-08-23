@@ -190,20 +190,7 @@ impl EngineConfig {
                 "I2P routes require traffic.i2p_enabled to be true or auto".into(),
             ));
         }
-        // A fake address is a promise that something will restore the name from
-        // it before the flow leaves the device. A proxy outbound keeps that
-        // promise: the userspace stack terminates the flow and re-dials it by
-        // name. An L3 packet tunnel has no stack in the path at all — the packet
-        // is translated, sealed and handed to the peer with the destination the
-        // application wrote — so the synthetic address goes on the wire and
-        // nothing routes it. Every counter stays clean while it happens, which
-        // is why device acceptance was needed to expose it.
-        //
-        // Overlay names are not the problem and must not read as the problem:
-        // `.onion`/`.i2p` flows are sent to the stack before routing is
-        // consulted, so their fake addresses never reach the packet path. What
-        // cannot work is a *clearnet* name answered with a fake address on a
-        // profile whose primary outbound carries flows at L3.
+        // An L3 peer cannot restore a clearnet name from its synthetic address.
         if self.outbound.is_packet_tunnel() && self.dns.mode == DnsMode::FakeIp {
             return Err(ConfigError::Invalid(format!(
                 "dns.mode='fake_ip' and an L3 packet tunnel as the primary outbound cannot \
@@ -215,21 +202,7 @@ impl EngineConfig {
                 self.dns.fake_ipv4_pool
             )));
         }
-        // The other thing the DNS block can ask of a primary that is not a
-        // stream outbound, and the quieter of the two.
-        //
-        // `dns.route` defaults to `primary`, so a document that merely sets
-        // `dns.upstreams` — the ordinary way to configure a resolver — asks for
-        // it without naming it. On an L3 profile the registry's default is a
-        // clearnet placeholder that dials on a protected socket beside the
-        // tunnel, so every intercepted lookup left in the open: the names, and
-        // with them the browsing the tunnel exists to hide, while the tunnel
-        // itself reported a healthy session. The interceptor now refuses this at
-        // query time, but a profile that cannot resolve must not start at all
-        // rather than start and fail every lookup.
-        //
-        // `dns.route='direct'` stays allowed: it is the same socket, but a
-        // document that names it has chosen it.
+        // `primary` cannot resolve through an L3 tunnel; explicit `direct` is consent.
         if self.outbound.is_packet_tunnel()
             && self.dns.intercepts()
             && self.dns.route == DnsRoute::Primary
@@ -243,10 +216,7 @@ impl EngineConfig {
                     .into(),
             ));
         }
-        // Reached only with `real_ip`, because the rule above already refused
-        // fake-IP here. Saying it in one step matters: the overlay rules below
-        // would otherwise answer "set fake_ip", and setting it lands on the
-        // refusal above with no hint that the two demands are incompatible.
+        // Overlay fake-IP and a primary L3 packet path are mutually exclusive.
         if self.outbound.is_packet_tunnel()
             && ((has_tor_route && self.traffic.tor_enabled != Some(false))
                 || (has_i2p_route && self.traffic.i2p_enabled != Some(false)))
@@ -259,9 +229,7 @@ impl EngineConfig {
                     .into(),
             ));
         }
-        // Without fake-IP the DNS gateway may not even be constructed (it needs an
-        // upstream, an advertise address or fake-IP), and then `.onion` lookups leave
-        // as ordinary port-53 traffic to a clearnet resolver.
+        // Without fake-IP, overlay names could escape to a clearnet resolver.
         if has_tor_route
             && self.traffic.tor_enabled != Some(false)
             && self.dns.mode != DnsMode::FakeIp

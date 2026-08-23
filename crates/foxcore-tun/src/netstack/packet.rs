@@ -2,10 +2,7 @@ use crate::netstack::error::StackError;
 use etherparse::{Ipv4Header, Ipv6Header, NetSlice, SlicedPacket, TcpHeader, UdpHeader};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-/// Enough for the largest header pair this stack writes: a 60-byte IPv4 header
-/// with full options, or a 40-byte IPv6 header, followed by a 60-byte TCP header
-/// with full options. Over-reserving by a few dozen bytes once per buffer is the
-/// point — it is what keeps the reallocation out of the per-packet path.
+/// Maximum IPv4-options plus TCP-options header pair.
 const MAX_HEADER_LEN: usize = 60 + 60;
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone, Copy)]
@@ -131,24 +128,7 @@ impl NetworkPacket {
         Ok(buf)
     }
 
-    /// Serialise into a buffer the caller owns.
-    ///
-    /// The data path uses this one. `to_bytes` above starts from a zero-capacity
-    /// `Vec` and lets `etherparse` grow it field by field — five or six
-    /// reallocations for the headers alone, then one more for the payload — and
-    /// it ran on every packet leaving for the tun. Writing into a buffer that is
-    /// cleared and reused between packets makes that a single reserve on the
-    /// first packet and none afterwards.
-    ///
-    /// Appends rather than clearing, so a caller that needs a prefix in front of
-    /// the packet — the four-byte packet-information header on unix tun devices
-    /// — can write it first and get one contiguous buffer. That prefix used to
-    /// be inserted afterwards with `splice(0..0, ..)`, which memmoves the whole
-    /// packet one position to the right, once per packet, forever.
-    ///
-    /// `reserve` before the headers rather than after: growing a buffer that
-    /// already holds forty bytes copies those forty bytes, which is the cost
-    /// this is here to avoid.
+    /// Append serialized headers and payload to a reusable caller-owned buffer.
     pub fn write_to(&self, buf: &mut Vec<u8>) -> Result<(), StackError> {
         let payload_len = self.payload.as_ref().map_or(0, Vec::len);
         buf.reserve(MAX_HEADER_LEN + payload_len);
@@ -174,24 +154,6 @@ impl NetworkPacket {
         }
     }
 }
-
-// pub struct UdpPacket {
-//     header: UdpHeader,
-// }
-
-// impl UdpPacket {
-//     pub fn inner(&self) -> &UdpHeader {
-//         &self.header
-//     }
-// }
-
-// impl From<&UdpHeader> for UdpPacket {
-//     fn from(header: &UdpHeader) -> Self {
-//         UdpPacket {
-//             header: header.clone(),
-//         }
-//     }
-// }
 
 #[cfg(test)]
 pub mod tests {
