@@ -6,8 +6,9 @@
 //! (`RuntimeConfig::tcp_idle_timeout_s`), so the core was not the one closing
 //! them — the stack underneath was.
 //!
-//! `ipstack 1.0.0` armed a sixty-second session timer inside `poll_read` and
-//! answered it with an RST. Two things made that invisible and fatal at once:
+//! The removed `ipstack 1.0.0` backend armed a sixty-second session timer inside
+//! `poll_read` and answered it with an RST. Two things made that invisible and
+//! fatal at once:
 //!
 //! * The stack answers TCP keepalives itself, in its session task. An empty ACK
 //!   never reaches `poll_read`, so a connection whose *only* liveness is a
@@ -18,8 +19,8 @@
 //!   already shown the timer *never* fires where it is wanted; the
 //!   device found the other half, that it fires where it must not.
 //!
-//! The fork deletes the timer — see `TcpConfig` — and this is the proof, which
-//! costs the wall-clock minute it is about. There is no cheaper one: the number
+//! The replacement has no such session timer, and this is the proof, which costs
+//! the wall-clock minute it is about. There is no cheaper one: the number
 //! under test was a hard-coded constant, so a shorter window cannot stand in for
 //! it, and a paused clock cannot drive a socketpair. It runs in its own binary
 //! so the rest of the suite overlaps it.

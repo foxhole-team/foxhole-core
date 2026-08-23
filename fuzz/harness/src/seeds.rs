@@ -8,7 +8,8 @@
 
 /// Every target, in the order they are worth fuzzing — most network-exposed
 /// first.
-pub const TARGETS: [&str; 8] = [
+pub const TARGETS: [&str; 9] = [
+    "netstack_packet",
     "flow_key_from_packet",
     "dns_message",
     "wireguard_message",
@@ -29,6 +30,7 @@ pub struct Seed {
 /// would look like "seeded" to every caller.
 pub fn seeds_for(target: &str) -> Vec<Seed> {
     match target {
+        "netstack_packet" => netstack_seeds(),
         "flow_key_from_packet" => flow_key_seeds(),
         "dns_message" => dns_seeds(),
         "wireguard_message" => wireguard_seeds(),
@@ -71,6 +73,59 @@ fn ports(source: u16, destination: u16) -> Vec<u8> {
     payload[0..2].copy_from_slice(&source.to_be_bytes());
     payload[2..4].copy_from_slice(&destination.to_be_bytes());
     payload
+}
+
+fn tcp_header(source: u16, destination: u16, flags: u8) -> Vec<u8> {
+    let mut header = vec![0_u8; 20];
+    header[0..2].copy_from_slice(&source.to_be_bytes());
+    header[2..4].copy_from_slice(&destination.to_be_bytes());
+    header[4..8].copy_from_slice(&1_u32.to_be_bytes());
+    header[12] = 5 << 4;
+    header[13] = flags;
+    header[14..16].copy_from_slice(&16_384_u16.to_be_bytes());
+    header
+}
+
+fn udp_header(source: u16, destination: u16, payload: &[u8]) -> Vec<u8> {
+    let mut datagram = ports(source, destination);
+    let length = u16::try_from(datagram.len() + payload.len()).expect("seed datagram is small");
+    datagram[4..6].copy_from_slice(&length.to_be_bytes());
+    datagram.extend_from_slice(payload);
+    datagram
+}
+
+fn netstack_seeds() -> Vec<Seed> {
+    let tcp = tcp_header(51_000, 443, 0x02);
+    let udp = udp_header(40_000, 53, b"query");
+
+    let mut ipv6_tcp = vec![0_u8; 40 + tcp.len()];
+    ipv6_tcp[0] = 0x60;
+    ipv6_tcp[4..6].copy_from_slice(&(tcp.len() as u16).to_be_bytes());
+    ipv6_tcp[6] = 6;
+    ipv6_tcp[7] = 64;
+    ipv6_tcp[8..24].copy_from_slice(&[0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+    ipv6_tcp[24..40].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    ipv6_tcp[40..].copy_from_slice(&tcp);
+
+    let mut ipv6_extensions = vec![0_u8; 40 + 8 + 8];
+    ipv6_extensions[0] = 0x60;
+    ipv6_extensions[4..6].copy_from_slice(&16_u16.to_be_bytes());
+    ipv6_extensions[6] = 0; // hop-by-hop options
+    ipv6_extensions[7] = 64;
+    ipv6_extensions[8..24].copy_from_slice(&[0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
+    ipv6_extensions[24..40]
+        .copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    ipv6_extensions[40] = 58; // ICMPv6 follows the extension header
+    ipv6_extensions[48] = 128; // echo request
+
+    vec![
+        seed("ipv4_tcp_syn", ipv4_packet(5, 6, 0, &tcp)),
+        seed("ipv4_udp", ipv4_packet(5, 17, 0, &udp)),
+        seed("ipv4_options", ipv4_packet(6, 17, 0, &udp)),
+        seed("ipv4_icmp", ipv4_packet(5, 1, 0, &[8, 0, 0, 0, 0, 1, 0, 1])),
+        seed("ipv6_tcp_syn", ipv6_tcp),
+        seed("ipv6_extensions", ipv6_extensions),
+    ]
 }
 
 fn flow_key_seeds() -> Vec<Seed> {

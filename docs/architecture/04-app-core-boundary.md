@@ -26,11 +26,14 @@ flowchart TD
 |---|---|
 | Library | `libfoxhole_native.so` — `crate-type = ["cdylib"]`, lib name `foxhole_native` |
 | Load site | `core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java:51-53` — the only one |
-| Shipped Engine seam | **33 Rust exports / 32 Java declarations** (`FoxholeNativeEngine.java:55-243`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
+| Shipped Engine seam | **33 Rust exports / 32 Java declarations** (`FoxholeNativeEngine.java:55-227`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
 | Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` expose the product-reachable subset; link import and continuity stop at Java compatibility declarations |
 | Cross-repository gate | The app compares every shipped Engine export with Java declarations and production Kotlin references (`scripts/verify-foxcore-jni-seam.sh`), then executes product-reachable calls against the packaged `.so` on Android (`FoxCoreNativeSeamAndroidTest.kt`). |
+| Core release version | `0.0.3` comes from the workspace package (`Cargo.toml:36-41`). `CORE_VERSION` is `CARGO_PKG_VERSION` (`crates/foxcore-api/src/lib.rs:38-40`) and supplies both JNI `nativeVersion` (`crates/foxcore-android/src/lib.rs:105-115`) and capabilities JSON (`crates/foxcore-android/src/capabilities.rs:699-707`). |
 | ABI version | `1`, frozen; class and package name are part of the ABI |
 | Structured documents | JSON, with no protobuf. TUN/network handles and signed DNS/fingerprint payloads use their native scalar/byte-array forms. |
+| Build-path contract | `scripts/android-build.sh:67-98` remaps the checkout, Cargo home and Rustup home before compiling. The ELF gate refuses build-host paths (`scripts/android-elf-gate.sh:138-166,222-225`), and the release reproducibility check compares bytes from different checkout and Cargo-home paths (`scripts/reproducible-build.sh:46-150`). |
+| Release provenance | release requires a verified main commit plus a successful dev CI run with the identical Git tree (`.github/workflows/release.yml:35-117`), then rebuilds and re-verifies the JNI manifest, both ARM ABIs and SBOM inputs on main (`.github/workflows/release.yml:133-177`). `RELEASE.json` binds both commits, their shared tree and the gate run; SHA-256 and keyless attestation cover the archive (`:179-210`). |
 
 ---
 
@@ -51,7 +54,7 @@ flowchart TD
 
 Two documents, two shapes. The intermediate is sing-box-like and never crosses the FFI; the engine
 config is FoxCore's own schema. `log` may only carry `{level, timestamp}` and is dropped;
-`experimental` must be empty (`FoxCoreConfigTranslator.kt:265-292`).
+`experimental` must be empty (`FoxCoreConfigTranslator.kt:260-289`).
 
 Sub-translators, all in `core/runtime/src/main/kotlin/com/foxhole/core/runtime/`:
 
@@ -61,9 +64,9 @@ Sub-translators, all in `core/runtime/src/main/kotlin/com/foxhole/core/runtime/`
 | `FoxCoreTunTranslator.kt:54` | `translateFoxCoreControlProxy` | `runtime.control_proxy` |
 | `FoxCoreOutboundTranslator.kt:23` | `translate` | `FoxCoreOutboundPlan` — primary, named, packet-tunnel flag, overlays |
 | `FoxCoreProxyOutboundTranslator.kt:8` | `translateFoxCoreProxyOutbound` | per-protocol outbound object |
-| `FoxCoreWireGuardTranslator.kt:9` | `translateFoxCoreWireGuard` | `type:"wireguard"` |
+| `FoxCoreWireGuardTranslator.kt:26` | `translateFoxCoreWireGuard` | `type:"wireguard"` |
 | `FoxCoreTorTranslator.kt:10,62` | `translateOverlay` / `translateOutbound` | named `tor` outbound |
-| `FoxCoreTlsTransportTranslator.kt:18,236` | `translateFoxCoreTls` / `translateFoxCoreTransport` | `tls` / `transport` sub-objects |
+| `FoxCoreTlsTransportTranslator.kt:18,211` | `translateFoxCoreTls` / `translateFoxCoreTransport` | `tls` / `transport` sub-objects |
 | `FoxCorePolicyTranslator.kt:30` | `translate` | dns, routes, traffic, `dns.rule_sets[]` |
 
 Rejections are a closed enum (`FoxCoreConfigRejection`); the exception never echoes document values.
@@ -123,7 +126,7 @@ sequenceDiagram
 ```
 
 Host contract: `RuntimeServiceHost` — `core/runtime/.../RuntimeNativeSupport.kt:12-32`;
-implementation `FoxholeVpnService.kt:488-497`.
+implementation `FoxholeVpnService.kt:462-481`.
 
 Panic containment: every JNI entry is wrapped in `catch_unwind(AssertUnwindSafe(...))`; a contained
 panic becomes `IllegalStateException("panic inside FoxCore JNI boundary")` or a `-1`-family code.
@@ -300,7 +303,7 @@ This is the self-kill path recorded in the teardown notes.
 | Native stop reaper (Rust) | 40 attempts × `STOP_TIMEOUT` |
 
 `CoreRuntime::start` acquires a **process-wide worker lease** — only one data-plane worker per
-process (`crates/foxcore-runtime/src/start.rs:115-116`).
+process (`crates/foxcore-runtime/src/start.rs:119-120`).
 
 ---
 
@@ -311,11 +314,12 @@ The release surface and the product call graph are different questions:
 | Surface | Boundary status | Product reachability |
 |---|---|---|
 | Engine lifecycle | 33 Rust exports, 32 Java declarations | Complete by design: only legacy `nativeStart` is omitted; every production start passes an Android `Network` handle. |
-| Signed DNS bootstrap | Java declaration, `FoxCoreNativeApi` method and starter dispatch are present (`FoxCoreNativeSeam.kt:73-82,224-243`; `FoxCoreNativeSessionStarter.kt:235-266`) | A persisted signed update is verified as part of `nativeStartWithNetworkAndDnsRuleSet`, before the engine is published. |
-| Traffic map | `nativeTrafficMap` is declared and called by `JniFoxCoreNativeApi` (`FoxCoreNativeSeam.kt:291-293`) | `FoxCoreRuntime.runtimeTrafficMapJson` uses the canonical call (`FoxCoreRuntime.kt:655-658`); `nativeConnections` remains a compatibility alias. |
+| Signed DNS bootstrap | Java declaration, `FoxCoreNativeApi` methods and JNI calls are present (`FoxCoreNativeSeam.kt:73-99,219-270`); start dispatch is at `FoxCoreNativeSessionStarter.kt:252-283` | A persisted signed update is verified as part of `nativeStartWithNetworkAndDnsRuleSet`, before the engine is published; the same boundary also supports generation-fenced live signed install. |
+| Traffic map | `nativeTrafficMap` is declared and called by `JniFoxCoreNativeApi` (`FoxCoreNativeSeam.kt:284-288`) | `FoxCoreRuntime.runtimeTrafficMapJson` uses the canonical call (`FoxCoreRuntime.kt:655-658`); `nativeConnections` remains a compatibility alias. |
 | Link import | The two Rust exports and Java declarations are retained as compatibility-only ABI and classified by `verify-foxcore-jni-seam.sh` | **No Kotlin product wrapper or importer/data-layer call site.** `ProfileImportParser` remains the app's parser. The native DTO is not a drop-in replacement for the app's normalized profile contract. |
 | Continuity | The Rust export and Java declaration are retained as compatibility-only ABI | Audit events are parsed and journalled, but the translator keeps automatic continuity defaults and no service/UI action exposes a confirmation token. |
 | Live DNS install | `nativeInstallDnsRuleSet` is called through a generation-fenced runtime method after the exact verified bytes are persisted | A stable engine with the same trust adopts the update live and commits the returned revision. Enable or trust rotation changes the immutable fingerprint and uses signed replacement start; no active engine defers to the next start. |
+| Native Rust build paths | Release compilation remaps checkout, Cargo-home and Rustup-home variants; the ELF gate rejects detected host roots (`scripts/android-build.sh:67-98`; `scripts/android-elf-gate.sh:138-166,222-225`) | The release proof builds from a second checkout and Cargo home, requires byte-identical `.so` files, and checks both for path leaks (`scripts/reproducible-build.sh:46-150`). The Rust library requires no fixed builder directory. |
 | Component/share JNI | 19 exports are frozen in ABI v1 and remain in release ELF files | Guard has no product call site. They do not count toward the separate 33/32 Engine seam. |
 
 ### Two link parsers, two answers

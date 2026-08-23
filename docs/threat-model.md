@@ -97,6 +97,17 @@ These controls do not establish trust in the server operator. A valid profile th
 
 Subscription provenance and provider reputation are application/user trust decisions.
 
+The TUN boundary also treats packets and handshake bytes as hostile input. TCP admission is charged
+against a 64 MiB aggregate buffer budget and an unestablished flow is reaped after 30 seconds;
+packet-device queues are capped at 256 entries. Each UDP flow retains at most 32 datagrams and the
+shared UDP/raw response paths are bounded at 256 packets. REALITY refuses more than 64 KiB of
+accumulated handshake plaintext and shares a separate 64 KiB allowance between pending ciphertext
+and application plaintext (`crates/foxcore-tun/src/netstack/actor.rs:31-42,242-282`;
+`crates/foxcore-tun/src/netstack/mod.rs:160-166`;
+`crates/foxcore-tun/src/netstack/stream/smoltcp_tcp.rs:22-47`;
+`crates/proto-reality/src/reality/reality_client_connection.rs:56-68,931-936`;
+`crates/proto-reality/src/reality/reality_reader_writer.rs:65-70`).
+
 ---
 
 ## DNS security
@@ -177,9 +188,12 @@ Applications must use the capabilities document rather than assuming stronger li
 
 ## Fingerprinting and censorship resistance
 
-REALITY fingerprint profiles reproduce maintained Chrome-like ClientHello profiles derived from upstream fingerprint data.
+REALITY fingerprint profiles comprise seven tables transcribed from maintained uTLS data and two
+first-party captures of shipping browsers (`chrome_151` and `firefox_153`). Their provenance and
+measured JA4 are recorded per profile.
 
-They are not claimed to be first-party packet captures of Chrome, byte-identical to every Chrome release, or independently validated censorship-evasion guarantees.
+They are not claimed to be byte-identical to every browser release or to provide an independently
+validated censorship-evasion guarantee.
 
 Fingerprint mimicry reduces protocol distinguishability only within the limits of the selected profile, transport and surrounding traffic pattern.
 

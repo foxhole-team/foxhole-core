@@ -8,8 +8,8 @@
 //! userspace stack had already answered the SYN and the core abandoned the
 //! session without telling the other end.
 //!
-//! `ipstack 1.0.0` does not close on drop: `impl Drop for IpStackTcpStream`
-//! tears down the session task and sends no FIN and no RST. So a flow the core
+//! The removed `ipstack 1.0.0` backend did not close on drop: its stream tore
+//! down the session task and sent no FIN and no RST. So a flow the core
 //! gave up on stays, from the app's side, an established connection that will
 //! never answer — the exact shape of "the app hangs" rather than "connection
 //! refused".
@@ -119,8 +119,8 @@ fn segment(destination_port: u16, flags: u8, sequence: u32, acknowledgement: u32
 /// Flags and sequence number of a TCP segment addressed to our client port.
 ///
 /// The sequence number matters: the stack picks a random ISN, and an ACK that
-/// does not name it leaves the session short of `Established` — which is the
-/// one state `ipstack`'s `poll_shutdown` will send a FIN from. A test that
+/// does not name it leaves the session short of `Established` — the state from
+/// which an orderly shutdown can send a FIN. A test that
 /// hard-codes the acknowledgement passes or fails on the stack's choice of
 /// starting number rather than on the behaviour under test.
 fn tcp_for_client(packet: &[u8]) -> Option<(u8, u32)> {
@@ -179,10 +179,8 @@ fn engine(metrics: Arc<FlowMetrics>) -> FlowEngine {
 
 /// A dial that fails has to close the session it was opened for.
 ///
-/// Multi-thread on purpose: `ipstack`'s `Drop` blocks on its session task
-/// through `block_in_place`, which is not available on a current-thread
-/// runtime — the same property that makes abandoning a stream more expensive
-/// than closing it.
+/// Multi-thread on purpose: the production data plane runs its stack actor,
+/// packet writer and relay independently, including under backpressure.
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_flow_whose_dial_fails_is_closed_towards_the_app() {

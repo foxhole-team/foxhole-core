@@ -1,11 +1,5 @@
 #!/usr/bin/env bash
-# The one entry point for the fuzz targets in `fuzz/`.
-#
-# The targets link and run on the pinned stable toolchain, so `run` works with
-# nothing installed — but *blindly*: without nightly's `-Zsanitizer` there is no
-# coverage feedback, libFuzzer keeps no corpus, and mutation is uniform random.
-# That finds shallow crashes and nothing deeper. Install nightly and cargo-fuzz
-# and this script switches to the coverage-guided path on its own.
+# Stable runs are blind smoke tests; nightly plus cargo-fuzz enables coverage guidance.
 #
 # Usage:
 #   scripts/fuzz.sh                       # same as `check`
@@ -18,16 +12,14 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$HERE" || exit 1
 
-# rustup's shims are not on PATH on the development machine.
 export PATH="/opt/homebrew/opt/rustup/bin:$PATH"
 
 HARNESS="$HERE/fuzz/harness/Cargo.toml"
 FUZZ="$HERE/fuzz/Cargo.toml"
-# CI sets a dated channel. Developers keep the conventional rolling alias
-# unless they deliberately ask to reproduce that exact campaign.
 NIGHTLY="${FOXCORE_NIGHTLY:-nightly}"
 
 TARGETS=(
+    netstack_packet
     flow_key_from_packet
     dns_message
     wireguard_message
@@ -38,20 +30,13 @@ TARGETS=(
     shadowtls_server_stream
 )
 
-# `reality_records` encrypts its input, so libFuzzer's 4 KiB default would keep
-# the record fragmentation path — which the corpus seeds — permanently out of
-# reach.
 max_len_for() {
     case "$1" in
+    # Cover fragmented records beyond libFuzzer's 4 KiB default.
     reality_records) echo 20000 ;;
-    # A share link is a URL and a subscription body is a handful of them. The
-    # 4 KiB default spends the budget on kilobyte blobs that no provider ever
-    # sends, and fills the committed corpus with them.
+    # Keep mutations within realistic link sizes.
     share_link) echo 1024 ;;
-    # The input is a whole sequence of socket reads, not one message: two bytes
-    # of every segment are its length prefix, and a response worth exploring is
-    # a handful of TLS records. 4 KiB would be spent on segment counts no
-    # server produces.
+    # Input encodes a sequence of TLS socket reads, not one message.
     shadowtls_server_stream) echo 2048 ;;
     *) echo 4096 ;;
     esac
@@ -79,17 +64,12 @@ seed)
     ;;
 
 check)
-    # `gate.sh` fails hard on live test binaries because a killed `cargo test`
-    # leaves them holding loopback ports. Nothing here binds a socket — every
-    # parser under test is sans-io and the SOCKS decoders read from a `&[u8]` —
-    # so a live binary is only worth mentioning, and failing on it would mean
-    # this script could not run while anyone else was running the suite.
+    # These sans-io targets bind no ports, so concurrent test binaries are harmless.
     strays="$(pgrep -f 'target/debug/deps/' 2>/dev/null | wc -l | tr -d ' ')"
     if [ "$strays" != "0" ]; then
         printf '.. %s test binaries are running; harmless here, no ports are used.\n' "$strays"
     fi
 
-    # `-p`, never `--all`: a sibling crate may be mid-edit in another session.
     printf '\n== fuzz harness: fmt ==\n'
     cargo fmt --manifest-path "$HARNESS" -p foxcore-fuzz-harness -- --check || exit 1
 

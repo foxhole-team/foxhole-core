@@ -30,6 +30,13 @@ libfuzzer-sys = "0.4"
 foxcore-fuzz-harness = { path = "harness" }
 
 [[bin]]
+name = "netstack_packet"
+path = "fuzz_targets/netstack_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "flow_key_from_packet"
 path = "fuzz_targets/flow_key_from_packet.rs"
 test = false

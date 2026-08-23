@@ -11,6 +11,7 @@ The Android application owns `VpnService`, the TUN file descriptor, UI state and
 | ABI | `1` |
 | Configuration schema | `1` |
 | Capabilities schema | `1` |
+| Core package | `0.0.3` (`Cargo.toml:36-41`) |
 | Native library | `foxhole_native` |
 
 Compatibility is negotiated by ABI version, configuration schema and the runtime capabilities document. Library version numbers are not used for feature detection.
@@ -269,6 +270,33 @@ All externally supplied data is bounded.
 | Handshake/member timeout | 120,000 ms |
 
 Protocol-specific strings, headers and ECH configuration are also bounded before runtime construction.
+
+### Data-plane buffers
+
+| Limit | Value |
+| --- | ---: |
+| Default TCP / UDP flow slots | 1024 / 512 |
+| TCP actor buffer budget across admitted flows | 64 MiB |
+| Unestablished TCP reservation | 30 seconds |
+| Netstack ingress / egress packet queues | 256 / 256 |
+| Retained datagrams per UDP flow | 32 |
+| UDP reply / raw-response queues back to the TUN | 256 / 256 |
+| REALITY accumulated handshake plaintext | 64 KiB |
+| REALITY pending ciphertext plus application plaintext | 64 KiB |
+
+Flow defaults come from `crates/foxcore-api/src/config/rt.rs:522-532` and are applied to the
+netstack at `crates/foxcore-tun/src/flow/route.rs:292-314`. Queue and aggregate memory caps are at
+`crates/foxcore-tun/src/netstack/mod.rs:160-166` and
+`crates/foxcore-tun/src/netstack/actor.rs:31-42,242-282`; the TCP reservation default is at
+`crates/foxcore-tun/src/netstack/stream/smoltcp_tcp.rs:22-47`. REALITY's two limits are enforced at
+`crates/proto-reality/src/reality/reality_client_connection.rs:56-68,931-936` and
+`crates/proto-reality/src/reality/reality_reader_writer.rs:65-70`.
+
+The public `DatagramFlow` adapts a datagram payload to `AsyncRead` without discarding bytes: when
+the caller's `ReadBuf` is short, later reads return the remaining tail before the next datagram. A
+zero-capacity read consumes nothing. Each successful write still represents exactly one datagram;
+a payload above the current IP/UDP MTU allowance is refused rather than split
+(`crates/foxcore-tun/src/netstack/stream/udp.rs:169-244`; regression at `:334-383`).
 
 ### Signed DNS rule sets
 

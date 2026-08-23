@@ -60,10 +60,10 @@ TUN → flow engine → routing policy → outbound
 > ClientHello — nine profiles, seven transcribed from uTLS and two from
 > first-party captures, matching real Chromium on
 > the human-readable part of JA4.
-> rustls implements none of the RSA and CBC suites Chrome
-> carries and exposes no API for GREASE or extension order. Under active
-> development and experiment; a different TLS stack (BoringSSL) is a candidate
-> for closing it.
+> rustls exposes no API for GREASE or extension order, so REALITY keeps its
+> compiled Fox-owned ClientHello generator. Direct BoringSSL is deliberately not
+> another backend: it would add an Android C++/FFI path without replacing
+> REALITY, Quinn, or the non-Chromium profiles.
 
 ### Documentation
 
@@ -82,7 +82,7 @@ TUN → flow engine → routing policy → outbound
 
 | Layer | Implementation |
 | --- | --- |
-| **TUN** | `ipstack`, TCP/UDP flow engine, ICMPv4 echo, bounded flow tables |
+| **TUN** | exact-pinned smoltcp TCP actor, Fox-owned UDP demux and ICMPv4 echo, bounded flow/packet memory |
 | **Routing** | compiled indexes, O(1) package policy, Direct/VPN/Tor/Block, I2P gate |
 | **DNS** | UDP/TCP, DoT, DoH, cache, stale cache, fake-IP |
 | **Android protected dialer** | Android callback `protect(fd)` → bind to the selected Android `Network` → connect/send |
@@ -95,7 +95,7 @@ TUN → flow engine → routing policy → outbound
 | **Proxy server** | SOCKS5 / HTTP CONNECT, mandatory authentication, network binding, JNI entry points |
 | **Android / Native ABI** | versioned C/JNI ABI, capabilities JSON, safe handles |
 
-Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for.
+Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for. TCP admission also shares a 64 MiB buffer budget, and a handshake that never establishes releases its reservation after 30 seconds. Each UDP flow retains at most 32 packets while its outbound is busy; UDP and raw responses use bounded 256-packet queues back to the TUN, and UDP overflow is dropped and counted.
 
 ---
 
@@ -425,15 +425,17 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-Release ABI:
+Release archive ABIs:
 
 ```text
 arm64-v8a
+armeabi-v7a
 ```
 
-arm64 only, deliberately: no live traffic, protocol matrix or Tor leg was ever
-verified on 32-bit ARM, so shipping it would mean shipping untested. `armeabi-v7a`
-and `x86_64` build and pass the ELF gate; neither is published.
+Both ARM libraries are rebuilt, ELF-gated and packaged by the core release workflow.
+`x86_64` remains an explicit emulator build and is not published. FoxHole Guard's APK
+currently defaults to `arm64-v8a`; that app packaging choice does not remove
+`armeabi-v7a` from the standalone FoxCore release archive.
 
 Native build gates:
 
@@ -449,7 +451,10 @@ Native build gates:
 
 ## 🔏 Release integrity
 
-A `main` release is accepted only when its source tree is identical to a successful full `dev` gate. The release workflow publishes the exact Android libraries retained by that gate; it does not rebuild them on `main`.
+A `main` release is accepted only when its source tree is identical to a successful full `dev` gate.
+The dev artifact is not retained: `main` rebuilds both Android libraries from the same pinned
+Rust, NDK and lockfile inputs, then re-checks the rollback manifest, ABI, SBOM and hashes before
+signing or publishing anything.
 
 Each release archive contains the gated JNI libraries, their rollback manifest,
 the committed CycloneDX SBOMs and `Cargo.lock`. The release also contains

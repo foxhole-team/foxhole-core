@@ -265,6 +265,92 @@ fn invalid(message: &'static str) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
+    use std::task::{Context, Poll, Waker};
+
+    use aws_lc_rs::agreement;
+    use tokio::io::ReadBuf;
+
+    struct WriteGate {
+        open: AtomicBool,
+        blocked: AtomicBool,
+        waker: Mutex<Option<Waker>>,
+    }
+
+    impl WriteGate {
+        fn new() -> Self {
+            Self {
+                open: AtomicBool::new(false),
+                blocked: AtomicBool::new(false),
+                waker: Mutex::new(None),
+            }
+        }
+
+        fn open(&self) {
+            self.open.store(true, Ordering::Release);
+            if let Some(waker) = self.waker.lock().unwrap().take() {
+                waker.wake();
+            }
+        }
+    }
+
+    struct GatedNetwork(Arc<WriteGate>);
+
+    impl AsyncRead for GatedNetwork {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+            _buf: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Pending
+        }
+    }
+
+    impl AsyncWrite for GatedNetwork {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if self.0.open.load(Ordering::Acquire) {
+                return Poll::Ready(Ok(buf.len()));
+            }
+            let mut waker = self.0.waker.lock().unwrap();
+            *waker = Some(cx.waker().clone());
+            if self.0.open.load(Ordering::Acquire) {
+                waker.take();
+                return Poll::Ready(Ok(buf.len()));
+            }
+            self.0.blocked.store(true, Ordering::Release);
+            Poll::Pending
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    fn completed_test_connection() -> RealityClientConnection {
+        let private = [0x42_u8; 32];
+        let key = agreement::PrivateKey::from_private_key(&agreement::X25519, &private).unwrap();
+        let mut public_key = [0_u8; 32];
+        public_key.copy_from_slice(key.compute_public_key().unwrap().as_ref());
+        RealityClientConnection::new(RealityClientConfig {
+            public_key,
+            short_id: [1, 2, 3, 4, 5, 6, 7, 8],
+            server_name: "example.com".to_owned(),
+            hello: RealityHelloProfile::Chrome133.into(),
+        })
+        .unwrap()
+        .complete_for_test()
+        .unwrap()
+    }
 
     #[test]
     fn validates_dns_server_names() {
@@ -272,5 +358,44 @@ mod tests {
         assert!(validate_server_name("127.0.0.1").is_err());
         assert!(validate_server_name("bad name").is_err());
         assert!(validate_server_name("-bad.example").is_err());
+    }
+
+    #[tokio::test]
+    async fn blocked_network_applies_backpressure_and_wakes_the_application_writer() {
+        let gate = Arc::new(WriteGate::new());
+        let network = GatedNetwork(Arc::clone(&gate));
+        let mut application = spawn_relay(
+            network,
+            RealityRecordLayer(completed_test_connection()),
+            PassthroughCodec,
+            STREAM_BUFFER_CAPACITY,
+        );
+        let payload = vec![0x5a; STREAM_BUFFER_CAPACITY + 2 * TLS_IO_BUFFER_SIZE];
+        let mut writer = tokio::spawn(async move {
+            application.write_all(&payload).await?;
+            Ok::<_, io::Error>(application)
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while !gate.blocked.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("relay never reached the blocked network writer");
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), &mut writer)
+                .await
+                .is_err(),
+            "application write completed while network output was blocked"
+        );
+
+        gate.open();
+        let application = tokio::time::timeout(Duration::from_secs(1), &mut writer)
+            .await
+            .expect("application writer was not woken")
+            .expect("application writer task panicked")
+            .expect("application writer failed");
+        drop(application);
     }
 }

@@ -100,6 +100,18 @@ name = "aws-lc-sys"
 allow = ["ISC", "OpenSSL", "Apache-2.0"]
 
 [[licenses.exceptions]]
+# smoltcp 0.14.0 and its managed 0.8.0 storage abstraction use the Zero-Clause
+# BSD licence. It is OSI-approved, permissive and GPL-compatible. Keep this
+# scoped to the two reviewed crates instead of approving every future 0BSD
+# dependency implicitly.
+name = "smoltcp"
+allow = ["0BSD"]
+
+[[licenses.exceptions]]
+name = "managed"
+allow = ["0BSD"]
+
+[[licenses.exceptions]]
 # notify 8.2.0, under CC0-1.0, and it is here because Tor ships.
 #
 # Not an incidental entry in the graph: `tor-config` depends on it

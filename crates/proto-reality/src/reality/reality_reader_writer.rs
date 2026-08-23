@@ -1,16 +1,9 @@
 use std::io::{BufRead, Read, Write};
 
+use super::common::OUTGOING_BUFFER_LIMIT;
 use crate::slide_buffer::SlideBuffer;
 
-/// Reader for accessing decrypted plaintext from REALITY connections
-///
-/// This reader provides a view over a SlideBuffer and consumes data from it
-/// as it is read. The SlideBuffer handles efficient memory management.
-///
-/// Mirrors rustls::Reader behavior for fill_buf():
-/// - Ok(data) when data is available
-/// - Ok(&[]) when close_notify received (clean EOF)
-/// - Err(WouldBlock) when no data and connection still active
+/// Decrypted REALITY reader with rustls-compatible EOF and WouldBlock behavior.
 pub struct RealityReader<'a> {
     buffer: &'a mut SlideBuffer,
     received_close_notify: bool,
@@ -40,13 +33,10 @@ impl<'a> Read for RealityReader<'a> {
 impl<'a> BufRead for RealityReader<'a> {
     fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
         if !self.buffer.is_empty() {
-            // Data available
             Ok(self.buffer.as_slice())
         } else if self.received_close_notify {
-            // Clean EOF - close_notify received (mirrors rustls behavior)
             Ok(&[])
         } else {
-            // No data, connection still active
             Err(std::io::ErrorKind::WouldBlock.into())
         }
     }
@@ -60,18 +50,24 @@ impl<'a> BufRead for RealityReader<'a> {
 /// Writer for buffering plaintext to be encrypted in REALITY connections
 pub struct RealityWriter<'a> {
     buffer: &'a mut Vec<u8>,
+    pending_tls_bytes: usize,
 }
 
 impl<'a> RealityWriter<'a> {
-    pub fn new(buffer: &'a mut Vec<u8>) -> Self {
-        RealityWriter { buffer }
+    pub fn new(buffer: &'a mut Vec<u8>, pending_tls_bytes: usize) -> Self {
+        RealityWriter {
+            buffer,
+            pending_tls_bytes,
+        }
     }
 }
 
 impl<'a> Write for RealityWriter<'a> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.buffer.extend_from_slice(buf);
-        Ok(buf.len())
+        let queued = self.pending_tls_bytes.saturating_add(self.buffer.len());
+        let accepted = buf.len().min(OUTGOING_BUFFER_LIMIT.saturating_sub(queued));
+        self.buffer.extend_from_slice(&buf[..accepted]);
+        Ok(accepted)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -146,10 +142,41 @@ mod tests {
     #[test]
     fn test_reality_crypto_writer() {
         let mut buffer = Vec::new();
-        let mut writer = RealityWriter::new(&mut buffer);
+        let mut writer = RealityWriter::new(&mut buffer, 0);
 
         assert_eq!(writer.write(b"hello").unwrap(), 5);
         assert_eq!(writer.write(b" world").unwrap(), 6);
         assert_eq!(buffer.as_slice(), b"hello world");
+    }
+
+    #[test]
+    fn writer_accepts_exactly_the_combined_limit() {
+        let mut buffer = Vec::new();
+        let mut writer = RealityWriter::new(&mut buffer, 1);
+        let input = vec![0x5a; OUTGOING_BUFFER_LIMIT];
+
+        assert_eq!(writer.write(&input).unwrap(), OUTGOING_BUFFER_LIMIT - 1);
+        assert_eq!(writer.write(&input[..1]).unwrap(), 0);
+        assert_eq!(buffer.len(), OUTGOING_BUFFER_LIMIT - 1);
+    }
+
+    #[test]
+    fn writer_counts_buffered_plaintext_and_pending_ciphertext() {
+        let mut buffer = vec![0x11, 0x22];
+        let pending_tls_bytes = OUTGOING_BUFFER_LIMIT - 5;
+        let mut writer = RealityWriter::new(&mut buffer, pending_tls_bytes);
+
+        assert_eq!(writer.write(b"hello").unwrap(), 3);
+        assert_eq!(writer.write(b"world").unwrap(), 0);
+        assert_eq!(buffer, [0x11, 0x22, b'h', b'e', b'l']);
+    }
+
+    #[test]
+    fn writer_refuses_data_when_pending_ciphertext_is_over_limit() {
+        let mut buffer = Vec::new();
+        let mut writer = RealityWriter::new(&mut buffer, usize::MAX);
+
+        assert_eq!(writer.write(b"not accepted").unwrap(), 0);
+        assert!(buffer.is_empty());
     }
 }

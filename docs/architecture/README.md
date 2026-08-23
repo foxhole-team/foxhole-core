@@ -45,7 +45,7 @@ flowchart TD
 |---|---|---|
 | 1 | [Protocols](01-protocols.md) | every outbound, its carrier, its security layer, where it terminates, UDP support, and every fail-closed path with the reason for it |
 | 2 | [Cryptography](02-cryptography.md) | per-protocol auth and KEX, the ML-KEM-768 hybrid and the ML-DSA-in-fingerprints story, REALITY's derivation step by step, and the full pinning table |
-| 3 | [Updates and data delivery](03-updates-and-data-delivery.md) | the signed feeds (four published, a fifth staged), manifest + detached signature, the pinned key, rollback protection, when each document takes effect, and the APK update channel |
+| 3 | [Updates and data delivery](03-updates-and-data-delivery.md) | all five published signed feeds, manifest + detached signature, the pinned key, rollback protection, when each document takes effect, and the APK update channel |
 | 4 | [App ↔ core boundary](04-app-core-boundary.md) | profile → engine config, the JNI surface, what crosses the FFI in what form, and the VPN connect/disconnect sequences |
 | 5 | [Data repository](05-data-repository.md) | what each feed is built from, by which script, and what the client checks on receipt |
 
@@ -56,7 +56,7 @@ flowchart TD
 ```mermaid
 flowchart LR
     A["foxhole_guard<br/>config/foxcore-revision.txt<br/>exact release commit"] -->|"CI + F-Droid recipe<br/>check out that commit"| B["foxhole-core"]
-    B -->|"scripts/android-build.sh"| C["libfoxhole_native.so<br/>arm64-v8a shipped"]
+    B -->|"scripts/android-build.sh"| C["core release archive<br/>arm64-v8a + armeabi-v7a"]
     C --> A
     B -->|"fingerprints/*.json"| D["foxhole-db<br/>build-fingerprints.sh"]
     D -->|"signed feeds over HTTPS"| A
@@ -65,13 +65,16 @@ flowchart LR
 | Binding | Mechanism |
 |---|---|
 | Client → core, source | Gradle resolves the sibling folder `foxhole-core`; override with `-Pfoxhole.foxCoreSourceRoot` or `FOXCORE_SOURCE_ROOT` |
-| Client → core, revision | `config/foxcore-revision.txt` — CI/F-Droid check out that commit; local Gradle compares the sibling's Git HEAD (`app/build.gradle.kts:188-245`), refuses a mismatch for release tasks and prints an error banner for other tasks |
+| Client → core, revision | `config/foxcore-revision.txt` — CI/F-Droid check out that commit; local Gradle compares the sibling's Git HEAD (`app/build.gradle.kts:184-230`), refuses a mismatch for release tasks and prints an error banner for other tasks |
+| Core → client, native artifact | `scripts/android-build.sh:67-98` applies stable virtual prefixes to Rust source locations; `scripts/android-elf-gate.sh:138-166,222-225` refuses host build paths in `libfoxhole_native.so` |
 | Core → DB | `build-fingerprints.sh` sparse-checks out `foxhole-core/fingerprints/` at a pinned revision |
 | DB → client | five manifests under one configurable base URL, one pinned ECDSA P-256 key |
 | Release order | foxhole-db → foxhole-core → foxhole_guard → F-Droid |
 
-Shipped ABI for the public beta is `arm64-v8a` only. `armeabi-v7a` and `x86_64` build but are not
-distributed.
+The standalone FoxCore release archive ships `arm64-v8a` and `armeabi-v7a`
+(`scripts/android-build.sh:119-139`; `.github/workflows/release.yml:171-177`). Guard currently
+packages `arm64-v8a` by default (`app/build.gradle.kts:242-246`). `x86_64` is available only when an
+emulator build requests it explicitly and is not part of either release contract.
 
 ---
 
@@ -82,7 +85,8 @@ distributed.
 - Claims are taken from code, not from the repositories' own READMEs. Where a README or a code
   comment disagrees with the code, the document says so in its final section rather than repeating
   the claim.
-- Nothing here was verified by building or running anything.
+- File citations are source-checked against the current tree. Runtime claims still require the
+  repository gates and device evidence; documentation is not treated as test proof.
 
 ### Where the drift lists are
 
@@ -90,7 +94,8 @@ Each document ends with the inconsistencies found while writing it:
 
 | Document | Section |
 |---|---|
+| 1 — Protocols | 1.8 — no open inconsistencies after the smoltcp/UDP contract pass |
 | 2 — Cryptography | 2.7 — no open inconsistencies after the current pass |
-| 3 — Updates | 3.7 — inline vs shared verifiers, permissive Kotlin vs strict Rust JSON parsing, and DNS live/start activation |
-| 4 — Boundary | 4.7 — compatibility-only link/continuity ABI, DNS activation, and the divergent link parsers |
-| 5 — Data repository | 5.7 — verifier comment ordering and audit-only source-info files |
+| 3 — Updates | 3.7 — inline vs shared verifiers and permissive Kotlin vs strict Rust JSON parsing; stale DNS/updater activation claims were closed in this pass |
+| 4 — Boundary | 4.7 — compatibility-only link/continuity ABI, DNS activation, divergent link parsers, and the path-independent native build contract |
+| 5 — Data repository | 5.7 — no open inconsistencies after the five-feed publication pass; source-info files remain audit-only by design |

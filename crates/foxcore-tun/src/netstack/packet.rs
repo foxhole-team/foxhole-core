@@ -1,11 +1,8 @@
-use crate::ipstack::error::IpStackError;
+use crate::netstack::error::StackError;
 use etherparse::{Ipv4Header, Ipv6Header, NetSlice, SlicedPacket, TcpHeader, UdpHeader};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
-/// Enough for the largest header pair this stack writes: a 60-byte IPv4 header
-/// with full options, or a 40-byte IPv6 header, followed by a 60-byte TCP header
-/// with full options. Over-reserving by a few dozen bytes once per buffer is the
-/// point — it is what keeps the reallocation out of the per-packet path.
+/// Maximum IPv4-options plus TCP-options header pair.
 const MAX_HEADER_LEN: usize = 60 + 60;
 
 #[derive(Eq, Hash, PartialEq, Debug, Clone, Copy)]
@@ -26,17 +23,6 @@ impl std::fmt::Display for NetworkTuple {
         let tcp = if self.tcp { "TCP" } else { "UDP" };
         write!(f, "{} {} -> {}", tcp, self.src, self.dst)
     }
-}
-
-pub mod tcp_flags {
-    pub const CWR: u8 = 0b10000000;
-    pub const ECE: u8 = 0b01000000;
-    pub const URG: u8 = 0b00100000;
-    pub const ACK: u8 = 0b00010000;
-    pub const PSH: u8 = 0b00001000;
-    pub const RST: u8 = 0b00000100;
-    pub const SYN: u8 = 0b00000010;
-    pub const FIN: u8 = 0b00000001;
 }
 
 #[derive(Debug, Clone)]
@@ -60,9 +46,9 @@ pub struct NetworkPacket {
 }
 
 impl NetworkPacket {
-    pub fn parse(buf: &[u8]) -> Result<Self, IpStackError> {
-        let p = SlicedPacket::from_ip(buf).map_err(|_| IpStackError::InvalidPacket)?;
-        let ip = p.net.ok_or(IpStackError::InvalidPacket)?;
+    pub fn parse(buf: &[u8]) -> Result<Self, StackError> {
+        let p = SlicedPacket::from_ip(buf).map_err(|_| StackError::InvalidPacket)?;
+        let ip = p.net.ok_or(StackError::InvalidPacket)?;
 
         let (ip, ip_payload) = match ip {
             NetSlice::Ipv4(ip) => (
@@ -73,7 +59,7 @@ impl NetworkPacket {
                 IpHeader::Ipv6(ip.header().to_header()),
                 ip.payload().payload,
             ),
-            NetSlice::Arp(_) => return Err(IpStackError::UnsupportedTransportProtocol),
+            NetSlice::Arp(_) => return Err(StackError::UnsupportedTransportProtocol),
         };
         let (transport, payload) = match p.transport {
             Some(etherparse::TransportSlice::Tcp(h)) => {
@@ -136,31 +122,14 @@ impl NetworkPacket {
         }
     }
     #[cfg(test)]
-    pub fn to_bytes(&self) -> Result<Vec<u8>, IpStackError> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, StackError> {
         let mut buf = Vec::new();
         self.write_to(&mut buf)?;
         Ok(buf)
     }
 
-    /// Serialise into a buffer the caller owns.
-    ///
-    /// The data path uses this one. `to_bytes` above starts from a zero-capacity
-    /// `Vec` and lets `etherparse` grow it field by field — five or six
-    /// reallocations for the headers alone, then one more for the payload — and
-    /// it ran on every packet leaving for the tun. Writing into a buffer that is
-    /// cleared and reused between packets makes that a single reserve on the
-    /// first packet and none afterwards.
-    ///
-    /// Appends rather than clearing, so a caller that needs a prefix in front of
-    /// the packet — the four-byte packet-information header on unix tun devices
-    /// — can write it first and get one contiguous buffer. That prefix used to
-    /// be inserted afterwards with `splice(0..0, ..)`, which memmoves the whole
-    /// packet one position to the right, once per packet, forever.
-    ///
-    /// `reserve` before the headers rather than after: growing a buffer that
-    /// already holds forty bytes copies those forty bytes, which is the cost
-    /// this is here to avoid.
-    pub fn write_to(&self, buf: &mut Vec<u8>) -> Result<(), IpStackError> {
+    /// Append serialized headers and payload to a reusable caller-owned buffer.
+    pub fn write_to(&self, buf: &mut Vec<u8>) -> Result<(), StackError> {
         let payload_len = self.payload.as_ref().map_or(0, Vec::len);
         buf.reserve(MAX_HEADER_LEN + payload_len);
         match self.ip {
@@ -185,88 +154,6 @@ impl NetworkPacket {
         }
     }
 }
-
-pub fn tcp_header_fmt(header: &TcpHeader) -> String {
-    let mut flags = String::new();
-    if header.cwr {
-        flags.push_str("CWR ");
-    }
-    if header.ece {
-        flags.push_str("ECE ");
-    }
-    if header.urg {
-        flags.push_str("URG ");
-    }
-    if header.ack {
-        flags.push_str("ACK ");
-    }
-    if header.psh {
-        flags.push_str("PSH ");
-    }
-    if header.rst {
-        flags.push_str("RST ");
-    }
-    if header.syn {
-        flags.push_str("SYN ");
-    }
-    if header.fin {
-        flags.push_str("FIN ");
-    }
-    format!(
-        "TcpHeader {{ seq: {}, ack: {}, flags: {} }}",
-        header.sequence_number,
-        header.acknowledgment_number,
-        flags.trim()
-    )
-}
-
-pub fn tcp_header_flags(inner: &TcpHeader) -> u8 {
-    let mut flags = 0;
-    if inner.cwr {
-        flags |= tcp_flags::CWR;
-    }
-    if inner.ece {
-        flags |= tcp_flags::ECE;
-    }
-    if inner.urg {
-        flags |= tcp_flags::URG;
-    }
-    if inner.ack {
-        flags |= tcp_flags::ACK;
-    }
-    if inner.psh {
-        flags |= tcp_flags::PSH;
-    }
-    if inner.rst {
-        flags |= tcp_flags::RST;
-    }
-    if inner.syn {
-        flags |= tcp_flags::SYN;
-    }
-    if inner.fin {
-        flags |= tcp_flags::FIN;
-    }
-
-    flags
-}
-
-// pub struct UdpPacket {
-//     header: UdpHeader,
-// }
-
-// impl UdpPacket {
-//     pub fn inner(&self) -> &UdpHeader {
-//         &self.header
-//     }
-// }
-
-// impl From<&UdpHeader> for UdpPacket {
-//     fn from(header: &UdpHeader) -> Self {
-//         UdpPacket {
-//             header: header.clone(),
-//         }
-//     }
-// }
 
 #[cfg(test)]
 pub mod tests {

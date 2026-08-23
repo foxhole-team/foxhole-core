@@ -216,6 +216,9 @@ impl Sender {
                 return Err(std::io::Error::other("the stack never answered the SYN"));
             };
             if seen.flags & FLAG_SYN != 0 && seen.flags & FLAG_ACK != 0 {
+                if std::env::var_os("FOXCORE_SENDER_TRACE").is_some() {
+                    eprintln!("  SYN-ACK window {}", seen.window);
+                }
                 sender.acknowledgement = seen.sequence.wrapping_add(1);
                 sender.window = seen.window;
                 sender.emit(FLAG_ACK, sender.base, &[]).await;

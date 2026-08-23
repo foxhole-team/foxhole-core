@@ -1,15 +1,12 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 
-pub use self::tcp::IpStackTcpStream;
-pub(crate) use self::tcp::refuse_with_reset;
-pub use self::tcp::{TcpConfig, TcpOptions};
-pub use self::udp::IpStackUdpStream;
+pub(crate) use self::smoltcp_tcp::TcpControl;
+pub use self::smoltcp_tcp::{TcpConfig, TcpFlow};
+pub use self::udp::DatagramFlow;
 pub(crate) use self::udp::UdpStreamConfig;
-pub use self::unknown::IpStackUnknownTransport;
+pub use self::unknown::UnknownTransport;
 
-mod seqnum;
-mod tcb;
-mod tcp;
+mod smoltcp_tcp;
 mod udp;
 mod unknown;
 
@@ -24,18 +21,20 @@ mod unknown;
 /// * `Udp` - A UDP stream implementing `AsyncRead` + `AsyncWrite`
 /// * `UnknownTransport` - A stream for unknown transport layer protocols (e.g., ICMP, IGMP)
 /// * `UnknownNetwork` - Raw network layer packets that couldn't be parsed
-pub enum IpStackStream {
+pub enum StackFlow {
     /// A TCP connection stream.
-    Tcp(IpStackTcpStream),
+    Tcp(TcpFlow),
+    /// A SYN refused before a socket was allocated.
+    TcpRefused { local: SocketAddr, peer: SocketAddr },
     /// A UDP stream.
-    Udp(IpStackUdpStream),
+    Udp(DatagramFlow),
     /// A stream for unknown transport protocols.
-    UnknownTransport(IpStackUnknownTransport),
+    UnknownTransport(UnknownTransport),
     /// Raw network packets that couldn't be parsed.
     UnknownNetwork(Vec<u8>),
 }
 
-impl IpStackStream {
+impl StackFlow {
     /// Returns the local socket address for this stream.
     ///
     /// For TCP and UDP streams, this returns the source address of the connection.
@@ -43,12 +42,13 @@ impl IpStackStream {
     ///
     pub fn local_addr(&self) -> SocketAddr {
         match self {
-            IpStackStream::Tcp(tcp) => tcp.local_addr(),
-            IpStackStream::Udp(udp) => udp.local_addr(),
-            IpStackStream::UnknownNetwork(_) => {
+            StackFlow::Tcp(tcp) => tcp.local_addr(),
+            StackFlow::TcpRefused { local, .. } => *local,
+            StackFlow::Udp(udp) => udp.local_addr(),
+            StackFlow::UnknownNetwork(_) => {
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
             }
-            IpStackStream::UnknownTransport(unknown) => match unknown.src_addr() {
+            StackFlow::UnknownTransport(unknown) => match unknown.src_addr() {
                 IpAddr::V4(addr) => SocketAddr::V4(SocketAddrV4::new(addr, 0)),
                 IpAddr::V6(addr) => SocketAddr::V6(SocketAddrV6::new(addr, 0, 0, 0)),
             },
@@ -62,29 +62,16 @@ impl IpStackStream {
     ///
     pub fn peer_addr(&self) -> SocketAddr {
         match self {
-            IpStackStream::Tcp(tcp) => tcp.peer_addr(),
-            IpStackStream::Udp(udp) => udp.peer_addr(),
-            IpStackStream::UnknownNetwork(_) => {
+            StackFlow::Tcp(tcp) => tcp.peer_addr(),
+            StackFlow::TcpRefused { peer, .. } => *peer,
+            StackFlow::Udp(udp) => udp.peer_addr(),
+            StackFlow::UnknownNetwork(_) => {
                 SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))
             }
-            IpStackStream::UnknownTransport(unknown) => match unknown.dst_addr() {
+            StackFlow::UnknownTransport(unknown) => match unknown.dst_addr() {
                 IpAddr::V4(addr) => SocketAddr::V4(SocketAddrV4::new(addr, 0)),
                 IpAddr::V6(addr) => SocketAddr::V6(SocketAddrV6::new(addr, 0, 0, 0)),
             },
-        }
-    }
-
-    pub(crate) fn stream_sender(
-        &self,
-    ) -> Result<crate::ipstack::SessionPacketSender, std::io::Error> {
-        match self {
-            IpStackStream::Tcp(tcp) => Ok(crate::ipstack::SessionPacketSender::tcp(
-                tcp.stream_sender(),
-            )),
-            IpStackStream::Udp(udp) => Ok(udp.stream_sender()),
-            _ => Err(std::io::Error::other(
-                "Unknown transport stream does not have a sender",
-            )),
         }
     }
 }

@@ -20,6 +20,16 @@ fn corpus(target: &str) -> BTreeMap<&'static str, Vec<u8>> {
 }
 
 #[test]
+fn every_netstack_seed_reaches_the_transport_adapter() {
+    for (name, packet) in corpus("netstack_packet") {
+        assert!(
+            foxcore_tun::netstack::fuzz_parse_packet(&packet),
+            "seed {name} is not a packet the netstack adapter accepts"
+        );
+    }
+}
+
+#[test]
 fn every_tun_seed_is_a_packet_the_splitter_can_key() {
     use foxcore_tun::FlowKey;
 

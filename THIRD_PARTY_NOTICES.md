@@ -1,32 +1,25 @@
 # Third-party notices
 
-FoxHole Core embeds code from the projects below. Each entry says what was taken,
-what was changed, and under which licence it arrived.
+FoxHole Core depends on or adapts material from the projects below. Each entry
+says what is used, whether it was changed, and under which licence it arrived.
 
-## ipstack
+## smoltcp
 
-- Project: `narrowlink/ipstack`
-- Version: `1.0.0` (crates.io `d603c9807158f8054f56c3672c8670096580c3ec1d5bab6f27b2aca89be89117`)
-- Copyright (c) Narrowlink
-- Licence: Apache-2.0, reproduced in
-  `crates/foxcore-tun/src/ipstack/LICENSE-APACHE-ipstack`
-- Embedded at: `crates/foxcore-tun/src/ipstack/`
+- Project: `smoltcp-rs/smoltcp`
+- Version: exactly `0.14.0`
+- Copyright (C) smoltcp contributors
+- Licence: 0BSD (SPDX `0BSD`)
+- Linked by: `crates/foxcore-tun/`
 
-Vendored rather than depended on, because the change FoxHole Core needs is inside the
-TCP receive path and is not reachable from outside the crate: upstream
-acknowledges received data into an unbounded channel and computes its advertised
-window from out-of-order bytes only, so the window cannot close and an
-application can push into a flow whose outbound is not taking anything. Measured
-on the bench, that is 375 MiB of RSS. The fork gives the window an honest
-occupancy count, allows it to reach zero, reopens it with a window update,
-drops out-of-window data instead of buffering it, and holds the SYN|ACK until
-the core has decided the flow can be carried. `ahash` was replaced with the
-standard hasher and the upstream rustdoc examples were dropped. The changes,
-measurements and executable regression coverage are documented beside the fork
-in `crates/foxcore-tun/src/ipstack/mod.rs` and its tests.
+No smoltcp source is copied into FoxHole Core. A Fox-owned bounded Tokio actor
+drives its synchronous `Device`, `Interface` and TCP sockets, while Fox-owned
+code retains transparent five-tuple admission, UDP demultiplexing, ICMP policy,
+DNS interception, memory budgets and shutdown ownership. The dependency is
+exact-pinned because packets from an untrusted TUN cross this boundary.
 
-Apache-2.0 permits this redistribution under GPL-3.0-or-later; the notice above
-and the licence file are the conditions it attaches.
+The transitive `managed` 0.8.0 storage abstraction is also 0BSD. Both licences
+are permissive and GPL-3.0-compatible; the crate-scoped policy decisions live
+in `deny.toml` and `deny-all-features.toml`.
 
 ## uTLS
 
@@ -79,11 +72,15 @@ application code is embedded.
 
 - Project: `cfal/shoes`
 - Reference commit: `386b11532424b8665ee3e46340c6236fb3c47595`
+- Follow-up hardening references:
+  `caf9a29cec3e9cc72bf19bbfb0986e17f8221ab2` (bounded handshake plaintext) and
+  `47a222e90c15fb1bb4a75923e63b37c17b04302d` (combined outgoing buffer budget)
 - Copyright (c) 2021-2023 Alex Lau <github@alau.ca>
 - Adapted areas: modern VMess AEAD KDF/framing and compatibility test vectors;
   client-only REALITY TLS 1.3 state machine and crypto test vectors. FoxHole Core
   removes upstream server/TUN/routing code, secret-bearing debug traces and the
-  crawler fallback; it additionally verifies the TLS server Finished message.
+  crawler fallback; it additionally verifies the TLS server Finished message
+  and carries the two bounded-buffer hardening invariants listed above.
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of
 this software and associated documentation files (the "Software"), to deal in

@@ -1,5 +1,3 @@
-// REALITY client connection with rustls-compatible API
-
 use std::io::{self, Read, Write};
 
 use aws_lc_rs::digest;
@@ -13,7 +11,7 @@ use super::common::{
     HANDSHAKE_TYPE_CERTIFICATE, HANDSHAKE_TYPE_CERTIFICATE_VERIFY,
     HANDSHAKE_TYPE_COMPRESSED_CERTIFICATE, HANDSHAKE_TYPE_ENCRYPTED_EXTENSIONS,
     HANDSHAKE_TYPE_FINISHED, HELLO_SESSION_ID_LEN, HELLO_SESSION_ID_OFFSET, MAX_TLS_CIPHERTEXT_LEN,
-    OUTGOING_BUFFER_LIMIT, PLAINTEXT_READ_BUF_CAPACITY, TLS_MAX_RECORD_SIZE,
+    MAX_TLS_PLAINTEXT_LEN, PLAINTEXT_READ_BUF_CAPACITY, TLS_MAX_RECORD_SIZE,
     TLS_RECORD_HEADER_SIZE,
 };
 use super::hello_profile::{
@@ -47,19 +45,26 @@ use super::reality_util::{
 use super::runtime_tables;
 use crate::slide_buffer::SlideBuffer;
 
-/// The state machine reached a place its own construction says is impossible.
-///
-/// These used to be `unreachable!()`. Every transition here is driven by a
-/// remote server, and the release profile aborts on panic, so an invariant that
-/// turns out to be wrong once would end the whole VPN process rather than one
-/// connection. Failing the connection is the strictly better answer: the
-/// invariant is still asserted by tests, but a mistake costs a dropped
-/// handshake instead of a crash the user cannot report.
+/// Fail a remotely driven state mismatch without aborting the release process.
 fn handshake_state_error(expected: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
         format!("REALITY connection is not in the state required to process {expected}"),
     )
+}
+
+// Matches the 64 KiB handshake cap in Xray's REALITY implementation.
+const MAX_HANDSHAKE_PLAINTEXT: usize = 4 * MAX_TLS_PLAINTEXT_LEN;
+
+fn append_handshake_plaintext(accumulated: &mut Vec<u8>, plaintext: &[u8]) -> io::Result<()> {
+    if accumulated.len().saturating_add(plaintext.len()) > MAX_HANDSHAKE_PLAINTEXT {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "REALITY handshake exceeds maximum size",
+        ));
+    }
+    accumulated.extend_from_slice(plaintext);
+    Ok(())
 }
 
 /// Configuration for REALITY client connections
@@ -71,10 +76,7 @@ pub struct RealityClientConfig {
     pub short_id: [u8; 8],
     /// Server name for SNI
     pub server_name: String,
-    /// Which ClientHello to write. The profile owns the cipher suite list, so
-    /// there is no second place to say which suites are offered — the set the
-    /// hello advertises and the set a ServerHello is checked against are read
-    /// off the same table.
+    /// ClientHello profile, including the suites accepted from ServerHello.
     pub hello: RealityHello,
 }
 
@@ -107,11 +109,11 @@ enum HelloSource {
 enum HandshakeState {
     /// ClientHello sent, waiting for ServerHello
     AwaitingServerHello {
-        client_hello_bytes: Vec<u8>, // Full ClientHello handshake message (raw bytes for transcript)
+        client_hello_bytes: Vec<u8>,
         /// Private key exchange material for every group the hello offered.
         /// Zeroizes itself on drop.
         key_exchange: ClientKeyExchange,
-        auth_key: [u8; 32], // REALITY authentication key for HMAC verification
+        auth_key: [u8; 32],
     },
     /// ServerHello received, processing encrypted handshake messages
     ProcessingHandshake {
@@ -119,17 +121,16 @@ enum HandshakeState {
         server_handshake_traffic_secret: Vec<u8>,
         master_secret: Vec<u8>,
         cipher_suite: CipherSuite,
-        handshake_transcript_bytes: Vec<u8>, // Accumulated transcript for hash computation
-        auth_key: [u8; 32],                  // REALITY authentication key for HMAC verification
-        // State for handling multiple encrypted handshake records (separate mode)
-        handshake_seq: u64,             // Sequence number for decrypting records
-        accumulated_plaintext: Vec<u8>, // Accumulated plaintext across records
-        parse_offset: usize,            // First unparsed handshake byte
-        messages_found: u8,             // Number of handshake messages found so far
-        certificate_verified: bool,     // Whether Certificate HMAC was verified
-        ed25519_public_key: Option<[u8; 32]>, // Public key from Certificate for CV verification
-        cert_verify_offset: Option<usize>, // Offset of CertificateVerify in accumulated plaintext
-        finished_offset: Option<usize>, // Offset of server Finished in accumulated plaintext
+        handshake_transcript_bytes: Vec<u8>,
+        auth_key: [u8; 32],
+        handshake_seq: u64,
+        accumulated_plaintext: Vec<u8>,
+        parse_offset: usize,
+        messages_found: u8,
+        certificate_verified: bool,
+        ed25519_public_key: Option<[u8; 32]>,
+        cert_verify_offset: Option<usize>,
+        finished_offset: Option<usize>,
     },
     /// Handshake complete, ready for application data
     Complete,
@@ -171,16 +172,9 @@ impl Drop for HandshakeState {
 
 /// REALITY client-side connection implementing rustls-compatible API
 pub struct RealityClientConnection {
-    // Configuration
     config: RealityClientConfig,
-
     hello: HelloSource,
-
-    // Handshake state
     handshake_state: HandshakeState,
-
-    // TLS 1.3 application traffic encryption (post-handshake)
-    // Keys are cached as AeadKey to avoid per-record key setup overhead
     app_read_key: Option<AeadKey>,
     app_read_iv: Option<Vec<u8>>,
     app_write_key: Option<AeadKey>,
@@ -189,18 +183,13 @@ pub struct RealityClientConnection {
     write_seq: u64,
     cipher_suite: Option<CipherSuite>,
 
-    // Pre-allocated buffer for TLS read operations (reused across calls)
     tls_read_buffer: Box<[u8]>,
-
-    // Buffers for I/O - using SlideBuffer for efficient zero-alloc operations
-    ciphertext_read_buf: SlideBuffer, // Incoming encrypted TLS records
-    ciphertext_write_buf: Vec<u8>,    // Outgoing encrypted TLS records
-    plaintext_read_buf: SlideBuffer,  // Decrypted application data
-    plaintext_write_buf: Vec<u8>,     // Application data to encrypt
-
-    // Connection state flags (mirrors rustls patterns)
-    received_close_notify: bool,        // Peer sent close_notify alert
-    fatal_error: Option<io::ErrorKind>, // Fatal error occurred, connection unusable
+    ciphertext_read_buf: SlideBuffer,
+    ciphertext_write_buf: Vec<u8>,
+    plaintext_read_buf: SlideBuffer,
+    plaintext_write_buf: Vec<u8>,
+    received_close_notify: bool,
+    fatal_error: Option<io::ErrorKind>,
 }
 
 impl Drop for RealityClientConnection {
@@ -219,10 +208,7 @@ impl Drop for RealityClientConnection {
 impl RealityClientConnection {
     /// Create a new REALITY client connection and generate ClientHello
     pub fn new(config: RealityClientConfig) -> io::Result<Self> {
-        // The placeholder state has to hold *some* key material, and generating
-        // a throwaway x25519 pair is cheaper than making the field an Option
-        // that every later match has to unwrap. It is replaced before `new`
-        // returns.
+        // Avoid an optional state field; this key is replaced before returning.
         let placeholder = ClientKeyExchange::generate(&[NamedGroup::X25519])?;
         let hello = match config.hello {
             RealityHello::Parrot(profile) => HelloSource::Parrot(profile),
@@ -251,9 +237,9 @@ impl RealityClientConnection {
             cipher_suite: None,
             tls_read_buffer: vec![0_u8; TLS_MAX_RECORD_SIZE].into_boxed_slice(),
             ciphertext_read_buf: SlideBuffer::new(CIPHERTEXT_READ_BUF_CAPACITY),
-            ciphertext_write_buf: Vec::with_capacity(OUTGOING_BUFFER_LIMIT),
+            ciphertext_write_buf: Vec::new(),
             plaintext_read_buf: SlideBuffer::new(PLAINTEXT_READ_BUF_CAPACITY),
-            plaintext_write_buf: Vec::with_capacity(OUTGOING_BUFFER_LIMIT),
+            plaintext_write_buf: Vec::new(),
             received_close_notify: false,
             fatal_error: None,
         };
@@ -265,8 +251,7 @@ impl RealityClientConnection {
 
     fn with_hello_profile<R>(&self, body: impl FnOnce(&HelloProfileData<'_>) -> R) -> R {
         match &self.hello {
-            // Not `profile.table()`: a verified downloaded document, when one
-            // is installed, supplies this profile's values. It never supplies
+            // Include values from an installed, verified runtime table.
             HelloSource::Parrot(profile) => body(runtime_tables::table_for(*profile)),
             HelloSource::Randomized(drawn) => drawn.with_profile(body),
         }
@@ -288,12 +273,10 @@ impl RealityClientConnection {
         record.extend_from_slice(&client_hello);
         self.ciphertext_write_buf.extend_from_slice(&record);
 
-        // Store the wire ClientHello bytes for transcript hashing after ServerHello.
-        // At this point client_hello contains the encrypted SessionId.
         self.handshake_state = HandshakeState::AwaitingServerHello {
-            client_hello_bytes: client_hello, // Save the actual ClientHello bytes
+            client_hello_bytes: client_hello,
             key_exchange,
-            auth_key, // Save auth_key for HMAC certificate verification
+            auth_key,
         };
 
         Ok(())
@@ -326,7 +309,6 @@ fn build_client_hello(
     let mut client_random = [0u8; 32];
     rng.fill_bytes(&mut client_random);
 
-    // REALITY's own ECDH: the client's plain x25519 share against the
     let shared_secret = perform_ecdh(key_exchange.reality_private_key(), &config.public_key)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
 
@@ -339,10 +321,10 @@ fn build_client_hello(
         .as_secs();
 
     let mut session_id_plaintext = [0u8; 16];
-    session_id_plaintext[0] = 1; // Protocol version major
-    session_id_plaintext[1] = 8; // Protocol version minor
-    session_id_plaintext[2] = 0; // Protocol version patch
-    session_id_plaintext[3] = 0; // Padding byte
+    session_id_plaintext[0] = 1;
+    session_id_plaintext[1] = 8;
+    session_id_plaintext[2] = 0;
+    session_id_plaintext[3] = 0;
     session_id_plaintext[4..8].copy_from_slice(&(timestamp as u32).to_be_bytes());
     session_id_plaintext[8..16].copy_from_slice(&config.short_id);
 
@@ -380,9 +362,7 @@ fn build_client_hello(
 }
 
 impl RealityClientConnection {
-    /// Read TLS messages from the provided reader into internal buffer
-    ///
-    /// Uses pre-allocated buffer to avoid allocation on every call.
+    /// Read TLS messages into the reusable ciphertext buffer.
     pub fn read_tls(&mut self, rd: &mut dyn Read) -> io::Result<usize> {
         if self.ciphertext_read_buf.remaining_capacity() < TLS_MAX_RECORD_SIZE {
             self.ciphertext_read_buf.compact();
@@ -403,16 +383,13 @@ impl RealityClientConnection {
         Ok(n)
     }
 
-    /// Process buffered packets and advance state machine
-    ///
-    /// Like rustls, this loops until no more progress can be made, ensuring
-    /// that piggybacked application data is processed in the same call.
+    /// Process buffered packets until the state machine cannot progress.
     pub fn process_new_packets(&mut self) -> io::Result<()> {
         if let Some(error_kind) = self.fatal_error {
             return Err(io::Error::new(error_kind, "connection previously failed"));
         }
 
-        // RFC 8446: don't process data after close_notify
+        // RFC 8446 forbids processing data after close_notify.
         if self.received_close_notify {
             return Ok(());
         }
@@ -433,7 +410,6 @@ impl RealityClientConnection {
         result
     }
 
-    /// Inner implementation of process_new_packets
     fn process_new_packets_inner(&mut self) -> io::Result<()> {
         loop {
             match &self.handshake_state {
@@ -457,8 +433,7 @@ impl RealityClientConnection {
         Ok(())
     }
 
-    /// Process ServerHello
-    /// Returns true if a complete record was processed, false if more data needed
+    /// Process one complete ServerHello record when available.
     #[inline]
     fn process_server_hello(&mut self) -> io::Result<bool> {
         let HandshakeState::AwaitingServerHello {
@@ -487,7 +462,6 @@ impl RealityClientConnection {
             return Ok(false);
         }
 
-        // Clone fields before consuming buffer
         let client_hello_bytes = client_hello_bytes.clone();
         let auth_key = *auth_key;
 
@@ -514,9 +488,7 @@ impl RealityClientConnection {
                 ),
             )
         })?;
-        // The offered list and the implemented list are the same table: a suite
-        // the profile marks negotiable is one `CipherSuite::from_id` resolves,
-        // and `HelloProfile::validate` refused the hello otherwise.
+        // Validate against the same profile table used to advertise suites.
         if !negotiable.iter().any(|suite| suite.id() == cipher_suite_id) {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -529,7 +501,6 @@ impl RealityClientConnection {
 
         let server_key_share = extract_server_key_share(server_hello)?;
 
-        // Compute transcript hash using negotiated cipher suite's algorithm
         let mut full_transcript = digest::Context::new(cipher_suite.digest_algorithm());
         full_transcript.update(&client_hello_bytes); // Use actual ClientHello bytes, not hash!
         full_transcript.update(server_hello); // ServerHello already includes handshake header
@@ -542,9 +513,6 @@ impl RealityClientConnection {
             ctx.finish().as_ref().to_vec()
         };
 
-        // 32 bytes for x25519, 64 for X25519MLKEM768. This is the last use of
-        // the borrow on the handshake state, so the assignment below is free to
-        // replace it.
         let mut tls_shared_secret = key_exchange.complete(&server_key_share)?;
 
         let hs_keys = derive_handshake_keys(
@@ -555,7 +523,6 @@ impl RealityClientConnection {
         )?;
         tls_shared_secret.zeroize();
 
-        // Use actual bytes (not hashes) for transcript
         let mut transcript_bytes = Vec::new();
         transcript_bytes.extend_from_slice(&client_hello_bytes);
         transcript_bytes.extend_from_slice(server_hello);
@@ -566,8 +533,7 @@ impl RealityClientConnection {
             master_secret: hs_keys.master_secret,
             cipher_suite,
             handshake_transcript_bytes: transcript_bytes,
-            auth_key, // Pass auth_key for certificate HMAC verification
-            // Initialize state for handling multiple encrypted handshake records
+            auth_key,
             handshake_seq: 0,
             accumulated_plaintext: Vec::new(),
             parse_offset: 0,
@@ -581,9 +547,7 @@ impl RealityClientConnection {
         Ok(true)
     }
 
-    /// Process encrypted handshake messages (EncryptedExtensions, Certificate, CertificateVerify, Finished)
-    /// Handles both combined (1 record) and separate (multiple records) modes.
-    /// Returns true if a complete record was processed, false if more data needed
+    /// Process encrypted server handshake messages across one or more records.
     #[inline]
     fn process_encrypted_handshake(&mut self) -> io::Result<bool> {
         let HandshakeState::ProcessingHandshake {
@@ -635,7 +599,7 @@ impl RealityClientConnection {
             return Ok(false);
         }
 
-        // Skip ChangeCipherSpec (dummy in TLS 1.3)
+        // TLS 1.3 permits a dummy ChangeCipherSpec for compatibility.
         if record_type == CONTENT_TYPE_CHANGE_CIPHER_SPEC {
             self.ciphertext_read_buf.consume(total_record_len);
             return Ok(true);
@@ -651,7 +615,6 @@ impl RealityClientConnection {
             ));
         }
 
-        // NOW we're committed to processing - clone/copy fields we need to modify
         let client_hs_secret = client_handshake_traffic_secret.clone();
         let server_hs_secret = server_handshake_traffic_secret.clone();
         let master_secret = master_secret.clone();
@@ -667,12 +630,10 @@ impl RealityClientConnection {
         let mut cert_verify_offset = *cert_verify_offset;
         let mut finished_offset = *finished_offset;
 
-        // Copy and extract the encrypted handshake record
         let ciphertext: Vec<u8> =
             self.ciphertext_read_buf[TLS_RECORD_HEADER_SIZE..total_record_len].to_vec();
         self.ciphertext_read_buf.consume(total_record_len);
 
-        // Decrypt using current sequence number
         let plaintext = decrypt_handshake_message(
             cipher_suite,
             &server_hs_key,
@@ -684,12 +645,9 @@ impl RealityClientConnection {
 
         handshake_seq += 1;
 
-        accumulated_plaintext.extend_from_slice(&plaintext);
+        append_handshake_plaintext(&mut accumulated_plaintext, &plaintext)?;
 
-        // Continue from the first incomplete message so split TLS records are
-        // parsed correctly instead of treating a fragment as a new message.
         while parse_offset < accumulated_plaintext.len() && messages_found < 4 {
-            // Each handshake message has: type (1 byte) + length (3 bytes) + data
             if parse_offset + 4 > accumulated_plaintext.len() {
                 break; // Incomplete message header, need more data
             }
@@ -711,16 +669,10 @@ impl RealityClientConnection {
                 1 => HANDSHAKE_TYPE_CERTIFICATE,
                 2 => HANDSHAKE_TYPE_CERTIFICATE_VERIFY,
                 3 => HANDSHAKE_TYPE_FINISHED,
-                // The loop condition bounds this to 0..4, but the bound and the
-                // table live in different places; a mismatch must not abort the
-                // process.
                 _ => return Err(handshake_state_error("server handshake message index")),
             };
             if msg_type != expected {
-                // The hello offers `compress_certificate` because Chrome does,
-                // and a server may take the offer. RFC 8879 is not implemented
-                // here, so say that rather than reporting a message-order bug
-                // for a server that did exactly what it was invited to do.
+                // The Chrome-like hello advertises RFC 8879 for fingerprint fidelity only.
                 if msg_type == HANDSHAKE_TYPE_COMPRESSED_CERTIFICATE
                     && expected == HANDSHAKE_TYPE_CERTIFICATE
                 {
@@ -737,7 +689,6 @@ impl RealityClientConnection {
                 ));
             }
 
-            // Verify HMAC signature when we encounter the Certificate message
             if msg_type == HANDSHAKE_TYPE_CERTIFICATE {
                 let cert_der = extract_certificate_der(
                     &accumulated_plaintext[parse_offset..parse_offset + 4 + msg_len],
@@ -747,7 +698,6 @@ impl RealityClientConnection {
                 certificate_verified = true;
             }
 
-            // Record CertificateVerify offset for later verification
             if msg_type == HANDSHAKE_TYPE_CERTIFICATE_VERIFY {
                 cert_verify_offset = Some(parse_offset);
             }
@@ -779,7 +729,6 @@ impl RealityClientConnection {
             return Ok(true); // Processed a record, but need more
         }
 
-        // Ensure the Certificate message was present and HMAC verified
         if !certificate_verified {
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
@@ -787,10 +736,8 @@ impl RealityClientConnection {
             ));
         }
 
-        // Verify CertificateVerify signature
         let mut cert_verify_verified = false;
         if let (Some(public_key), Some(cv_offset)) = (ed25519_public_key, cert_verify_offset) {
-            // Transcript up to (not including) CertificateVerify
             let mut cv_transcript = digest::Context::new(cipher_suite.digest_algorithm());
             cv_transcript.update(&transcript_bytes);
             cv_transcript.update(&accumulated_plaintext[..cv_offset]);
@@ -898,7 +845,6 @@ impl RealityClientConnection {
         let (mut server_app_key_bytes, server_app_iv) =
             derive_traffic_keys(&server_app_secret, cipher_suite)?;
 
-        // Cache AeadKey objects to avoid per-record key setup
         let client_app_key = AeadKey::new(cipher_suite, &client_app_key_bytes)?;
         let server_app_key = AeadKey::new(cipher_suite, &server_app_key_bytes)?;
         client_app_key_bytes.zeroize();
@@ -918,8 +864,7 @@ impl RealityClientConnection {
         Ok(true)
     }
 
-    /// Decrypt application data using TLS 1.3 keys
-    /// Processes all complete TLS records in the buffer
+    /// Decrypt every complete TLS 1.3 application record in the buffer.
     #[inline]
     fn process_application_data(&mut self) -> io::Result<()> {
         let (app_read_key, app_read_iv) = match (&self.app_read_key, &self.app_read_iv) {
@@ -934,7 +879,6 @@ impl RealityClientConnection {
             }
             let record_len = total_record_len - TLS_RECORD_HEADER_SIZE;
 
-            // Decrypt in-place: get mutable slice of ciphertext, decrypt, copy plaintext out
             let ciphertext_slice = self
                 .ciphertext_read_buf
                 .slice_mut(TLS_RECORD_HEADER_SIZE..total_record_len);
@@ -944,23 +888,18 @@ impl RealityClientConnection {
 
             match content_type {
                 CONTENT_TYPE_APPLICATION_DATA => {
-                    // Compact plaintext buffer if needed before extending
                     self.plaintext_read_buf.maybe_compact(4096);
                     self.plaintext_read_buf.extend_from_slice(plaintext);
                 }
                 CONTENT_TYPE_ALERT => {
-                    // Parse alert: level (1 byte) + description (1 byte)
                     if plaintext.len() >= 2 {
                         let alert_level = plaintext[0];
                         let alert_desc = plaintext[1];
 
                         if alert_desc == ALERT_DESC_CLOSE_NOTIFY {
                             self.received_close_notify = true;
-                            // Per RFC 8446: "Any data received after a closure alert
-                            // has been received MUST be ignored."
                             return Ok(());
                         } else if alert_level != ALERT_LEVEL_WARNING {
-                            // Fatal alert - connection must be terminated
                             return Err(io::Error::new(
                                 io::ErrorKind::ConnectionAborted,
                                 format!("received fatal alert: {}", alert_desc),
@@ -968,11 +907,7 @@ impl RealityClientConnection {
                         }
                     }
                 }
-                // CONTENT_TYPE_HANDSHAKE is invalid after handshake complete
-                // strip_content_type() validates and returns error for invalid types
-                // `strip_content_type` is supposed to have rejected anything
-                // else already. Trusting that across a module boundary is how a
-                // remote peer gets to end the process.
+                // Never trust a cross-module content-type invariant to avoid a panic.
                 _ => {
                     return Err(io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -981,7 +916,6 @@ impl RealityClientConnection {
                 }
             }
 
-            // Consume the processed record from the buffer (after plaintext borrow ends)
             self.ciphertext_read_buf.consume(total_record_len);
         }
 
@@ -990,15 +924,16 @@ impl RealityClientConnection {
 
     /// Get a reader for accessing decrypted plaintext
     pub fn reader(&mut self) -> RealityReader<'_> {
-        // SlideBuffer handles compaction internally via maybe_compact()
-        // Compact before returning reader if we've consumed significant data
         self.plaintext_read_buf.maybe_compact(4096);
         RealityReader::new(&mut self.plaintext_read_buf, self.received_close_notify)
     }
 
     /// Get a writer for buffering plaintext to be encrypted
     pub fn writer(&mut self) -> RealityWriter<'_> {
-        RealityWriter::new(&mut self.plaintext_write_buf)
+        RealityWriter::new(
+            &mut self.plaintext_write_buf,
+            self.ciphertext_write_buf.len(),
+        )
     }
 
     /// Write buffered TLS messages to the provided writer
@@ -1006,14 +941,12 @@ impl RealityClientConnection {
     /// Large plaintext is automatically fragmented into multiple TLS records
     /// to comply with the TLS 1.3 record size limit.
     pub fn write_tls(&mut self, wr: &mut dyn Write) -> io::Result<usize> {
-        // If handshake not complete, just write buffered handshake data
         if !matches!(self.handshake_state, HandshakeState::Complete) {
             let n = wr.write(&self.ciphertext_write_buf)?;
             self.ciphertext_write_buf.drain(..n);
             return Ok(n);
         }
 
-        // Encrypt any pending plaintext (with automatic fragmentation for large data)
         if !self.plaintext_write_buf.is_empty() {
             let (app_write_key, app_write_iv) = match (&self.app_write_key, &self.app_write_iv) {
                 (Some(key), Some(iv)) => (key, iv),
@@ -1048,43 +981,49 @@ impl RealityClientConnection {
         !matches!(self.handshake_state, HandshakeState::Complete)
     }
 
+    #[cfg(test)]
+    pub(crate) fn complete_for_test(mut self) -> io::Result<Self> {
+        let cipher_suite = CipherSuite::AES_128_GCM_SHA256;
+        let key = vec![0_u8; cipher_suite.key_len()];
+        let iv = vec![0_u8; cipher_suite.nonce_len()];
+
+        self.handshake_state = HandshakeState::Complete;
+        self.app_read_key = Some(AeadKey::new(cipher_suite, &key)?);
+        self.app_read_iv = Some(iv.clone());
+        self.app_write_key = Some(AeadKey::new(cipher_suite, &key)?);
+        self.app_write_iv = Some(iv);
+        self.cipher_suite = Some(cipher_suite);
+        self.ciphertext_write_buf.clear();
+        self.plaintext_write_buf.clear();
+        Ok(self)
+    }
+
     /// Check if the connection wants to read more TLS data
     ///
     /// Returns true if we need more data to make progress (handshake or decryption).
     /// This mirrors rustls::Connection::wants_read().
     pub fn wants_read(&self) -> bool {
-        // Don't read more after receiving close_notify (RFC 8446)
         if self.received_close_notify {
             return false;
         }
 
-        // Don't read more if we're in a fatal error state
         if self.fatal_error.is_some() {
             return false;
         }
 
-        // During handshake, we always want to read
         if self.is_handshaking() {
             return true;
         }
 
-        // After handshake, we want to read if:
-        // 1. Plaintext buffer is empty (need more application data), OR
-        // 2. Ciphertext buffer has incomplete records that need more data
-        //
-        // Note: If plaintext buffer has data, the caller should consume it first.
-        // If ciphertext buffer has complete records, process_new_packets should be called.
         self.plaintext_read_buf.is_empty()
     }
 
     /// Queue a close notification alert
     pub fn send_close_notify(&mut self) {
-        // In TLS 1.3, alerts must be encrypted like application data
         if !matches!(self.handshake_state, HandshakeState::Complete) {
             return;
         }
 
-        // Get application keys
         let (app_write_key, app_write_iv) = match (&self.app_write_key, &self.app_write_iv) {
             (Some(key), Some(iv)) => (key, iv),
             _ => {
@@ -1092,7 +1031,6 @@ impl RealityClientConnection {
             }
         };
 
-        // Encrypt close_notify alert using RecordEncryptor
         let mut encryptor = RecordEncryptor::new(app_write_key, app_write_iv, &mut self.write_seq);
         let _ = encryptor.encrypt_close_notify(&mut self.ciphertext_write_buf);
     }
@@ -1146,11 +1084,7 @@ fn validate_server_hello(
         return Err(invalid("REALITY ServerHello session is invalid".to_owned()));
     }
 
-    // Lock 1 — HelloRetryRequest. It is a ServerHello with a fixed `random`,
-    // and treating it as one would derive handshake keys from a message that
-    // carries no key share at all. Chrome would answer it with a second hello
-    // for the group the server asked for; this client does not, and says so
-    // rather than failing later with something that looks like a parse bug.
+    // This one-flight client cannot answer a HelloRetryRequest with a second hello.
     if server_hello[6..38] == HELLO_RETRY_REQUEST_RANDOM {
         return Err(invalid(
             "REALITY server answered with a HelloRetryRequest; this client sends one ClientHello \
@@ -1159,11 +1093,7 @@ fn validate_server_hello(
         ));
     }
 
-    // Lock 2 — the negotiated version. `legacy_version` is 0x0303 in every TLS
-    // 1.3 ServerHello *and* in every TLS 1.2 one, so it proves nothing: the
-    // real answer is in `supported_versions`. The hello offers TLS 1.2 because
-    // Chrome does, which is exactly why a server taking that offer has to be
-    // refused here instead of being run through a 1.3-only key schedule.
+    // `legacy_version` is ambiguous; require TLS 1.3 in `supported_versions`.
     match extract_server_selected_version(server_hello)? {
         Some(TLS_1_3) => {}
         Some(version) => {
@@ -1218,6 +1148,40 @@ mod tests {
 
     fn fresh_connection() -> RealityClientConnection {
         RealityClientConnection::new(config()).unwrap()
+    }
+
+    #[test]
+    fn handshake_plaintext_accepts_the_exact_limit() {
+        let mut accumulated = vec![0x41; MAX_HANDSHAKE_PLAINTEXT - 1];
+
+        append_handshake_plaintext(&mut accumulated, &[0x42]).unwrap();
+
+        assert_eq!(accumulated.len(), MAX_HANDSHAKE_PLAINTEXT);
+        assert_eq!(accumulated[MAX_HANDSHAKE_PLAINTEXT - 1], 0x42);
+    }
+
+    #[test]
+    fn handshake_plaintext_rejects_one_byte_over_before_extending() {
+        let mut accumulated = vec![0x41; MAX_HANDSHAKE_PLAINTEXT];
+        let before = accumulated.clone();
+
+        let error = append_handshake_plaintext(&mut accumulated, &[0x42]).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(accumulated, before);
+    }
+
+    #[test]
+    fn connection_writer_accounts_for_its_pending_ciphertext() {
+        let mut connection = fresh_connection().complete_for_test().unwrap();
+        connection
+            .ciphertext_write_buf
+            .resize(crate::reality::common::OUTGOING_BUFFER_LIMIT - 3, 0x17);
+
+        let accepted = connection.writer().write(b"hello").unwrap();
+
+        assert_eq!(accepted, 3);
+        assert_eq!(connection.plaintext_write_buf, b"hel");
     }
 
     /// A state machine driven by a remote server must fail the connection, not

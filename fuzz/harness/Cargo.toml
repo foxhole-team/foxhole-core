@@ -5,7 +5,7 @@ edition = "2024"
 rust-version = "1.91"
 license = "GPL-3.0-or-later"
 publish = false
-description = "Fuzz target bodies for the eight FoxCore parsers that read the network"
+description = "Fuzz target bodies for the FoxCore parsers that read the network"
 
 # Its own workspace root, separate from both the repository root and `fuzz/`.
 # Resolving here must not need `libfuzzer-sys`: this crate is what gets built
@@ -30,7 +30,7 @@ foxcore-link = { path = "../../crates/foxcore-link" }
 ipnet = "2.11"
 # Default features on purpose: without `wireguard` the crate builds with dead
 # constants and the harness build is never clean.
-foxcore-tun = { path = "../../crates/foxcore-tun" }
+foxcore-tun = { path = "../../crates/foxcore-tun", features = ["fuzzing"] }
 proto-http = { path = "../../crates/proto-http", features = ["fuzzing"] }
 proto-reality = { path = "../../crates/proto-reality", features = ["fuzzing"] }
 proto-socks = { path = "../../crates/proto-socks", features = ["fuzzing"] }
