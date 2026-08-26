@@ -1582,7 +1582,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-android"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "foxcore-api",
  "foxcore-dialer",
@@ -1600,7 +1600,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-api"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "ipnet",
@@ -1613,7 +1613,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-component"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1630,21 +1630,21 @@ dependencies = [
 
 [[package]]
 name = "foxcore-dialer"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-dns"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "foxcore-link"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1659,7 +1659,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-outbound"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1687,7 +1687,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-relay"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "criterion",
  "tokio",
@@ -1695,7 +1695,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-route"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aws-lc-rs",
  "criterion",
@@ -1710,7 +1710,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-runtime"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1733,7 +1733,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-share"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "argon2",
  "base64",
@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-testkit"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1775,7 +1775,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-trafficmap"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "arc-swap",
  "foxcore-api",
@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-transport"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1812,7 +1812,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-tun"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -3354,7 +3354,7 @@ dependencies = [
 
 [[package]]
 name = "proto-anytls"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3369,7 +3369,7 @@ dependencies = [
 
 [[package]]
 name = "proto-http"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "bytes",
@@ -3382,7 +3382,7 @@ dependencies = [
 
 [[package]]
 name = "proto-hysteria2"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "blake2",
  "bytes",
@@ -3403,7 +3403,7 @@ dependencies = [
 
 [[package]]
 name = "proto-i2p"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "foxcore-api",
  "foxcore-transport",
@@ -3412,7 +3412,7 @@ dependencies = [
 
 [[package]]
 name = "proto-naive"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "bytes",
@@ -3428,7 +3428,7 @@ dependencies = [
 
 [[package]]
 name = "proto-reality"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -3444,7 +3444,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowsocks"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64",
  "bytes",
@@ -3459,7 +3459,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowtls"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3479,7 +3479,7 @@ dependencies = [
 
 [[package]]
 name = "proto-socks"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3492,7 +3492,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tor"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "arti-client",
  "async-trait",
@@ -3513,7 +3513,7 @@ dependencies = [
 
 [[package]]
 name = "proto-trojan"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3526,7 +3526,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tuic"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3542,7 +3542,7 @@ dependencies = [
 
 [[package]]
 name = "proto-vless"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3567,7 +3567,7 @@ dependencies = [
 
 [[package]]
 name = "proto-vmess"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3587,7 +3587,7 @@ dependencies = [
 
 [[package]]
 name = "proto-wireguard"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "aws-lc-rs",
  "blake2",

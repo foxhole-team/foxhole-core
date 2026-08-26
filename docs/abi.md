@@ -11,7 +11,7 @@ The Android application owns `VpnService`, the TUN file descriptor, UI state and
 | ABI | `1` |
 | Configuration schema | `1` |
 | Capabilities schema | `1` |
-| Core package | `0.0.3` (`Cargo.toml:36-41`) |
+| Core package | `0.0.4` (`Cargo.toml:36-41`) |
 | Native library | `foxhole_native` |
 
 Compatibility is negotiated by ABI version, configuration schema and the runtime capabilities document. Library version numbers are not used for feature detection.

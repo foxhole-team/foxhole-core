@@ -2,8 +2,11 @@
 
 ## Unreleased
 
-- Set the workspace and native capabilities version to 0.0.3 while retaining
+- Set the workspace and native capabilities version to 0.0.4 while retaining
   ABI v1 and configuration schema v1.
+- Give Tor-routed LAN and loopback CONNECT sessions 75 seconds to build a
+  fresh circuit while retaining the 30-second VPN/direct budget and bounded,
+  cancellation-aware session ownership.
 - Preserve the unread tail of a UDP datagram when a public `DatagramFlow`
   caller supplies a short or zero-capacity `ReadBuf`; the first datagram and
   queued datagrams now share the same regression-covered partial-read path.
