@@ -75,7 +75,8 @@ relative to their manifest URL. Redirecting the base moves every feed together. 
 move with it** — a mirror is only usable if it is published by the same tooling.
 
 Every request additionally passes `requirePublicHttpsUrl(resolveHost = true)`
-(`core/network/.../PublicUrlPolicy.kt:67-85`): HTTPS only, and the resolved addresses must not be
+(`core/network/src/main/kotlin/com/foxhole/core/network/PublicUrlPolicy.kt:67-85`): HTTPS only, and
+the resolved addresses must not be
 private or loopback.
 
 ---
@@ -126,7 +127,7 @@ Client-side sites: `DnsFilterUpdateClient.kt:290-316` (signature), `:319-354` (m
 `:356-371` (rollback), `:374-393` (artifact); persistence
 `DnsFilterAssetInstaller.kt:48-76`, re-verification on read `:107-139`; live hand-off
 `DnsFilterUpdateRepository.kt:90-123,170-193`, graph wiring `FoxholeAppGraph.kt:171-181`, and the
-generation-fenced call `FoxCoreRuntime.kt:673-709`. Start payload selection and dispatch are at
+generation-fenced call `FoxCoreRuntime.kt:732-768,1048-1076`. Start payload selection and dispatch are at
 `FoxCoreNativeSessionStarter.kt:79-105,252-283`.
 
 ### The native half
@@ -228,7 +229,7 @@ The DNS update repository wraps the durable store and invokes the runtime only a
 exact verified byte arrays have been committed (`DnsFilterUpdateRepository.kt:90-123,170-193`).
 `FoxCoreRuntime.installDnsRuleSet` snapshots the handle and generation only in a stable `RUNNING`
 state, invokes native verification, then commits the returned revision only if that owner is still
-current (`FoxCoreRuntime.kt:673-709`). Deferred, superseded, or rejected live activation does not
+current (`FoxCoreRuntime.kt:732-768,1048-1076`). Deferred, superseded, or rejected live activation does not
 discard the durable bundle: the next session re-reads it and uses the signed atomic start.
 
 What the core does with a fingerprint document (`proto-reality::install_fingerprint_tables`,
@@ -237,6 +238,14 @@ no duplicate names, every entry must map to a profile this build already impleme
 `verify_declared_digest` (`:154-169`) re-derives each `fingerprint_sha256`. Any failure refuses the
 **whole** document — never a partial install. A feed can change *which bytes a known parrot sends*
 and nothing else.
+
+The bridge feed is also input, not authority to change the selected pluggable transport. At the
+next Tor start, `AUTO` means Snowflake and an explicit choice stays that exact transport; the client
+tries downloaded bridges first and the bundled inventory second **within the same transport**
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorBridgeTorrcLines.kt:50-81`). If neither
+source has a compatible bridge and executable, startup fails closed. Only protocols actually named
+by the final `Bridge` lines survive into the managed-transport plan
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorRuntimeInstaller.kt:169-198,296-305`).
 
 > **Closed.** The installer's comment claimed it ran "after every successful feed update" while it
 > had exactly one call site, `FoxholeVpnService.onCreate()` — so a table set downloaded into a live
