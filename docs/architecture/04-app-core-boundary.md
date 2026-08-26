@@ -254,6 +254,44 @@ sequenceDiagram
 engine.** `protect()` is never called before the engine exists — it is a Rust→Java upcall made per
 outbound socket.
 
+### Desired Tor intent vs applied runtime
+
+```mermaid
+flowchart LR
+    D["persisted Tor settings<br/>desired intent"] --> A["appliedTorRouteOrNull<br/>session assembly"]
+    A --> S["VpnSession.appliedTorRoute"]
+    S --> C["ConnectionSnapshot<br/>runtime truth"]
+    C --> U["UI + notification + IP rows"]
+    D --> B["serialized setting barrier"]
+    B --> R["authoritative reload / stop"]
+    R -->|cannot remove Tor safely| F["fail-closed disconnect"]
+```
+
+The persisted privacy-route block is intent, not proof that Tor is carrying traffic. Revoking
+permission atomically clears the desired mode and enable timestamp
+(`app/src/main/kotlin/com/foxhole/guard/core/settings/SettingsRepositoryPrivacyRoute.kt:36-63`).
+Session assembly resolves that intent into an
+`AppliedTorRoute` only when permission, mode, transport and scope are compatible
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/RuntimeRouteConfig.kt:189-213`), stores it in
+the exact `VpnSession` being built
+(`app/src/main/kotlin/com/foxhole/guard/core/data/ProfileSessionFactory.kt:135-144`), and publishes it
+with the connection snapshot (`core/model/src/main/kotlin/com/foxhole/core/model/Models.kt:171-190,378-394`).
+Dashboard identity, Tor IP and notification route labels consume this applied descriptor rather
+than rereading settings (`app/src/main/kotlin/com/foxhole/guard/ui/HomeStateProducer.kt:432-438`;
+`app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeVpnServiceRuntimePolicies.kt:96-125`).
+
+Runtime-affecting writes are serialized. An authoritative Tor change commits the setting, then
+dispatches reload or stop even if an older reconnect warning is pending; cancellation cannot split
+those two synchronous steps
+(`app/src/main/kotlin/com/foxhole/guard/ui/HomeViewModelRuntimeSupport.kt:116-218`). If the
+replacement session cannot be built while its desired Tor route differs from the active one, the
+service tears the runtime down instead of keeping stale Tor live
+(`app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeVpnServiceReloadSupport.kt:350-449`). VPN+Tor
+stop/mode choices revalidate the applied descriptor before acting; the Tor-only handoff disconnects
+VPN before starting the standalone session, so interruption leaves the device disconnected rather
+than on the old route
+(`app/src/main/kotlin/com/foxhole/guard/ui/HomeViewModelVpnTorTransitionSupport.kt:15-115`).
+
 ---
 
 ## 4.6 Disconnect sequence
