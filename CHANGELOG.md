@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Document Guard release provenance checks and F-Droid Core selection from the
+  app revision pin; correct the reproducible recipe's update-channel description.
+
 - Set the workspace and native capabilities version to 0.0.4 while retaining
   ABI v1 and configuration schema v1.
 - Give Tor-routed LAN and loopback CONNECT sessions 75 seconds to build a

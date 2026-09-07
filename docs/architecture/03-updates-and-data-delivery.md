@@ -304,7 +304,7 @@ sequenceDiagram
 | Which signers | `apkContentsSigners`, deliberately **not** `signingCertificateHistory`, and empty sets never match — `AppUpdateApkVerifier.kt:49-80` |
 | Static cert pin | none in the client. `foxhole_guard/config/release-cert-sha256.txt` (`e59de248…0df665`) is a **build-time** check, not a runtime one |
 | Install | user-driven `ACTION_VIEW`, no `PackageInstaller` session, no silent install — `HomeViewModelAppUpdateSupport.kt:99-126` |
-| Channel gate | `github` only; the F-Droid build stamps `updateFloorVersionCode` / `updateSupportedUntilEpochDay` instead — `app/build.gradle.kts:164-170` |
+| Channel gate | `github` enables the updater; F-Droid reproduces the upstream GitHub-channel APK (`metadata/com.foxhole.guard.yml:54-55`). The separate `fdroid` channel properties remain available for alternate builds (`app/build.gradle.kts:260-266`). |
 
 The manifest digest proves the bytes match what the source described; it does **not** prove the
 source is ours, because the releases URL and token are user-editable settings. That is why the
@@ -312,7 +312,36 @@ verifier re-reads the archive through `PackageManager` before the installer is e
 
 ---
 
-## 3.7 Smaller inconsistencies found
+## 3.7 Guard release provenance and F-Droid updates
+
+Guard release publication requires a GitHub-verified `main` commit and an unexpired,
+successful signed `dev` candidate with the same source tree. It verifies the candidate,
+then builds a new signed APK from that exact `main` commit; packaging compares the
+APK's root AGP VCS revision with `CANDIDATE.json.sourceCommit`. Matching trees alone do
+not authorize substituting the candidate APK for the release APK
+(`foxhole_guard/.github/workflows/release.yml:26-170,172-252`;
+`foxhole_guard/scripts/package-release-candidate.sh:339-348,518`;
+`foxhole_guard/scripts/verify-apk-source.py:9-29`).
+
+After signing, SBOM, native and package checks, the workflow creates a tag directly
+at the built commit. Draft assets are downloaded and compared before publication;
+existing tags and releases are refused, and a failed upload leaves its tag/draft for
+owner recovery instead of deleting history
+(`foxhole_guard/.github/workflows/release.yml:155-165,217-252,272-360`).
+
+F-Droid's `AutoUpdateMode: Version` and tag check generate future build entries from
+the latest recipe. Its prebuild validates and fetches the Core SHA from the checked-out
+app's `config/foxcore-revision.txt`; changing that app pin changes the built Core without
+editing a second srclib pin. Pinned tools, the upstream binary URL and signer verification
+remain recipe inputs. The scanner removes binary fuzz corpus fixtures from the downloaded
+Core sources; production sources remain scanned (`foxhole_guard/metadata/com.foxhole.guard.yml:15-16,27-63`).
+Build 117 keeps its historical candidate SHA because the published 0.1.0 APK embeds that
+SHA; later release APKs must embed the commit their tag resolves to
+(`foxhole_guard/metadata/com.foxhole.guard.yml:19-21`).
+
+---
+
+## 3.8 Smaller inconsistencies found
 
 | Finding | Where |
 |---|---|
@@ -322,3 +351,7 @@ verifier re-reads the archive through `PackageManager` before the installer is e
 > **Closed in this pass.** Earlier documentation said the DNS updater only persisted bundles and
 > that the APK updater required a manifest before it could report `UpToDate`. Both claims
 > contradicted current production paths and are corrected above.
+
+> **Release documentation correction.** The prior channel table described F-Droid as using
+> the separate `fdroid` updater channel. The accepted reproducible recipe actually selects
+> `github` to reproduce the upstream signed binary; the table now follows that recipe.
