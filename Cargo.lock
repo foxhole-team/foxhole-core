@@ -609,9 +609,9 @@ dependencies = [
 
 [[package]]
 name = "chacha20"
-version = "0.10.1"
+version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d524456ba66e72eb8b115ff89e01e497f8e6d11d78b70b1aa13c0fbd97540a81"
+checksum = "65c35e4b699c7e15ccbe7ee35c005e4fc0a278d22238a2857e6ce2dadeda1b06"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.0",
@@ -754,15 +754,6 @@ name = "compression-core"
 version = "0.4.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cc14f565cf027a105f7a44ccf9e5b424348421a1d8952a8fc9d499d313107789"
-
-[[package]]
-name = "concurrent-queue"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ca0197aee26d1ae37445ee532fefce43251d24cc7c166799f4d46817f1d3973"
-dependencies = [
- "crossbeam-utils",
-]
 
 [[package]]
 name = "const-oid"
@@ -1465,11 +1456,10 @@ dependencies = [
 
 [[package]]
 name = "event-listener"
-version = "5.4.1"
+version = "5.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e13b66accf52311f30a0db42147dadea9850cb48cd070028831ae5f5d4b856ab"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
 dependencies = [
- "concurrent-queue",
  "parking",
  "pin-project-lite",
 ]
@@ -1582,7 +1572,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-android"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "foxcore-api",
  "foxcore-dialer",
@@ -1600,7 +1590,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-api"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "base64",
  "ipnet",
@@ -1613,7 +1603,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-component"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1630,21 +1620,21 @@ dependencies = [
 
 [[package]]
 name = "foxcore-dialer"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-dns"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "foxcore-link"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1659,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-outbound"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1687,7 +1677,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-relay"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "criterion",
  "tokio",
@@ -1695,7 +1685,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-route"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "aws-lc-rs",
  "criterion",
@@ -1710,7 +1700,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-runtime"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1733,7 +1723,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-share"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "argon2",
  "base64",
@@ -1754,7 +1744,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-testkit"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1775,7 +1765,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-trafficmap"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "arc-swap",
  "foxcore-api",
@@ -1787,7 +1777,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-transport"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1812,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-tun"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -3354,7 +3344,7 @@ dependencies = [
 
 [[package]]
 name = "proto-anytls"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3369,7 +3359,7 @@ dependencies = [
 
 [[package]]
 name = "proto-http"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "base64",
  "bytes",
@@ -3382,7 +3372,7 @@ dependencies = [
 
 [[package]]
 name = "proto-hysteria2"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "blake2",
  "bytes",
@@ -3403,7 +3393,7 @@ dependencies = [
 
 [[package]]
 name = "proto-i2p"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "foxcore-api",
  "foxcore-transport",
@@ -3412,7 +3402,7 @@ dependencies = [
 
 [[package]]
 name = "proto-naive"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "base64",
  "bytes",
@@ -3428,7 +3418,7 @@ dependencies = [
 
 [[package]]
 name = "proto-reality"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -3444,7 +3434,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowsocks"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "base64",
  "bytes",
@@ -3459,7 +3449,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowtls"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3479,7 +3469,7 @@ dependencies = [
 
 [[package]]
 name = "proto-socks"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3492,7 +3482,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tor"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "arti-client",
  "async-trait",
@@ -3513,7 +3503,7 @@ dependencies = [
 
 [[package]]
 name = "proto-trojan"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3526,7 +3516,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tuic"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3542,7 +3532,7 @@ dependencies = [
 
 [[package]]
 name = "proto-vless"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3567,7 +3557,7 @@ dependencies = [
 
 [[package]]
 name = "proto-vmess"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -3587,7 +3577,7 @@ dependencies = [
 
 [[package]]
 name = "proto-wireguard"
-version = "0.0.3"
+version = "0.0.5"
 dependencies = [
  "aws-lc-rs",
  "blake2",
@@ -3735,7 +3725,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7f5fa3a058cd35567ef9bfa5e75732bee0f9e4c55fa90477bef2dfcdbc4be80"
 dependencies = [
- "chacha20 0.10.1",
+ "chacha20 0.10.2",
  "getrandom 0.4.3",
  "rand_core 0.10.1",
 ]

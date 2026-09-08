@@ -29,6 +29,147 @@ const INNOCENT_UID: u32 = 10_202;
 
 const SOON: Duration = Duration::from_secs(5);
 
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn kill_and_network_change_close_tcp_and_udp_from_before_two_reloads() {
+    use foxcore_dialer::ProtectedDialer;
+    use foxcore_outbound::{Outbound, OutboundRegistry};
+    use foxcore_tun::{FlowEngineContext, FlowPolicyStore};
+    for kill in [false, true] {
+        let metrics = Arc::new(FlowMetrics::default());
+        let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+        let outbounds = Arc::new(OutboundRegistry::single(direct.clone()));
+        let routes = |kill_switch| {
+            RouteTable::compile_with_traffic(
+                Vec::new(),
+                RouteAction::Direct,
+                foxcore_api::TrafficPolicyConfig {
+                    kill_switch,
+                    ..Default::default()
+                },
+                false,
+                false,
+            )
+        };
+        let policy = Arc::new(
+            FlowPolicyStore::new(
+                1,
+                routes(false),
+                Default::default(),
+                outbounds.clone(),
+                direct.clone(),
+                metrics.clone(),
+                EventSink::none(),
+            )
+            .unwrap(),
+        );
+        let connections = Arc::new(ConnectionTracker::default());
+        let engine = FlowEngine::new(FlowEngineContext {
+            outbounds,
+            direct,
+            policy: policy.clone(),
+            attributor: FlowAttributor::none(),
+            runtime: RuntimeConfig::default(),
+            metrics: metrics.clone(),
+            events: EventSink::none(),
+            packet_tunnel: false,
+            connections: connections.clone(),
+        });
+        let wire = Wire::start(engine);
+        let listener = tokio::net::TcpListener::bind((tunlab::SERVER, 0))
+            .await
+            .unwrap();
+        let tcp_port = listener.local_addr().unwrap().port();
+        let ack = wire.handshake(BLOCKED_PORT, tcp_port, 100).await;
+        wire.send(
+            BLOCKED_PORT,
+            tcp_port,
+            FLAG_ACK | FLAG_PSH,
+            101,
+            ack,
+            b"before",
+        )
+        .await;
+        let (mut peer, _) = tokio::time::timeout(SOON, listener.accept())
+            .await
+            .unwrap()
+            .unwrap();
+        let mut bytes = [0; 16];
+        peer.read_exact(&mut bytes[..6]).await.unwrap();
+        assert_eq!(&bytes[..6], b"before");
+        let udp = tokio::net::UdpSocket::bind((tunlab::SERVER, 0))
+            .await
+            .unwrap();
+        let udp_port = udp.local_addr().unwrap().port();
+        wire.send_datagram(INNOCENT_PORT, udp_port, b"before").await;
+        let (length, udp_peer) = tokio::time::timeout(SOON, udp.recv_from(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&bytes[..length], b"before");
+        for revision in 1..=2 {
+            policy
+                .reload(Some(revision), routes(false), Default::default())
+                .unwrap();
+        }
+        wire.send(
+            BLOCKED_PORT,
+            tcp_port,
+            FLAG_ACK | FLAG_PSH,
+            107,
+            ack,
+            b"retained",
+        )
+        .await;
+        peer.read_exact(&mut bytes[..8]).await.unwrap();
+        assert_eq!(&bytes[..8], b"retained");
+        wire.send_datagram(INNOCENT_PORT, udp_port, b"retained")
+            .await;
+        let (length, peer_after) = tokio::time::timeout(SOON, udp.recv_from(&mut bytes))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&bytes[..length], b"retained");
+        assert_eq!(peer_after, udp_peer);
+        if kill {
+            policy
+                .reload(Some(3), routes(true), Default::default())
+                .unwrap();
+        } else {
+            policy.network_changed();
+        }
+        assert!(
+            settles(SOON, || metrics.snapshot().flows_revoked == 2
+                && connections.snapshot().connections.is_empty())
+            .await
+        );
+        assert!(
+            wire.watch(BLOCKED_PORT, SOON, |seen| seen.flags & FLAG_RST != 0)
+                .await
+                .is_some()
+        );
+        assert_eq!(
+            tokio::time::timeout(SOON, peer.read(&mut bytes))
+                .await
+                .unwrap()
+                .unwrap(),
+            0
+        );
+        // The old UDP session cannot deliver a late upstream response after revocation.
+        udp.send_to(b"late", udp_peer).await.unwrap();
+        if kill {
+            wire.send_datagram(INNOCENT_PORT, udp_port, b"forbidden")
+                .await;
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), udp.recv_from(&mut bytes))
+                    .await
+                    .is_err()
+            );
+        }
+        wire.stop().await;
+    }
+}
+
 /// Test attributor keyed by client port.
 fn attributor() -> FlowAttributor {
     FlowAttributor::new(|_transport, source: std::net::SocketAddr, _destination| {

@@ -25,6 +25,8 @@ pub enum NaiveError {
     Invalid(&'static str),
     #[error("HTTP/2: {0}")]
     Http2(String),
+    #[error("NaiveProxy connection closed before a stream could be reserved")]
+    ConnectionClosed,
     #[error(transparent)]
     Io(#[from] io::Error),
 }
@@ -40,6 +42,7 @@ impl NaiveError {
             // Not "unsupported": the profile is refused, not degraded.
             Self::PaddingRefused => io::ErrorKind::ConnectionRefused,
             Self::UnknownPaddingType(_) | Self::Http2(_) => io::ErrorKind::InvalidData,
+            Self::ConnectionClosed => io::ErrorKind::ConnectionAborted,
             Self::Io(error) => error.kind(),
         }
     }
@@ -60,7 +63,7 @@ impl NaiveError {
     /// not complete is the server's answer, and retrying it would only ask the
     /// same question again.
     pub(crate) fn is_connection_lost(&self) -> bool {
-        matches!(self, Self::Http2(_))
+        matches!(self, Self::Http2(_) | Self::ConnectionClosed)
     }
 }
 

@@ -2,7 +2,7 @@
     "capabilities_schema_version": 1,
     "abi_version": 1,
     "config_schema_version": 1,
-    "core_version": "0.0.3",
+    "core_version": "0.0.5",
     "protocols": [
         {
             "id": "vless",

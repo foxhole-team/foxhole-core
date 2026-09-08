@@ -235,6 +235,7 @@ pub(super) async fn exchange_dns(
     proxy
         .exchange_for_identity(
             query,
+            context.uid,
             context.package.as_deref(),
             context.packages.as_slice(),
         )
@@ -321,9 +322,7 @@ pub(crate) fn context_for(
     dns: &DnsCache,
 ) -> FlowContext {
     let fake_domain = dns.fake_domain(destination.ip());
-    let domain_hint = fake_domain
-        .clone()
-        .or_else(|| dns.reverse_domain(destination.ip()));
+    let domain_hint = fake_domain.clone();
     let destination = match fake_domain {
         Some(domain) => Destination::new(domain, destination.port()),
         None => Destination::new(destination.ip().to_string(), destination.port()),
@@ -332,6 +331,27 @@ pub(crate) fn context_for(
     context.source = Some(source);
     context.domain_hint = domain_hint;
     context
+}
+
+pub(crate) fn bind_dns_context(
+    context: &mut FlowContext,
+    routes: &RouteTable,
+    dns: &DnsCache,
+) -> bool {
+    let Some(address) = context.destination.ip() else {
+        return true;
+    };
+    if !routes.requires_domain_hints() || *routes.decide(context) == RouteAction::Block {
+        return true;
+    }
+    let Some(uid) = context.uid else {
+        return false;
+    };
+    let identity = foxcore_dns::DnsIdentity::new(uid, context.packages.clone());
+    let Some(names) = dns.route_hints(&identity, address) else {
+        return false;
+    };
+    routes.constrain_with_dns_hints(context, &names)
 }
 
 pub(crate) fn answer_icmp(unknown: UnknownTransport) {

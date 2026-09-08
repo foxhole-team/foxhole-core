@@ -40,6 +40,14 @@ struct ApplicationEntry {
     expires_at_ms: Option<u64>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteExplanation {
+    pub action: RouteAction,
+    pub route_rule_index: Option<usize>,
+    pub route_rule_applied: bool,
+    pub shadowed_block_rules: Vec<usize>,
+}
+
 impl ApplicationEntry {
     fn is_active(&self, now_ms: Option<u64>) -> bool {
         match (self.expires_at_ms, now_ms) {
@@ -174,6 +182,45 @@ impl RouteTable {
         self.requires_uid || self.requires_package
     }
 
+    pub fn requires_domain_hints(&self) -> bool {
+        !self.exact_domains.is_empty() || !self.suffix_domains.children.is_empty()
+    }
+
+    /// Inferred names can restrict an IP route, never grant a more permissive one.
+    /// Distinct protected routes are incomparable and require explicit name binding.
+    pub fn constrain_with_dns_hints(&self, flow: &mut FlowContext, names: &[String]) -> bool {
+        flow.domain_hint = None;
+        let mut candidate = flow.clone();
+        let mut selected = self.decide(&candidate).clone();
+        if selected == RouteAction::Block {
+            return true;
+        }
+        if names.is_empty() {
+            return false;
+        }
+        let mut selected_name = None;
+        let mut conflict = false;
+        for name in names {
+            candidate.domain_hint = Some(name.clone());
+            let action = self.decide(&candidate);
+            if *action == RouteAction::Block {
+                flow.domain_hint = Some(name.clone());
+                return true;
+            }
+            if *action == RouteAction::Direct || *action == selected {
+                continue;
+            }
+            if selected == RouteAction::Direct {
+                selected = action.clone();
+                selected_name = Some(name.clone());
+            } else {
+                conflict = true;
+            }
+        }
+        flow.domain_hint = selected_name;
+        !conflict
+    }
+
     pub fn tor_enabled(&self) -> bool {
         self.tor_enabled
     }
@@ -183,18 +230,71 @@ impl RouteTable {
     }
 
     pub fn decide(&self, flow: &FlowContext) -> &RouteAction {
+        self.decide_at(flow, self.has_expiring.then(now_millis))
+    }
+
+    /// Explain schema-v1 specificity exceptions without changing routing semantics.
+    pub fn explain(&self, flow: &FlowContext) -> RouteExplanation {
+        let now = self.has_expiring.then(now_millis);
+        let action = self.decide_at(flow, now);
+        let candidate = self.match_rules(flow, now);
+        let route_rule_index = candidate.and_then(|action| {
+            self.rules
+                .iter()
+                .position(|rule| std::ptr::eq(&rule.action, action))
+        });
+        let domain = flow
+            .domain_hint
+            .as_deref()
+            .or_else(|| {
+                flow.destination
+                    .ip()
+                    .is_none()
+                    .then_some(flow.destination.host.as_str())
+            })
+            .map(normalize_domain);
+        let shadowed_block_rules = self
+            .rules
+            .iter()
+            .enumerate()
+            .filter(|(index, rule)| {
+                Some(*index) != route_rule_index
+                    && rule.action == RouteAction::Block
+                    && rule_matches(rule, flow, now)
+                    && ((rule.exact_domains.is_empty() && rule.domain_suffixes.is_empty())
+                        || domain.as_ref().is_some_and(|domain| {
+                            rule.exact_domains
+                                .iter()
+                                .any(|name| normalize_domain(name) == *domain)
+                                || rule.domain_suffixes.iter().any(|suffix| {
+                                    let suffix = normalize_domain(suffix);
+                                    *domain == suffix
+                                        || domain
+                                            .strip_suffix(&suffix)
+                                            .is_some_and(|prefix| prefix.ends_with('.'))
+                                })
+                        }))
+            })
+            .map(|(index, _)| index)
+            .collect();
+        RouteExplanation {
+            action: action.clone(),
+            route_rule_index,
+            route_rule_applied: candidate.is_some_and(|candidate| std::ptr::eq(candidate, action)),
+            shadowed_block_rules,
+        }
+    }
+
+    fn decide_at(&self, flow: &FlowContext, now_ms: Option<u64>) -> &RouteAction {
         // Stage 0: the global kill switch outranks everything — explicit application
         // allowances, the default allowlist and the `.onion`/`.i2p` auto-route alike.
         if self.kill_switch {
             return &self.block;
         }
-        // final.txt §6/§14: the firewall is evaluated *before* route selection, so an
-        // explicit BLOCK rule outranks every per-app VPN/Tor/Direct decision. The
-        // pre-pass only runs when the table actually carries BLOCK rules, so a policy
-        // without them keeps the per-app fast path untouched.
+        // A specificity-selected Block precedes application rules. More-specific
+        // non-Block exceptions remain part of the schema-v1 routing contract.
         // Read the wall clock at most once per flow, and only when the compiled
         // policy actually carries deadlines.
-        let now_ms = self.has_expiring.then(now_millis);
         let matched = self.has_block_rules.then(|| self.match_rules(flow, now_ms));
         if let Some(Some(action)) = matched
             && matches!(action, RouteAction::Block)
@@ -445,6 +545,114 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn shared_addresses_cannot_weaken_routes_by_response_order() {
+        let protected = RouteRule {
+            exact_domains: vec!["protected.invalid".into()],
+            action: RouteAction::Tor,
+            ..empty_rule(RouteAction::Direct)
+        };
+        let allowed = RouteRule {
+            exact_domains: vec!["allowed.invalid".into()],
+            action: RouteAction::Direct,
+            ..empty_rule(RouteAction::Direct)
+        };
+        let blocked = RouteRule {
+            exact_domains: vec!["blocked.invalid".into()],
+            action: RouteAction::Block,
+            ..empty_rule(RouteAction::Direct)
+        };
+        let table = RouteTable::compile(vec![allowed, protected, blocked], RouteAction::Direct);
+        for names in [
+            vec!["protected.invalid", "allowed.invalid"],
+            vec!["allowed.invalid", "protected.invalid"],
+        ] {
+            let mut flow =
+                FlowContext::new(1, IpTransport::Tcp, Destination::new("203.0.113.9", 443));
+            assert!(table.constrain_with_dns_hints(
+                &mut flow,
+                &names.into_iter().map(str::to_owned).collect::<Vec<_>>()
+            ));
+            assert_eq!(table.decide(&flow), &RouteAction::Tor);
+            assert!(table.constrain_with_dns_hints(
+                &mut flow,
+                &["allowed.invalid".into(), "blocked.invalid".into()]
+            ));
+            assert_eq!(table.decide(&flow), &RouteAction::Block);
+        }
+        let table = RouteTable::compile(
+            vec![
+                RouteRule {
+                    exact_domains: vec!["allowed.invalid".into()],
+                    action: RouteAction::Direct,
+                    ..empty_rule(RouteAction::Direct)
+                },
+                RouteRule {
+                    cidrs: vec!["203.0.113.0/24".parse().unwrap()],
+                    action: RouteAction::Block,
+                    ..empty_rule(RouteAction::Direct)
+                },
+            ],
+            RouteAction::Direct,
+        );
+        let mut flow = FlowContext::new(1, IpTransport::Tcp, Destination::new("203.0.113.9", 443));
+        assert!(table.constrain_with_dns_hints(&mut flow, &["allowed.invalid".into()]));
+        assert_eq!(table.decide(&flow), &RouteAction::Block);
+        // An explicit name retains the existing specificity-first exception contract.
+        flow.domain_hint = Some("allowed.invalid".into());
+        assert_eq!(table.decide(&flow), &RouteAction::Direct);
+        assert!(table.constrain_with_dns_hints(&mut flow, &["allowed.invalid".into()]));
+        assert_eq!(table.decide(&flow), &RouteAction::Block);
+    }
+
+    #[test]
+    fn specificity_exceptions_report_shadowed_blocks_across_identity_and_expiry() {
+        for exact in [false, true] {
+            for uid_matches in [false, true] {
+                for package_matches in [false, true] {
+                    for expired in [false, true] {
+                        for action in [RouteAction::Direct, RouteAction::Tor, RouteAction::Block] {
+                            let mut exception = empty_rule(action.clone());
+                            if exact {
+                                exception.exact_domains = vec!["www.example.com".into()];
+                            } else {
+                                exception.domain_suffixes = vec!["example.com".into()];
+                            }
+                            exception.uid = Some(10001);
+                            exception.package = Some("app".into());
+                            exception.expires_at_ms = expired.then_some(1);
+                            let mut block = empty_rule(RouteAction::Block);
+                            block.cidrs = vec!["203.0.113.0/24".parse().unwrap()];
+                            let table =
+                                RouteTable::compile(vec![block, exception], RouteAction::Direct);
+                            let mut flow = FlowContext::new(
+                                1,
+                                IpTransport::Tcp,
+                                Destination::new("203.0.113.9", 443),
+                            );
+                            flow.domain_hint = Some("www.example.com".into());
+                            flow.uid = Some(if uid_matches { 10001 } else { 10002 });
+                            flow.packages =
+                                vec![if package_matches { "app" } else { "other" }.into()];
+                            let matches = uid_matches && package_matches && !expired;
+                            let trace = table.explain(&flow);
+                            assert_eq!(
+                                trace.action,
+                                if matches { action } else { RouteAction::Block }
+                            );
+                            assert_eq!(trace.route_rule_index, Some(if matches { 1 } else { 0 }));
+                            assert_eq!(
+                                trace.shadowed_block_rules,
+                                if matches { vec![0] } else { Vec::new() }
+                            );
+                            assert!(trace.route_rule_applied);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     fn empty_rule(action: RouteAction) -> RouteRule {
         RouteRule {

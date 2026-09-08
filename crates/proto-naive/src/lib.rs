@@ -212,7 +212,14 @@ where
 {
     let mut last = None;
     for _ in 0..MAX_CONNECT_ATTEMPTS {
-        let lease = pool.acquire(&connect).await?;
+        let lease = match pool.acquire(&connect).await {
+            Ok(lease) => lease,
+            Err(error) if error.is_connection_lost() => {
+                last = Some(error);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let opened = open_stream(
             lease.sender(),
             destination,

@@ -307,8 +307,7 @@ impl CoreRuntime {
             LoopbackUpstream::Tor => LanRoute::Tor,
             LoopbackUpstream::Direct => LanRoute::Direct,
         };
-        // Absent together — validated above — is the anonymous listener the app
-        // asked for; present together must still form usable credentials.
+        // Validation requires explicit anonymous consent when both are absent.
         let credentials = match (&config.username, &config.password) {
             (Some(username), Some(password)) => Some(
                 LanCredentials::new(username.clone(), password.expose().as_bytes().to_vec())
@@ -405,6 +404,11 @@ impl CoreRuntime {
         let rows = inbounds
             .iter()
             .map(|session| LoopbackInboundStatus {
+                authentication: if session.credentials.is_some() {
+                    "credentials"
+                } else {
+                    "anonymous"
+                },
                 name: session.name.as_str(),
                 upstream: session.upstream.name(),
                 state: lan_state_name(session.handle.state()),

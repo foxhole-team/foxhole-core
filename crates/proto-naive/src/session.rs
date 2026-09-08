@@ -31,6 +31,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 
+use crate::NaiveError;
 use bytes::Bytes;
 use foxcore_transport::BoxStream;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -241,10 +242,10 @@ impl std::fmt::Debug for H2Pool {
 impl H2Pool {
     /// Reserve a stream slot, opening a connection with `connect` if no live one
     /// has room.
-    pub(crate) async fn acquire<F, Fut, E>(&self, connect: F) -> Result<Lease, E>
+    pub(crate) async fn acquire<F, Fut>(&self, connect: F) -> Result<Lease, NaiveError>
     where
         F: Fn() -> Fut,
-        Fut: Future<Output = Result<Established, E>>,
+        Fut: Future<Output = Result<Established, NaiveError>>,
     {
         if let Some(lease) = self.reserve() {
             return Ok(lease);
@@ -259,7 +260,7 @@ impl H2Pool {
         let session = Arc::new(Session::from(connect().await?));
         let lease = Arc::clone(&session)
             .try_lease()
-            .expect("a connection this call just opened has a free stream slot");
+            .ok_or(NaiveError::ConnectionClosed)?;
         self.live().push(session);
         Ok(lease)
     }
@@ -294,5 +295,47 @@ impl From<Established> for Session {
             in_flight: AtomicUsize::new(0),
             retired: established.retired,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn immediate_eof_before_lease_is_a_bounded_connection_error() {
+        let pool = H2Pool::default();
+        let attempts = AtomicUsize::new(0);
+        let dial = || async {
+            attempts.fetch_add(1, Ordering::Relaxed);
+            let (client, server) = tokio::io::duplex(4096);
+            let (sender, connection) = h2::client::handshake(client).await?;
+            let established = establish(sender, connection);
+            drop(server);
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                while !established.retired.load(Ordering::Acquire) {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            Ok::<_, NaiveError>(established)
+        };
+        let error = crate::multiplexed_connect(
+            &pool,
+            dial,
+            &foxcore_api::Destination::new("example.invalid", 443),
+            None,
+            false,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(matches!(error, NaiveError::ConnectionClosed));
+        assert_eq!(
+            attempts.load(Ordering::Relaxed),
+            crate::MAX_CONNECT_ATTEMPTS
+        );
+        assert_eq!(pool.connection_count(), 0);
     }
 }

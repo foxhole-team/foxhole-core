@@ -58,9 +58,8 @@ pub(crate) fn response_metadata(query: &[u8], response: &[u8]) -> Option<Respons
     // says it answers the query this resolver actually sent. Without it a host
     // on the same Wi-Fi races the upstream with its own A record, the forgery
     // is served to the application, retained for up to `MAX_TTL`, and
-    // `observe_response` folds it into the IP→name map that domain routing
-    // rules are matched through — so one spoofed datagram outlives the flow it
-    // was aimed at and quietly re-labels addresses for the whole session.
+    // attributed route hints could otherwise outlive the query and constrain
+    // later connections from the same application with a forged answer.
     //
     // Every transport the interceptor has reaches here with the ID intact. UDP,
     // TCP and DoT echo the query's; DoH normalises it to zero on the wire and
@@ -143,69 +142,77 @@ pub(crate) struct AddressAnswer {
 }
 
 pub(crate) fn parse_addresses(packet: &[u8]) -> Option<Vec<AddressAnswer>> {
+    use std::collections::{HashMap, HashSet};
     if packet.len() < DNS_HEADER_LEN {
         return None;
     }
     let flags = u16::from_be_bytes([packet[2], packet[3]]);
-    if flags & 0x8000 == 0 {
+    if flags & 0x8000 == 0 || flags & 0x7a0f != 0 || packet[4..6] != [0, 1] {
         return None;
     }
-    let question_count = u16::from_be_bytes([packet[4], packet[5]]) as usize;
     let answer_count = u16::from_be_bytes([packet[6], packet[7]]) as usize;
-    if question_count == 0 {
+    let mut offset = DNS_HEADER_LEN;
+    let domain = read_name(packet, &mut offset)?;
+    let query_type = u16::from_be_bytes([*packet.get(offset)?, *packet.get(offset + 1)?]);
+    if packet.get(offset + 2..offset + 4)? != [0, 1] {
         return None;
     }
-
-    let mut offset = DNS_HEADER_LEN;
-    let mut query_domain = None;
-    for index in 0..question_count {
-        let name = read_name(packet, &mut offset)?;
-        if index == 0 {
-            query_domain = Some(name);
-        }
-        offset = offset.checked_add(4)?;
-        if offset > packet.len() {
-            return None;
-        }
-    }
-    let query_domain = query_domain?;
-    let mut answers = Vec::new();
+    offset += 4;
+    let mut aliases = HashMap::new();
+    let mut addresses = Vec::new();
     for _ in 0..answer_count {
-        let _answer_name = read_name(packet, &mut offset)?;
-        if offset.checked_add(10)? > packet.len() {
-            return None;
-        }
-        let record_type = u16::from_be_bytes([packet[offset], packet[offset + 1]]);
-        let class = u16::from_be_bytes([packet[offset + 2], packet[offset + 3]]);
-        let ttl = u32::from_be_bytes([
-            packet[offset + 4],
-            packet[offset + 5],
-            packet[offset + 6],
-            packet[offset + 7],
-        ]);
-        let data_len = u16::from_be_bytes([packet[offset + 8], packet[offset + 9]]) as usize;
+        let owner = read_name(packet, &mut offset)?;
+        let header = packet.get(offset..offset.checked_add(10)?)?;
+        let record_type = u16::from_be_bytes([header[0], header[1]]);
+        let class = u16::from_be_bytes([header[2], header[3]]);
+        let ttl = u32::from_be_bytes(header[4..8].try_into().ok()?);
+        let data_len = u16::from_be_bytes([header[8], header[9]]) as usize;
         offset += 10;
         let end = offset.checked_add(data_len)?;
         let data = packet.get(offset..end)?;
-        offset = end;
-        if class != 1 {
-            continue;
-        }
-        let address = match (record_type, data) {
-            (1, [a, b, c, d]) => IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d)),
-            (28, octets) if octets.len() == 16 => {
-                let octets: [u8; 16] = octets.try_into().ok()?;
-                IpAddr::V6(Ipv6Addr::from(octets))
+        if class == 1 {
+            if record_type == 5 {
+                let mut name_offset = offset;
+                let target = read_name(packet, &mut name_offset)?;
+                if name_offset != end || aliases.insert(owner, (target, ttl)).is_some() {
+                    return None;
+                }
+            } else if record_type == query_type {
+                let address = match (record_type, data) {
+                    (1, [a, b, c, d]) => Some(IpAddr::V4(Ipv4Addr::new(*a, *b, *c, *d))),
+                    (28, octets) if octets.len() == 16 => Some(IpAddr::V6(Ipv6Addr::from(
+                        <[u8; 16]>::try_from(octets).ok()?,
+                    ))),
+                    _ => None,
+                };
+                if let Some(address) = address {
+                    addresses.push((owner, address, ttl));
+                }
             }
-            _ => continue,
-        };
-        answers.push(AddressAnswer {
-            domain: query_domain.clone(),
-            address,
-            ttl,
-        });
+        }
+        offset = end;
     }
-    Some(answers)
+    let mut owner = domain.clone();
+    let mut visited = HashSet::new();
+    let mut chain_ttl = u32::MAX;
+    while let Some((target, ttl)) = aliases.get(&owner) {
+        if !visited.insert(owner) {
+            return None;
+        }
+        owner = target.clone();
+        chain_ttl = chain_ttl.min(*ttl);
+    }
+    Some(
+        addresses
+            .into_iter()
+            .filter(|(name, _, _)| *name == owner)
+            .map(|(_, address, ttl)| AddressAnswer {
+                domain: domain.clone(),
+                address,
+                ttl: ttl.min(chain_ttl),
+            })
+            .collect(),
+    )
 }
 
 fn read_name(packet: &[u8], offset: &mut usize) -> Option<String> {

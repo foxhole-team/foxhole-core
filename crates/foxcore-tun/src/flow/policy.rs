@@ -152,13 +152,19 @@ impl FlowPolicyStore {
             artifacts,
         );
         let kill_switch = routes.kill_switch();
+        let revocation = if kill_switch {
+            CancellationToken::new()
+        } else {
+            // Retained flows from every ordinary reload share one cancellation epoch.
+            current.revocation.clone()
+        };
         self.current.store(Arc::new(FlowPolicySnapshot {
             revision,
             routes,
             dns_config,
             dns,
             dns_proxy,
-            revocation: CancellationToken::new(),
+            revocation,
         }));
         // After the swap, so no flow can slip in under the old snapshot between
         // the revoke and the new policy becoming visible.
@@ -259,7 +265,16 @@ impl FlowPolicyStore {
     /// with a destination the tunnel cannot map. Neither is the IP→name map
     /// domain rules are matched through. See [`DnsCache::flush_responses`].
     pub fn network_changed(&self) {
+        self.network_changed_transaction(|| {});
+    }
+
+    pub(super) fn network_changed_transaction(&self, before_publish: impl FnOnce()) {
+        let _mutable = self
+            .reload
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let current = self.current.load();
+        before_publish();
         match &current.dns_proxy {
             // The interceptor also drops its idle upstream connections, which
             // are sockets on the interface that went away.
@@ -292,12 +307,20 @@ impl FlowPolicyStore {
     /// started. A gate cached at start would leave a listener carrying traffic
     /// after the kill switch stopped the device's own flows.
     pub fn gates(&self) -> PolicyGates {
+        self.gates_and_revocation().0
+    }
+
+    /// The admission gates and cancellation epoch from the same snapshot.
+    pub fn gates_and_revocation(&self) -> (PolicyGates, CancellationToken) {
         let current = self.current.load();
-        PolicyGates {
-            kill_switch: current.routes.kill_switch(),
-            tor_enabled: current.routes.tor_enabled(),
-            i2p_enabled: current.routes.i2p_enabled(),
-        }
+        (
+            PolicyGates {
+                kill_switch: current.routes.kill_switch(),
+                tor_enabled: current.routes.tor_enabled(),
+                i2p_enabled: current.routes.i2p_enabled(),
+            },
+            current.revocation.clone(),
+        )
     }
 }
 

@@ -173,10 +173,12 @@ impl DnsProxy {
     pub(crate) async fn exchange_for_identity(
         &self,
         query: &[u8],
+        uid: Option<u32>,
         primary_package: Option<&str>,
         packages: &[String],
     ) -> io::Result<Vec<u8>> {
-        self.exchange_attributed(query, primary_package, packages)
+        let identity = uid.map(|uid| foxcore_dns::DnsIdentity::new(uid, packages.to_vec()));
+        self.exchange_attributed(query, primary_package, packages, identity.as_ref())
             .await
     }
 
@@ -228,7 +230,7 @@ impl DnsProxy {
         query: &[u8],
         package: Option<&str>,
     ) -> io::Result<Vec<u8>> {
-        self.exchange_attributed(query, package, &[]).await
+        self.exchange_attributed(query, package, &[], None).await
     }
 
     async fn exchange_attributed(
@@ -236,6 +238,7 @@ impl DnsProxy {
         query: &[u8],
         primary_package: Option<&str>,
         packages: &[String],
+        identity: Option<&foxcore_dns::DnsIdentity>,
     ) -> io::Result<Vec<u8>> {
         if query.len() < 12 || query.len() > u16::MAX as usize {
             return Err(invalid("DNS query length must be in 12..=65535"));
@@ -243,10 +246,11 @@ impl DnsProxy {
         // Counted before any verdict, so `dns_allowed` is a real difference and
         // not an assumption about which refusals were instrumented.
         self.metrics.dns_query();
-        let question = DnsCache::question(query);
-        let name = question.as_ref().map(|question| question.domain.as_str());
-        let onion = name.is_some_and(is_onion);
-        let i2p = name.is_some_and(is_i2p);
+        let question = DnsCache::question(query)
+            .ok_or_else(|| invalid("DNS requires one valid standard query question"))?;
+        let name = question.domain.as_str();
+        let onion = is_onion(name);
+        let i2p = is_i2p(name);
         let overlay_refusal = if onion && !self.tor_enabled {
             Some(".onion DNS is disabled by the active traffic policy")
         } else if i2p && !self.i2p_enabled {
@@ -259,12 +263,7 @@ impl DnsProxy {
             None
         };
         if let Some(message) = overlay_refusal {
-            self.refuse(
-                BlockReason::DnsOverlayGate,
-                name.unwrap_or_default(),
-                primary_package,
-                None,
-            );
+            self.refuse(BlockReason::DnsOverlayGate, name, primary_package, None);
             return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
         }
         // The blocklist is consulted after the overlay gates but before the cache and
@@ -278,13 +277,10 @@ impl DnsProxy {
             .next()
             .is_some_and(|package| self.blocklist_bypass_packages.contains(package))
             && attributed_packages.all(|package| self.blocklist_bypass_packages.contains(package));
-        if !bypasses_filtering
-            && let Some(domain) = name
-            && let Some(verdict) = self.blocklist.lookup(domain)
-        {
+        if !bypasses_filtering && let Some(verdict) = self.blocklist.lookup(name) {
             self.refuse(
                 BlockReason::DnsBlocklist,
-                domain,
+                name,
                 primary_package,
                 verdict.category(),
             );
@@ -292,29 +288,33 @@ impl DnsProxy {
                 .ok_or_else(|| invalid("cannot answer a malformed DNS query with NXDOMAIN"));
         }
         let network_epoch = self.current_network_epoch()?;
-        if let Some(response) = self.cached_response(query, false, network_epoch)? {
+        if let Some(response) = self.cached_response(query, false, network_epoch, identity)? {
             return Ok(response);
         }
         if self.config.mode == DnsMode::FakeIp
-            && let Some(response) = self.cache.fake_response(
-                query,
-                self.config.fake_ipv4_pool,
-                self.config.fake_ipv6_pool,
-                self.config.fake_ttl_s,
-            )
+            && question.class == 1
+            && matches!(question.record_type, 1 | 28 | 64 | 65)
         {
-            return Ok(response);
+            return self
+                .cache
+                .fake_response(
+                    query,
+                    self.config.fake_ipv4_pool,
+                    self.config.fake_ipv6_pool,
+                    self.config.fake_ttl_s,
+                )
+                .ok_or_else(|| {
+                    io::Error::new(
+                        io::ErrorKind::WouldBlock,
+                        "fake-IP pool has no unpromised address",
+                    )
+                });
         }
         if onion || i2p {
             // Reached when fake-IP is off: the overlay is available, but there
             // is no address to hand back without asking a clearnet resolver,
             // which is the one thing a private namespace must never do.
-            self.refuse(
-                BlockReason::DnsOverlayGate,
-                name.unwrap_or_default(),
-                primary_package,
-                None,
-            );
+            self.refuse(BlockReason::DnsOverlayGate, name, primary_package, None);
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "private overlay DNS is never forwarded to an upstream resolver",
@@ -323,12 +323,13 @@ impl DnsProxy {
 
         let mut last_error = None;
         for (index, upstream) in self.config.upstreams.iter().enumerate() {
-            let exchange = self.exchange_upstream(index, upstream, query, name, primary_package);
+            let exchange =
+                self.exchange_upstream(index, upstream, query, Some(name), primary_package);
             match tokio::time::timeout(Duration::from_millis(self.config.timeout_ms), exchange)
                 .await
             {
                 Ok(Ok(response)) if response.len() <= self.config.max_response_bytes => {
-                    match self.cache_response(query, &response, network_epoch) {
+                    match self.cache_response(query, &response, network_epoch, identity) {
                         Ok(true) => return Ok(response),
                         Ok(false) => {
                             self.reset_upstream(index);
@@ -356,7 +357,7 @@ impl DnsProxy {
             }
         }
         if self.config.stale_on_error
-            && let Some(response) = self.cached_response(query, true, network_epoch)?
+            && let Some(response) = self.cached_response(query, true, network_epoch, identity)?
         {
             return Ok(response);
         }
@@ -729,22 +730,37 @@ impl DnsProxy {
         query: &[u8],
         stale: bool,
         epoch: u64,
+        identity: Option<&foxcore_dns::DnsIdentity>,
     ) -> io::Result<Option<Vec<u8>>> {
         let _barrier = lock(&self.network_barrier);
         if self.network_epoch.load(Ordering::Acquire) != epoch {
             return Err(network_changed_error());
         }
-        Ok(self.cache.cached_response(query, stale))
+        let response = self.cache.cached_response(query, stale);
+        if let (Some(identity), Some(response)) = (identity, response.as_ref()) {
+            self.cache.learn_route_hints(query, response, identity);
+        }
+        Ok(response)
     }
 
-    fn cache_response(&self, query: &[u8], response: &[u8], epoch: u64) -> io::Result<bool> {
+    fn cache_response(
+        &self,
+        query: &[u8],
+        response: &[u8],
+        epoch: u64,
+        identity: Option<&foxcore_dns::DnsIdentity>,
+    ) -> io::Result<bool> {
         let _barrier = lock(&self.network_barrier);
         if self.network_epoch.load(Ordering::Acquire) != epoch {
             return Err(network_changed_error());
         }
-        Ok(self
+        let valid = self
             .cache
-            .cache_response(query, response, self.config.negative_cache))
+            .cache_response(query, response, self.config.negative_cache);
+        if valid && let Some(identity) = identity {
+            self.cache.learn_route_hints(query, response, identity);
+        }
+        Ok(valid)
     }
 
     /// Drop the cached answers and the idle upstream connections.

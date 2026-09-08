@@ -276,7 +276,18 @@ fn decrypt_slots() -> &'static Arc<Semaphore> {
     SLOTS.get_or_init(|| Arc::new(Semaphore::new(MAX_CONCURRENT_DECRYPTS)))
 }
 
-async fn stream_permit(
+async fn stream_permit(stream: TcpStream, permit: DownloadPermit, handle: tokio::runtime::Handle) {
+    let revoked = permit.revoked.clone();
+    let deadline = tokio::time::Instant::from_std(permit.deadline);
+    tokio::select! {
+        biased;
+        _ = revoked.cancelled() => {},
+        _ = tokio::time::sleep_until(deadline) => {},
+        _ = stream_permit_inner(stream, permit, handle) => {},
+    }
+}
+
+async fn stream_permit_inner(
     mut stream: TcpStream,
     permit: DownloadPermit,
     handle: tokio::runtime::Handle,
@@ -301,7 +312,7 @@ async fn stream_permit(
     let Ok(decrypt_slot) = decrypt_slots().clone().acquire_owned().await else {
         return;
     };
-    let (sender, mut chunks) = mpsc::channel::<Vec<u8>>(CHUNK_QUEUE);
+    let (sender, mut chunks) = mpsc::channel::<zeroize::Zeroizing<Vec<u8>>>(CHUNK_QUEUE);
     let decrypt = handle.spawn_blocking(move || {
         // Held for the length of the transfer and released with the closure,
         // including on an early return or a panic inside the decrypt.
@@ -329,13 +340,13 @@ async fn stream_permit(
 }
 
 struct ChannelWriter {
-    sender: mpsc::Sender<Vec<u8>>,
+    sender: mpsc::Sender<zeroize::Zeroizing<Vec<u8>>>,
 }
 
 impl Write for ChannelWriter {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         self.sender
-            .blocking_send(buffer.to_vec())
+            .blocking_send(zeroize::Zeroizing::new(buffer.to_vec()))
             .map(|()| buffer.len())
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "download peer is gone"))
     }
@@ -567,6 +578,40 @@ mod tests {
 
     const NOW: u64 = 1_000_000;
     const PASSWORD: &[u8] = b"correct horse";
+
+    #[tokio::test]
+    async fn expiry_cancels_a_backpressured_download_without_control_operations() {
+        let vault = vault(8 * 1024 * 1024, None, 1);
+        let download = decode_hex(&vault.download).unwrap();
+        let mut permit = vault
+            .manager
+            .authorize_download(vault.share, vault.file, &download, None, NOW)
+            .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut peer = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let (stream, _) = listener.accept().await.unwrap();
+        permit.deadline = std::time::Instant::now() + Duration::from_millis(100);
+        let serving = tokio::spawn(stream_permit(
+            stream,
+            permit,
+            tokio::runtime::Handle::current(),
+        ));
+        let mut head = Vec::new();
+        let mut byte = [0];
+        while !head.ends_with(b"\r\n\r\n") {
+            peer.read_exact(&mut byte).await.unwrap();
+            head.push(byte[0]);
+        }
+        tokio::time::timeout(Duration::from_secs(2), serving)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut body = Vec::new();
+        peer.read_to_end(&mut body).await.unwrap();
+        assert!(body.len() < vault.content.len());
+    }
 
     struct Vault {
         _root: tempfile::TempDir,

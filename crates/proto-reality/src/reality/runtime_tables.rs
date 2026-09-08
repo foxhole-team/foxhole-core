@@ -1,45 +1,67 @@
 use std::collections::BTreeMap;
 use std::io;
-use std::sync::RwLock;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, RwLock};
 
 use aws_lc_rs::digest;
 use serde_json::Value;
 
 use super::hello_profile::{
-    CHROME_ALPN_PROTOCOLS, CHROME_ECH_GREASE, CipherSuiteSlot, EchGreaseShape, ExtensionSlot,
-    GreaseSlot, GroupSlot, HelloProfile, KeyShareSlot, RealityHelloProfile, VersionSlot, ext,
+    CHROME_ALPN_PROTOCOLS, CHROME_ECH_GREASE, CipherSuiteSlot, EchGreaseShapeData,
+    ExtensionSlotData, GreaseSlot, GroupSlot, HelloProfile, HelloProfileData, KeyShareSlot,
+    RealityHelloProfile, VersionSlot, ext,
 };
 use super::reality_key_exchange::NamedGroup;
 use super::reality_tls13_messages::INITIAL_RECORD_VERSION;
 
 const SUPPORTED_SCHEMA: u64 = 1;
 
-const MAX_DISTINCT_INSTALLS: usize = 32;
-
 static INSTALLED: RwLock<Option<InstalledTables>> = RwLock::new(None);
-
-static DISTINCT_INSTALLS: AtomicUsize = AtomicUsize::new(0);
 
 struct InstalledTables {
     document_digest: [u8; 32],
-    profiles: Vec<Option<&'static HelloProfile>>,
+    profiles: Vec<Option<Arc<OwnedProfile>>>,
 }
 
-pub(super) fn table_for(profile: RealityHelloProfile) -> &'static HelloProfile {
+pub(super) enum Profile {
+    Compiled(&'static HelloProfile),
+    Installed(Arc<OwnedProfile>),
+}
+
+impl Profile {
+    pub(super) fn with_profile<R>(&self, body: impl FnOnce(&HelloProfileData<'_>) -> R) -> R {
+        match self {
+            Self::Compiled(profile) => body(profile),
+            Self::Installed(profile) => profile.with_profile(body),
+        }
+    }
+}
+
+pub(super) fn table_for(profile: RealityHelloProfile) -> Profile {
     let Ok(guard) = INSTALLED.read() else {
-        return profile.table();
+        return Profile::Compiled(profile.table());
     };
     guard
         .as_ref()
-        .and_then(|installed| slot_index(profile).and_then(|index| installed.profiles[index]))
-        .unwrap_or_else(|| profile.table())
+        .and_then(|installed| {
+            slot_index(profile).and_then(|index| installed.profiles[index].clone())
+        })
+        .map(Profile::Installed)
+        .unwrap_or_else(|| Profile::Compiled(profile.table()))
 }
 
 pub fn install_fingerprint_tables(document: &[u8]) -> io::Result<usize> {
+    install_into(&INSTALLED, document)
+}
+
+fn install_into(registry: &RwLock<Option<InstalledTables>>, document: &[u8]) -> io::Result<usize> {
+    if document.len() > MAX_DOCUMENT_BYTES {
+        return Err(refuse("is larger than any table document this build reads"));
+    }
     let document_digest = sha256(document);
-    if let Ok(guard) = INSTALLED.read()
-        && let Some(installed) = guard.as_ref()
+    let mut guard = registry
+        .write()
+        .map_err(|_| refuse("table registry is poisoned"))?;
+    if let Some(installed) = guard.as_ref()
         && installed.document_digest == document_digest
     {
         return Ok(installed.profiles.iter().flatten().count());
@@ -53,16 +75,6 @@ pub fn install_fingerprint_tables(document: &[u8]) -> io::Result<usize> {
         ));
     }
 
-    if DISTINCT_INSTALLS.fetch_add(1, Ordering::SeqCst) >= MAX_DISTINCT_INSTALLS {
-        DISTINCT_INSTALLS.fetch_sub(1, Ordering::SeqCst);
-        return Err(refuse(
-            "has already taken as many distinct table documents as one process will hold",
-        ));
-    }
-
-    let mut guard = INSTALLED
-        .write()
-        .map_err(|_| refuse("table registry is poisoned"))?;
     *guard = Some(InstalledTables {
         document_digest,
         profiles: parsed,
@@ -90,7 +102,7 @@ fn slot_index(profile: RealityHelloProfile) -> Option<usize> {
         .position(|candidate| *candidate == profile)
 }
 
-fn parse_document(document: &[u8]) -> io::Result<Vec<Option<&'static HelloProfile>>> {
+fn parse_document(document: &[u8]) -> io::Result<Vec<Option<Arc<OwnedProfile>>>> {
     if document.len() > MAX_DOCUMENT_BYTES {
         return Err(refuse("is larger than any table document this build reads"));
     }
@@ -115,7 +127,7 @@ fn parse_document(document: &[u8]) -> io::Result<Vec<Option<&'static HelloProfil
         .and_then(Value::as_array)
         .ok_or_else(|| refuse("carries no profiles array"))?;
 
-    let mut slots: Vec<Option<&'static HelloProfile>> = vec![None; RealityHelloProfile::ALL.len()];
+    let mut slots = vec![None; RealityHelloProfile::ALL.len()];
     let mut seen: BTreeMap<&str, ()> = BTreeMap::new();
     for entry in entries {
         let entry = entry
@@ -137,7 +149,7 @@ fn parse_document(document: &[u8]) -> io::Result<Vec<Option<&'static HelloProfil
         verify_declared_digest(name, entry.get("fingerprint_sha256"), fingerprint)?;
         let table = build_profile(profile, fingerprint)?;
         let index = slot_index(profile).ok_or_else(|| refuse("profile is not in ALL"))?;
-        slots[index] = Some(table);
+        slots[index] = Some(Arc::new(table));
     }
     Ok(slots)
 }
@@ -171,7 +183,82 @@ fn verify_declared_digest(name: &str, declared: Option<&Value>, table: &Value) -
     Ok(())
 }
 
-fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'static HelloProfile> {
+pub(super) struct OwnedProfile {
+    name: &'static str,
+    cipher_suites: Vec<CipherSuiteSlot>,
+    extensions: Vec<OwnedExtension>,
+    permute_extensions: bool,
+    ech_grease: OwnedEchShape,
+    reuse_classical_key_share: bool,
+}
+
+struct OwnedEchShape {
+    suites: Vec<(u16, u16)>,
+    payload_lens: Vec<usize>,
+}
+
+impl OwnedEchShape {
+    fn as_borrowed(&self) -> EchGreaseShapeData<'_> {
+        EchGreaseShapeData {
+            suites: &self.suites,
+            payload_lens: &self.payload_lens,
+        }
+    }
+}
+
+enum OwnedExtension {
+    Constant { extension_type: u16, body: Vec<u8> },
+    Grease { slot: GreaseSlot, body: Vec<u8> },
+    ServerName,
+    SupportedGroups(Vec<GroupSlot>),
+    KeyShare(Vec<KeyShareSlot>),
+    Alpn,
+    SupportedVersions(Vec<VersionSlot>),
+    EchGrease,
+    Padding,
+}
+
+impl OwnedExtension {
+    fn as_borrowed(&self) -> ExtensionSlotData<'_> {
+        match self {
+            Self::Constant {
+                extension_type,
+                body,
+            } => ExtensionSlotData::Constant {
+                extension_type: *extension_type,
+                body,
+            },
+            Self::Grease { slot, body } => ExtensionSlotData::Grease { slot: *slot, body },
+            Self::ServerName => ExtensionSlotData::ServerName,
+            Self::SupportedGroups(groups) => ExtensionSlotData::SupportedGroups(groups),
+            Self::KeyShare(shares) => ExtensionSlotData::KeyShare(shares),
+            Self::Alpn => ExtensionSlotData::Alpn,
+            Self::SupportedVersions(versions) => ExtensionSlotData::SupportedVersions(versions),
+            Self::EchGrease => ExtensionSlotData::EchGrease,
+            Self::Padding => ExtensionSlotData::Padding,
+        }
+    }
+}
+
+impl OwnedProfile {
+    fn with_profile<R>(&self, body: impl FnOnce(&HelloProfileData<'_>) -> R) -> R {
+        let extensions: Vec<_> = self
+            .extensions
+            .iter()
+            .map(OwnedExtension::as_borrowed)
+            .collect();
+        body(&HelloProfileData {
+            name: self.name,
+            cipher_suites: &self.cipher_suites,
+            extensions: &extensions,
+            permute_extensions: self.permute_extensions,
+            ech_grease: self.ech_grease.as_borrowed(),
+            reuse_classical_key_share: self.reuse_classical_key_share,
+        })
+    }
+}
+
+fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<OwnedProfile> {
     let name = profile.table().name;
     let table = table
         .as_object()
@@ -219,28 +306,28 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'st
         )));
     }
 
-    let cipher_suites = leak(build_cipher_suites(name, field("cipher_suites")?)?);
-    let groups = leak(build_groups(name, field("supported_groups")?)?);
-    let key_shares = leak(build_key_shares(name, field("key_shares")?)?);
-    let versions = leak(build_versions(name, field("supported_versions")?)?);
-    let signature_algorithms = leak(length_prefixed(code_points(
+    let cipher_suites = build_cipher_suites(name, field("cipher_suites")?)?;
+    let groups = build_groups(name, field("supported_groups")?)?;
+    let key_shares = build_key_shares(name, field("key_shares")?)?;
+    let versions = build_versions(name, field("supported_versions")?)?;
+    let signature_algorithms = length_prefixed(code_points(
         name,
         "signature_algorithms",
         field("signature_algorithms")?,
-    )?));
+    )?);
 
-    let extensions = leak(build_extensions(
+    let extensions = build_extensions(
         name,
         field("extension_order")?,
-        groups,
-        key_shares,
-        versions,
-        signature_algorithms,
-    )?);
+        &groups,
+        &key_shares,
+        &versions,
+        &signature_algorithms,
+    )?;
 
     let has_ech_slot = extensions
         .iter()
-        .any(|slot| matches!(slot, ExtensionSlot::EchGrease));
+        .any(|slot| matches!(slot, OwnedExtension::EchGrease));
     let ech_grease = match table.get("ech_grease") {
         Some(Value::Null) | None => {
             if has_ech_slot {
@@ -248,12 +335,15 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'st
                     "profile {name} sends an ECH GREASE extension but declares no ech_grease shape"
                 )));
             }
-            CHROME_ECH_GREASE
+            OwnedEchShape {
+                suites: CHROME_ECH_GREASE.suites.to_vec(),
+                payload_lens: CHROME_ECH_GREASE.payload_lens.to_vec(),
+            }
         }
         Some(shape) => build_ech_grease(name, shape)?,
     };
 
-    let built = HelloProfile {
+    let built = OwnedProfile {
         name,
         cipher_suites,
         extensions,
@@ -267,8 +357,8 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<&'st
             None | Some(Value::Null)
         ),
     };
-    built.validate()?;
-    Ok(Box::leak(Box::new(built)))
+    built.with_profile(|profile| profile.validate())?;
+    Ok(built)
 }
 
 fn build_cipher_suites(name: &str, value: &Value) -> io::Result<Vec<CipherSuiteSlot>> {
@@ -347,11 +437,11 @@ fn build_versions(name: &str, value: &Value) -> io::Result<Vec<VersionSlot>> {
 fn build_extensions(
     name: &str,
     value: &Value,
-    groups: &'static [GroupSlot],
-    key_shares: &'static [KeyShareSlot],
-    versions: &'static [VersionSlot],
-    signature_algorithms: &'static [u8],
-) -> io::Result<Vec<ExtensionSlot>> {
+    groups: &[GroupSlot],
+    key_shares: &[KeyShareSlot],
+    versions: &[VersionSlot],
+    signature_algorithms: &[u8],
+) -> io::Result<Vec<OwnedExtension>> {
     let entries = entries(name, "extension_order", value)?;
     let mut grease_seen = 0_usize;
     let mut slots = Vec::with_capacity(entries.len());
@@ -381,29 +471,31 @@ fn build_extensions(
                 }
             };
             grease_seen += 1;
-            slots.push(ExtensionSlot::Grease {
+            slots.push(OwnedExtension::Grease {
                 slot,
-                body: leak(hex_body(name, body)?),
+                body: hex_body(name, body)?,
             });
             continue;
         }
 
         let extension_type = hex16(name, declared)?;
         let slot = match (extension_type, body) {
-            (ext::SERVER_NAME, "per_connection") => ExtensionSlot::ServerName,
-            (ext::SUPPORTED_GROUPS, "table") => ExtensionSlot::SupportedGroups(groups),
-            (ext::KEY_SHARE, "per_connection") => ExtensionSlot::KeyShare(key_shares),
-            (ext::ALPN, "table") => ExtensionSlot::Alpn,
-            (ext::SUPPORTED_VERSIONS, "table") => ExtensionSlot::SupportedVersions(versions),
-            (ext::SIGNATURE_ALGORITHMS, "table") => ExtensionSlot::Constant {
+            (ext::SERVER_NAME, "per_connection") => OwnedExtension::ServerName,
+            (ext::SUPPORTED_GROUPS, "table") => OwnedExtension::SupportedGroups(groups.to_vec()),
+            (ext::KEY_SHARE, "per_connection") => OwnedExtension::KeyShare(key_shares.to_vec()),
+            (ext::ALPN, "table") => OwnedExtension::Alpn,
+            (ext::SUPPORTED_VERSIONS, "table") => {
+                OwnedExtension::SupportedVersions(versions.to_vec())
+            }
+            (ext::SIGNATURE_ALGORITHMS, "table") => OwnedExtension::Constant {
                 extension_type,
-                body: signature_algorithms,
+                body: signature_algorithms.to_vec(),
             },
-            (ext::ENCRYPTED_CLIENT_HELLO, "per_connection_grease") => ExtensionSlot::EchGrease,
-            (ext::PADDING, "conditional") => ExtensionSlot::Padding,
-            (_, other) => ExtensionSlot::Constant {
+            (ext::ENCRYPTED_CLIENT_HELLO, "per_connection_grease") => OwnedExtension::EchGrease,
+            (ext::PADDING, "conditional") => OwnedExtension::Padding,
+            (_, other) => OwnedExtension::Constant {
                 extension_type,
-                body: leak(hex_body(name, other)?),
+                body: hex_body(name, other)?,
             },
         };
         slots.push(slot);
@@ -415,7 +507,7 @@ const HPKE_KDF_HKDF_SHA256: u16 = 0x0001;
 const HPKE_AEAD_AES_128_GCM: u16 = 0x0001;
 const HPKE_AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
-fn build_ech_grease(name: &str, value: &Value) -> io::Result<EchGreaseShape> {
+fn build_ech_grease(name: &str, value: &Value) -> io::Result<OwnedEchShape> {
     let kdf = match value.get("kdf").and_then(Value::as_str) {
         Some("HKDF-SHA256") => HPKE_KDF_HKDF_SHA256,
         other => {
@@ -484,13 +576,13 @@ fn build_ech_grease(name: &str, value: &Value) -> io::Result<EchGreaseShape> {
         )));
     }
 
-    Ok(EchGreaseShape {
-        suites: leak(suites),
-        payload_lens: leak(payload_lens),
+    Ok(OwnedEchShape {
+        suites,
+        payload_lens,
     })
 }
 
-const MAX_ECH_GREASE_PAYLOAD: u64 = 1024;
+const MAX_ECH_GREASE_PAYLOAD: u64 = super::hello_profile::MAX_ECH_GREASE_PLAINTEXT as u64;
 
 fn entries<'a>(name: &str, field: &str, value: &'a Value) -> io::Result<&'a Vec<Value>> {
     value
@@ -641,10 +733,6 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
-fn leak<T: 'static>(values: Vec<T>) -> &'static [T] {
-    Box::leak(values.into_boxed_slice())
-}
-
 fn refuse(message: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -654,6 +742,7 @@ fn refuse(message: &str) -> io::Error {
 
 #[cfg(test)]
 mod tests {
+    use super::super::hello_profile::ExtensionSlot;
     use std::fs;
     use std::path::PathBuf;
 
@@ -699,7 +788,7 @@ mod tests {
             .collect()
     }
 
-    fn parse(document: &Value) -> io::Result<Vec<Option<&'static HelloProfile>>> {
+    fn parse(document: &Value) -> io::Result<Vec<Option<Arc<OwnedProfile>>>> {
         parse_document(document.to_string().as_bytes())
     }
 
@@ -711,10 +800,10 @@ mod tests {
     }
 
     fn table_of(
-        slots: &[Option<&'static HelloProfile>],
+        slots: &[Option<Arc<OwnedProfile>>],
         profile: RealityHelloProfile,
-    ) -> Option<&'static HelloProfile> {
-        slots[slot_index(profile).expect("index")]
+    ) -> Option<&Arc<OwnedProfile>> {
+        slots[slot_index(profile).expect("index")].as_ref()
     }
 
     fn rehash(mut document: Value) -> Value {
@@ -754,32 +843,85 @@ mod tests {
         for profile in covered {
             let built_in = profile.table();
             let loaded = table_of(&slots, profile).expect("table");
-            assert_eq!(loaded.name, built_in.name);
-            assert_eq!(
-                loaded.cipher_suites, built_in.cipher_suites,
-                "{}: cipher suites",
-                built_in.name
-            );
-            assert_eq!(
-                loaded.extensions, built_in.extensions,
-                "{}: extensions",
-                built_in.name
-            );
-            assert_eq!(
-                loaded.permute_extensions, built_in.permute_extensions,
-                "{}: permutation",
-                built_in.name
-            );
-            assert_eq!(
-                loaded.ech_grease, built_in.ech_grease,
-                "{}: ECH GREASE shape",
-                built_in.name
-            );
-            assert_eq!(
-                loaded.reuse_classical_key_share, built_in.reuse_classical_key_share,
-                "{}: key share reuse",
-                built_in.name
-            );
+            loaded.with_profile(|loaded| {
+                assert_eq!(loaded.name, built_in.name);
+                assert_eq!(
+                    loaded.cipher_suites, built_in.cipher_suites,
+                    "{}: cipher suites",
+                    built_in.name
+                );
+                assert_eq!(
+                    loaded.extensions, built_in.extensions,
+                    "{}: extensions",
+                    built_in.name
+                );
+                assert_eq!(
+                    loaded.permute_extensions, built_in.permute_extensions,
+                    "{}: permutation",
+                    built_in.name
+                );
+                assert_eq!(
+                    loaded.ech_grease, built_in.ech_grease,
+                    "{}: ECH GREASE shape",
+                    built_in.name
+                );
+                assert_eq!(
+                    loaded.reuse_classical_key_share, built_in.reuse_classical_key_share,
+                    "{}: key share reuse",
+                    built_in.name
+                );
+            });
+        }
+    }
+
+    #[test]
+    fn rejected_updates_and_retired_tables_have_bounded_ownership() {
+        let registry = RwLock::new(None);
+        let mut document = committed_document();
+        document["profiles"].as_array_mut().unwrap().truncate(1);
+        let encoded = serde_json::to_vec(&document).unwrap();
+        install_into(&registry, &encoded).unwrap();
+        let profile = registry
+            .read()
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .profiles
+            .iter()
+            .flatten()
+            .next()
+            .unwrap()
+            .clone();
+        let old = Arc::downgrade(&profile);
+        let mut invalid = document.clone();
+        invalid["profiles"]
+            .as_array_mut()
+            .unwrap()
+            .push(document["profiles"][0].clone());
+        let invalid = serde_json::to_vec(&invalid).unwrap();
+        for _ in 0..1_000 {
+            assert!(install_into(&registry, &invalid).is_err());
+        }
+        assert_eq!(Arc::strong_count(&profile), 2);
+        for revision in 0..64 {
+            document["revision"] = Value::from(revision);
+            install_into(&registry, &serde_json::to_vec(&document).unwrap()).unwrap();
+        }
+        assert_eq!(Arc::strong_count(&profile), 1);
+        profile.with_profile(|profile| profile.validate()).unwrap();
+        *registry.write().unwrap() = None;
+        drop(profile);
+        assert!(old.upgrade().is_none());
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    install_into(&registry, &encoded).unwrap();
+                });
+            }
+        });
+        let guard = registry.read().unwrap();
+        for profile in guard.as_ref().unwrap().profiles.iter().flatten() {
+            assert_eq!(Arc::strong_count(profile), 1);
         }
     }
 
@@ -797,18 +939,20 @@ mod tests {
         });
         let slots = parse(&document).expect("re-hashed document must load");
         let loaded = table_of(&slots, profile).expect("table");
-        assert!(
-            loaded.extensions.contains(&ExtensionSlot::Constant {
-                extension_type: ext::RENEGOTIATION_INFO,
-                body: &[0x00, 0x00],
-            }),
-            "{name}: the downloaded body is what the table carries"
-        );
-        assert_ne!(
-            loaded.extensions,
-            profile.table().extensions,
-            "{name}: a changed table must not be silently replaced by the built-in one"
-        );
+        loaded.with_profile(|loaded| {
+            assert!(
+                loaded.extensions.contains(&ExtensionSlot::Constant {
+                    extension_type: ext::RENEGOTIATION_INFO,
+                    body: &[0x00, 0x00],
+                }),
+                "{name}: the downloaded body is what the table carries"
+            );
+            assert_ne!(
+                loaded.extensions,
+                profile.table().extensions,
+                "{name}: a changed table must not be silently replaced by the built-in one"
+            );
+        });
     }
 
     #[test]
@@ -853,6 +997,14 @@ mod tests {
             "{} keeps its built-in table",
             dropped.table().name
         );
+    }
+
+    #[test]
+    fn ech_payload_cannot_exceed_the_client_hello_buffer() {
+        let document = edited("chrome_151", |fingerprint| {
+            fingerprint["ech_grease"]["payload_lengths"] = serde_json::json!([225]);
+        });
+        assert!(refusal(&document).contains("payload length"));
     }
 
     #[test]
@@ -989,12 +1141,12 @@ mod tests {
         assert_eq!(installed, covered.len());
         for profile in RealityHelloProfile::ALL {
             let in_effect = table_for(*profile);
-            assert_eq!(in_effect.extensions, profile.table().extensions);
-            assert_eq!(in_effect.cipher_suites, profile.table().cipher_suites);
+            in_effect.with_profile(|in_effect| {
+                assert_eq!(in_effect.extensions, profile.table().extensions);
+                assert_eq!(in_effect.cipher_suites, profile.table().cipher_suites);
+            });
         }
-        let before = DISTINCT_INSTALLS.load(Ordering::SeqCst);
         install_fingerprint_tables(document.as_bytes()).expect("re-install");
-        assert_eq!(DISTINCT_INSTALLS.load(Ordering::SeqCst), before);
         assert!(using_downloaded_fingerprint_tables());
     }
 
@@ -1002,7 +1154,8 @@ mod tests {
     fn a_refused_document_leaves_the_built_in_tables_in_place() {
         assert!(install_fingerprint_tables(b"{").is_err());
         for profile in RealityHelloProfile::ALL {
-            assert_eq!(table_for(*profile).name, profile.table().name);
+            table_for(*profile)
+                .with_profile(|loaded| assert_eq!(loaded.name, profile.table().name));
         }
     }
 

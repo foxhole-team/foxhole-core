@@ -67,6 +67,8 @@ jobs:
         run: cargo check -p foxcore-android --no-default-features --features shipped
       - name: A reduced build passes its own tests
         run: cargo test -p foxcore-android --no-default-features
+      - name: TUN tests without protocol features
+        run: cargo test --locked -p foxcore-tun --no-default-features --lib
       - name: Everything, every optional feature at once
         run: cargo check --workspace --all-features
 
@@ -126,6 +128,9 @@ jobs:
 
       - name: Install cargo-deny
         run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Fetch current advisory data
+        run: cargo deny fetch
 
       - name: Advisories, licences, sources — shipped graph
         run: cargo deny check

@@ -965,6 +965,7 @@ async fn a_flow_gets_its_owner_even_when_no_rule_needs_one() {
 /// of `Vpn`, and no per-app rules.
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test]
+#[cfg(feature = "wireguard")]
 async fn in_packet_tunnel_mode_ordinary_tcp_is_decided_for_the_tunnel() {
     let placeholder = Arc::new(Outbound::direct(ProtectedDialer::host()));
     let outbounds = Arc::new(OutboundRegistry::single(placeholder));
@@ -1084,6 +1085,7 @@ async fn in_packet_tunnel_mode_ordinary_tcp_is_decided_for_the_tunnel() {
 /// other half, and the one D1, D2, D7 and D10 were all missing.
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test]
+#[cfg(feature = "wireguard")]
 async fn a_clearnet_name_answered_with_a_fake_address_is_refused_instead_of_sealed() {
     let placeholder = Arc::new(Outbound::direct(ProtectedDialer::host()));
     let outbounds = Arc::new(OutboundRegistry::single(placeholder));
@@ -1241,6 +1243,7 @@ async fn a_clearnet_name_answered_with_a_fake_address_is_refused_instead_of_seal
 /// goes out over v6 and falls into the hole.
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test]
+#[cfg(feature = "wireguard")]
 async fn a_tun_that_advertises_a_family_the_tunnel_cannot_carry_black_holes_it() {
     let placeholder = Arc::new(Outbound::direct(ProtectedDialer::host()));
     let outbounds = Arc::new(OutboundRegistry::single(placeholder));

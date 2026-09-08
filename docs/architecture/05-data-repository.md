@@ -170,6 +170,11 @@ flowchart LR
 
 ## 5.7 Inconsistencies found
 
-No open publication-gate inconsistency was found in this pass. `*-source-info.json` files are
+The old publication comparison removed timestamps only from manifests, while the fingerprint
+artifact digest still changed with its own build timestamp. The comparison now verifies current
+manifest signatures and fingerprint bytes, compares semantic table/provenance content, and
+requires renewal after 21 days or within seven days of DNS expiry
+(`foxhole-db/should-publish-feeds.py:62`). CI caches the immutable feed compiler inputs without
+changing which source revision builds the format (`foxhole-db/.github/workflows/feeds.yml:83`). `*-source-info.json` files are
 publication audit artifacts by design; the client consumes the signed manifests and artifacts,
 not these provenance companions.

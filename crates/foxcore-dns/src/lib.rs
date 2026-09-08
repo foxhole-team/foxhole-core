@@ -6,7 +6,7 @@ mod wire;
 
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use ipnet::{Ipv4Net, Ipv6Net};
@@ -26,13 +26,41 @@ pub use crate::wire::DnsQuestion;
 pub struct DnsCache {
     capacity: usize,
     state: Mutex<State>,
+    fake: Arc<Mutex<FakeState>>,
+    clock: Arc<dyn Fn() -> Instant + Send + Sync>,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct DnsIdentity {
+    uid: u32,
+    packages: Vec<String>,
+}
+
+impl DnsIdentity {
+    pub fn new(uid: u32, mut packages: Vec<String>) -> Self {
+        packages.sort();
+        packages.dedup();
+        Self { uid, packages }
+    }
+}
+
+#[derive(Default)]
+struct RouteHints {
+    names: HashMap<String, Instant>,
+    overflow_until: Option<Instant>,
 }
 
 #[derive(Default)]
 struct State {
     sequence: u64,
     reverse: HashMap<IpAddr, CacheEntry>,
+    route_hints: HashMap<(DnsIdentity, IpAddr), RouteHints>,
     responses: HashMap<Vec<u8>, ResponseEntry>,
+}
+
+#[derive(Default)]
+struct FakeState {
+    sequence: u64,
     fake_by_domain: HashMap<FakeKey, FakeEntry>,
     fake_reverse: HashMap<IpAddr, FakeEntry>,
     fake_v4_sequence: u64,
@@ -74,6 +102,8 @@ impl DnsCache {
         Self {
             capacity: capacity.max(1),
             state: Mutex::new(State::default()),
+            fake: Arc::new(Mutex::new(FakeState::default())),
+            clock: Arc::new(Instant::now),
         }
     }
 
@@ -83,28 +113,24 @@ impl DnsCache {
     /// crossing DNS policy boundaries.
     pub fn fork_for_policy(&self, capacity: usize) -> Self {
         let capacity = capacity.max(1);
-        let now = Instant::now();
+        let now = (self.clock)();
         let mut source = lock(&self.state);
         source.reverse.retain(|_, entry| entry.expires > now);
-        purge_fake(&mut source, now);
         let mut state = State {
             sequence: source.sequence,
             reverse: source.reverse.clone(),
+            route_hints: HashMap::new(),
             responses: HashMap::new(),
-            fake_by_domain: source.fake_by_domain.clone(),
-            fake_reverse: source.fake_reverse.clone(),
-            fake_v4_sequence: source.fake_v4_sequence,
-            fake_v6_sequence: source.fake_v6_sequence,
         };
         while state.reverse.len() > capacity {
             evict_if_needed(&mut state, capacity);
         }
-        while state.fake_by_domain.len() > capacity {
-            let _ = evict_oldest_fake(&mut state);
-        }
+        // A lower admission cap cannot withdraw an address before its advertised TTL.
         Self {
             capacity,
             state: Mutex::new(state),
+            fake: self.fake.clone(),
+            clock: self.clock.clone(),
         }
     }
 
@@ -126,26 +152,26 @@ impl DnsCache {
     ///   pool and leaves the next packet with a destination nothing can map.
     ///   Flushing both together breaks the next packet because its synthetic
     ///   destination no longer maps back to a domain.
-    /// * `reverse` — the IP→name map domain routing rules are matched through.
-    ///   Clearing it would not re-resolve anything; it would silently demote
-    ///   live flows from domain rules to address rules.
+    /// * `reverse` — historical IP→name telemetry, never routing authority.
+    ///   Attributed routing hints are cleared with the response cache.
     ///
     /// This is exactly the split [`DnsCache::fork_for_policy`] already makes
     /// for a reload, for the same reason.
     pub fn flush_responses(&self) -> usize {
         let mut state = lock(&self.state);
+        state.route_hints.clear();
         let dropped = state.responses.len();
         state.responses.clear();
         dropped
     }
 
-    /// Observe a plain DNS response and learn A/AAAA answers for route-domain
-    /// recovery. Malformed or encrypted payloads are ignored.
+    /// Observe A/AAAA answers for telemetry only. Routing requires a paired
+    /// exchange and an explicit identity through `learn_route_hints`.
     pub fn observe_response(&self, packet: &[u8]) -> usize {
         let Some(answers) = parse_addresses(packet) else {
             return 0;
         };
-        let now = Instant::now();
+        let now = (self.clock)();
         let mut state = lock(&self.state);
         state.reverse.retain(|_, entry| entry.expires > now);
         let mut inserted = 0;
@@ -170,7 +196,7 @@ impl DnsCache {
     }
 
     pub fn reverse_domain(&self, address: IpAddr) -> Option<String> {
-        let now = Instant::now();
+        let now = (self.clock)();
         let mut state = lock(&self.state);
         let expired = state
             .reverse
@@ -187,6 +213,59 @@ impl DnsCache {
         Some(entry.domain.clone())
     }
 
+    /// Only a validated answer to this identity's own query can constrain its routes.
+    pub fn learn_route_hints(&self, query: &[u8], response: &[u8], identity: &DnsIdentity) {
+        if response_metadata(query, response).is_none() {
+            return;
+        }
+        let Some(answers) = parse_addresses(response) else {
+            return;
+        };
+        let now = (self.clock)();
+        let mut state = lock(&self.state);
+        state.route_hints.retain(|_, hints| {
+            hints.names.retain(|_, expiry| *expiry > now);
+            hints.overflow_until.is_some_and(|expiry| expiry > now) || !hints.names.is_empty()
+        });
+        for answer in answers {
+            if answer.ttl == 0 {
+                continue;
+            }
+            let key = (identity.clone(), answer.address);
+            if !state.route_hints.contains_key(&key) && state.route_hints.len() >= self.capacity {
+                continue;
+            }
+            let hints = state.route_hints.entry(key).or_default();
+            let expires = now + Duration::from_secs(u64::from(answer.ttl.min(MAX_TTL)));
+            if hints.names.contains_key(&answer.domain) || hints.names.len() < 16 {
+                hints
+                    .names
+                    .entry(answer.domain)
+                    .and_modify(|previous| *previous = (*previous).max(expires))
+                    .or_insert(expires);
+            } else {
+                hints.overflow_until = Some(hints.overflow_until.unwrap_or(expires).max(expires));
+            }
+        }
+    }
+
+    /// None also represents bounded-cache overflow; callers must not infer permission from it.
+    pub fn route_hints(&self, identity: &DnsIdentity, address: IpAddr) -> Option<Vec<String>> {
+        let now = (self.clock)();
+        let mut state = lock(&self.state);
+        let hints = state.route_hints.get_mut(&(identity.clone(), address))?;
+        if hints.overflow_until.is_some_and(|expiry| expiry > now) {
+            return None;
+        }
+        hints.names.retain(|_, expiry| *expiry > now);
+        if hints.names.is_empty() {
+            return None;
+        }
+        let mut names: Vec<_> = hints.names.keys().cloned().collect();
+        names.sort();
+        Some(names)
+    }
+
     pub fn len(&self) -> usize {
         lock(&self.state).reverse.len()
     }
@@ -201,7 +280,7 @@ impl DnsCache {
     pub fn cached_response(&self, query: &[u8], allow_stale: bool) -> Option<Vec<u8>> {
         let key = query_key(query)?;
         let transaction_id = [*query.first()?, *query.get(1)?];
-        let now = Instant::now();
+        let now = (self.clock)();
         let mut state = lock(&self.state);
         let remove = state
             .responses
@@ -253,7 +332,7 @@ impl DnsCache {
         if ttl == 0 {
             return true;
         }
-        let now = Instant::now();
+        let now = (self.clock)();
         let mut packet = response.to_vec();
         packet[..2].fill(0);
         let mut state = lock(&self.state);
@@ -342,8 +421,8 @@ impl DnsCache {
     }
 
     pub fn fake_domain(&self, address: IpAddr) -> Option<String> {
-        let now = Instant::now();
-        let mut state = lock(&self.state);
+        let now = (self.clock)();
+        let mut state = lock(&self.fake);
         state.sequence = state.sequence.wrapping_add(1);
         let sequence = state.sequence;
         // This runs once per new flow, so a full expiry scan here would be an O(n)
@@ -392,8 +471,8 @@ impl DnsCache {
         ipv6_pool: Ipv6Net,
         ttl: u32,
     ) -> Option<IpAddr> {
-        let now = Instant::now();
-        let mut state = lock(&self.state);
+        let now = (self.clock)();
+        let mut state = lock(&self.fake);
         purge_fake(&mut state, now);
         let key = FakeKey {
             domain: domain.to_owned(),
@@ -403,15 +482,17 @@ impl DnsCache {
         let sequence = state.sequence;
         if let Some(address) = state.fake_by_domain.get_mut(&key).map(|entry| {
             entry.last_used = sequence;
+            entry.expires = now + Duration::from_secs(u64::from(ttl.max(1)));
             entry.address
         }) {
             if let Some(reverse) = state.fake_reverse.get_mut(&address) {
                 reverse.last_used = sequence;
+                reverse.expires = now + Duration::from_secs(u64::from(ttl.max(1)));
             }
             return Some(address);
         }
-        while state.fake_by_domain.len() >= self.capacity {
-            evict_oldest_fake(&mut state)?;
+        if state.fake_by_domain.len() >= self.capacity {
+            return None;
         }
         let address = match record_type {
             RECORD_A => next_fake_v4(&mut state, ipv4_pool, self.capacity)?,
@@ -458,7 +539,7 @@ fn evict_responses_if_needed(state: &mut State, capacity: usize) {
     }
 }
 
-fn purge_fake(state: &mut State, now: Instant) {
+fn purge_fake(state: &mut FakeState, now: Instant) {
     let expired: Vec<_> = state
         .fake_by_domain
         .iter()
@@ -472,18 +553,7 @@ fn purge_fake(state: &mut State, now: Instant) {
     }
 }
 
-fn evict_oldest_fake(state: &mut State) -> Option<()> {
-    let oldest = state
-        .fake_by_domain
-        .iter()
-        .min_by_key(|(_, entry)| entry.last_used)
-        .map(|(key, _)| key.clone())?;
-    let entry = state.fake_by_domain.remove(&oldest)?;
-    state.fake_reverse.remove(&entry.address);
-    Some(())
-}
-
-fn next_fake_v4(state: &mut State, pool: Ipv4Net, capacity: usize) -> Option<IpAddr> {
+fn next_fake_v4(state: &mut FakeState, pool: Ipv4Net, capacity: usize) -> Option<IpAddr> {
     let host_bits = 32_u32.checked_sub(u32::from(pool.prefix_len()))?;
     let total = 1_u64.checked_shl(host_bits)?;
     let usable = total.checked_sub(2)?;
@@ -499,7 +569,7 @@ fn next_fake_v4(state: &mut State, pool: Ipv4Net, capacity: usize) -> Option<IpA
     None
 }
 
-fn next_fake_v6(state: &mut State, pool: Ipv6Net, capacity: usize) -> Option<IpAddr> {
+fn next_fake_v6(state: &mut FakeState, pool: Ipv6Net, capacity: usize) -> Option<IpAddr> {
     let host_bits = 128_u32.checked_sub(u32::from(pool.prefix_len()))?;
     let host_mask = if host_bits == 128 {
         u128::MAX
@@ -530,6 +600,188 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn route_hints_are_paired_scoped_ambiguous_and_epoch_bound() {
+        let clock = Arc::new(Mutex::new(Instant::now()));
+        let mut cache = DnsCache::new(8);
+        let now = clock.clone();
+        cache.clock = Arc::new(move || *now.lock().unwrap());
+        let first = DnsIdentity::new(10001, vec!["protected.app".into()]);
+        let second = DnsIdentity::new(10002, vec!["other.app".into()]);
+        for record_type in [RECORD_A, RECORD_AAAA] {
+            let maker = DnsCache::new(8);
+            let original = query_for("protected.invalid", record_type, 1);
+            let answer = maker
+                .fake_response(
+                    &original,
+                    "198.18.0.0/15".parse().unwrap(),
+                    "fd00::/64".parse().unwrap(),
+                    60,
+                )
+                .unwrap();
+            let address = parse_addresses(&answer).unwrap()[0].address;
+            cache.observe_response(&answer);
+            assert!(cache.route_hints(&first, address).is_none());
+            let forged = query_for("allowed.invalid", record_type, 1);
+            cache.learn_route_hints(&forged, &answer, &first);
+            assert!(cache.route_hints(&first, address).is_none());
+            cache.learn_route_hints(&original, &answer, &first);
+            assert_eq!(
+                cache.route_hints(&first, address).unwrap(),
+                ["protected.invalid"]
+            );
+            assert!(cache.route_hints(&second, address).is_none());
+            let other = query_for("allowed.invalid", record_type, 2);
+            let mut response = maker
+                .fake_response(
+                    &other,
+                    "198.18.0.0/15".parse().unwrap(),
+                    "fd00::/64".parse().unwrap(),
+                    60,
+                )
+                .unwrap();
+            let length = if record_type == RECORD_A { 4 } else { 16 };
+            let offset = response.len() - length;
+            response[offset..].copy_from_slice(&answer[answer.len() - length..]);
+            cache.learn_route_hints(&other, &response, &second);
+            assert_eq!(
+                cache.route_hints(&first, address).unwrap(),
+                ["protected.invalid"]
+            );
+            cache.learn_route_hints(&other, &response, &first);
+            assert_eq!(
+                cache.route_hints(&first, address).unwrap(),
+                ["allowed.invalid", "protected.invalid"]
+            );
+            assert!(
+                cache
+                    .fork_for_policy(8)
+                    .route_hints(&first, address)
+                    .is_none()
+            );
+        }
+        *clock.lock().unwrap() += Duration::from_secs(61);
+        assert!(
+            cache
+                .route_hints(&first, "198.18.0.2".parse().unwrap())
+                .is_none()
+        );
+        cache.flush_responses();
+        assert!(lock(&cache.state).route_hints.is_empty());
+    }
+
+    #[test]
+    fn a_fake_answer_finishing_after_reload_belongs_to_the_shared_pool() {
+        let cache = DnsCache::new(2);
+        let fork = cache.fork_for_policy(1);
+        let address = cache
+            .fake_address(
+                "late.invalid",
+                RECORD_A,
+                "198.18.0.0/15".parse().unwrap(),
+                "fd00::/64".parse().unwrap(),
+                60,
+            )
+            .unwrap();
+        assert_eq!(fork.fake_domain(address).as_deref(), Some("late.invalid"));
+        assert!(
+            fork.fake_address(
+                "new.invalid",
+                RECORD_A,
+                "198.18.0.0/15".parse().unwrap(),
+                "fd00::/64".parse().unwrap(),
+                60
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn route_hints_follow_only_the_answered_cname_chain() {
+        fn name(out: &mut Vec<u8>, domain: &str) {
+            for label in domain.split('.') {
+                out.push(label.len() as u8);
+                out.extend_from_slice(label.as_bytes());
+            }
+            out.push(0);
+        }
+        fn record(out: &mut Vec<u8>, owner: &str, kind: u16, ttl: u32, data: &[u8]) {
+            name(out, owner);
+            out.extend_from_slice(&kind.to_be_bytes());
+            out.extend_from_slice(&1_u16.to_be_bytes());
+            out.extend_from_slice(&ttl.to_be_bytes());
+            out.extend_from_slice(&(data.len() as u16).to_be_bytes());
+            out.extend_from_slice(data);
+        }
+        let question = query_for("protected.invalid", RECORD_A, 1);
+        let mut answer = question.clone();
+        answer[2..4].copy_from_slice(&[0x81, 0x80]);
+        answer[6..8].copy_from_slice(&3_u16.to_be_bytes());
+        let mut target = Vec::new();
+        name(&mut target, "cdn.invalid");
+        record(&mut answer, "unrelated.invalid", 1, 60, &[203, 0, 113, 66]);
+        record(&mut answer, "cdn.invalid", 1, 60, &[203, 0, 113, 9]);
+        record(&mut answer, "protected.invalid", 5, 10, &target);
+        let parsed = parse_addresses(&answer).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].domain, "protected.invalid");
+        assert_eq!(parsed[0].ttl, 10);
+        assert_eq!(parsed[0].address.to_string(), "203.0.113.9");
+        let cache = DnsCache::new(8);
+        let identity = DnsIdentity::new(10001, vec!["app".into()]);
+        cache.learn_route_hints(&question, &answer, &identity);
+        assert!(
+            cache
+                .route_hints(&identity, "203.0.113.66".parse().unwrap())
+                .is_none()
+        );
+        assert_eq!(
+            cache
+                .route_hints(&identity, "203.0.113.9".parse().unwrap())
+                .unwrap(),
+            ["protected.invalid"]
+        );
+    }
+
+    #[test]
+    fn reissued_fake_addresses_keep_the_last_promised_ttl_without_eviction() {
+        for record_type in [RECORD_A, RECORD_AAAA] {
+            let clock = Arc::new(Mutex::new(Instant::now()));
+            let mut cache = DnsCache::new(1);
+            let now = clock.clone();
+            cache.clock = Arc::new(move || *now.lock().unwrap());
+            let v4 = "198.18.0.0/15".parse().unwrap();
+            let v6 = "fd00::/64".parse().unwrap();
+            let first = cache
+                .fake_response(&query(record_type, 1), v4, v6, 1)
+                .unwrap();
+            let address = parse_addresses(&first).unwrap()[0].address;
+            *clock.lock().unwrap() += Duration::from_millis(700);
+            let second = cache
+                .fake_response(&query(record_type, 2), v4, v6, 1)
+                .unwrap();
+            assert_eq!(parse_addresses(&second).unwrap()[0].address, address);
+            assert!(
+                cache
+                    .fake_address("other.invalid", record_type, v4, v6, 1)
+                    .is_none()
+            );
+            cache.flush_responses();
+            let fork = cache.fork_for_policy(1);
+            *clock.lock().unwrap() += Duration::from_millis(450);
+            assert_eq!(cache.fake_domain(address).as_deref(), Some("example.com"));
+            assert_eq!(fork.fake_domain(address).as_deref(), Some("example.com"));
+            *clock.lock().unwrap() += Duration::from_millis(551);
+            assert!(cache.fake_domain(address).is_none());
+            assert!(fork.fake_domain(address).is_none());
+            assert!(
+                cache
+                    .fake_address("other.invalid", record_type, v4, v6, 1)
+                    .is_some()
+            );
+        }
+    }
 
     /// A client that sees TC retries over TCP, which this interceptor serves.
     /// A client that sees a second datagram instead sees a malformed message.
@@ -729,7 +981,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_ip_reverse_lookup_refreshes_forward_lru_entry() {
+    fn fake_ip_pressure_preserves_every_unexpired_promise() {
         let cache = DnsCache::new(2);
         let ipv4_pool = "198.18.0.0/15".parse().unwrap();
         let ipv6_pool = "fd00::/120".parse().unwrap();
@@ -766,20 +1018,25 @@ mod tests {
             cache.fake_domain(first_address).as_deref(),
             Some("first.example")
         );
-        cache
-            .fake_response(
-                &query_for("third.example", RECORD_A, 3),
-                ipv4_pool,
-                ipv6_pool,
-                300,
-            )
-            .unwrap();
+        assert!(
+            cache
+                .fake_response(
+                    &query_for("third.example", RECORD_A, 3),
+                    ipv4_pool,
+                    ipv6_pool,
+                    300,
+                )
+                .is_none()
+        );
 
         assert_eq!(
             cache.fake_domain(first_address).as_deref(),
             Some("first.example")
         );
-        assert_eq!(cache.fake_domain(second_address), None);
+        assert_eq!(
+            cache.fake_domain(second_address).as_deref(),
+            Some("second.example")
+        );
     }
 
     #[test]

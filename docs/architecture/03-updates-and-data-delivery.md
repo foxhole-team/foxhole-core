@@ -51,6 +51,27 @@ certificate-hash literal in the client — see [3.6](#36-apk-update-channel).
 
 ---
 
+### Guard delivery inventory and native dependencies
+
+Guard 0.1.1 rebuilds i2pd against OpenSSL 3.5.8 and its Tor transport helpers with Go 1.26.8.
+Go module versions are pinned separately from the upstream helper commits
+(`foxhole_guard/scripts/native-deps.sh:6`; `foxhole_guard/config/native/lyrebird/go.mod:1`;
+`foxhole_guard/config/native/conjure/go.mod:1`). Conjure v0.9.1 is copied from verified module
+sources, with two hash-checked imports migrated to STUN v3.1.5; the module cache remains intact
+(`foxhole_guard/scripts/prepare-tor-dependency.py:11`).
+
+The dependency gate resolves Maven runtime and build-tool graphs independently. The checksum
+catalog is historical verification data, not the delivered dependency graph
+(`foxhole_guard/scripts/resolved-maven-inventory.init.gradle:8`). Both Android ARM transport
+package graphs are also resolved, and legacy STUN and OpenPGP imports are refused. The sole
+Go advisory exception is bound to the exact x/crypto version, advisory, expiry and that package
+proof (`foxhole_guard/scripts/verify-tor-package-boundary.py:24`;
+`foxhole_guard/config/osv-exceptions.json:1`). Release aggregation connects each actual APK ELF
+hash to its Core, Go or Maven inventory and refuses missing provenance or mismatched notices
+(`foxhole_guard/scripts/aggregate-delivery-sbom.py:1`).
+
+---
+
 ## 3.2 The pinned key
 
 ```mermaid
@@ -75,7 +96,8 @@ relative to their manifest URL. Redirecting the base moves every feed together. 
 move with it** — a mirror is only usable if it is published by the same tooling.
 
 Every request additionally passes `requirePublicHttpsUrl(resolveHost = true)`
-(`core/network/.../PublicUrlPolicy.kt:67-85`): HTTPS only, and the resolved addresses must not be
+(`core/network/src/main/kotlin/com/foxhole/core/network/PublicUrlPolicy.kt:67-85`): HTTPS only, and
+the resolved addresses must not be
 private or loopback.
 
 ---
@@ -126,7 +148,7 @@ Client-side sites: `DnsFilterUpdateClient.kt:290-316` (signature), `:319-354` (m
 `:356-371` (rollback), `:374-393` (artifact); persistence
 `DnsFilterAssetInstaller.kt:48-76`, re-verification on read `:107-139`; live hand-off
 `DnsFilterUpdateRepository.kt:90-123,170-193`, graph wiring `FoxholeAppGraph.kt:171-181`, and the
-generation-fenced call `FoxCoreRuntime.kt:673-709`. Start payload selection and dispatch are at
+generation-fenced call `FoxCoreRuntime.kt:732-768,1048-1076`. Start payload selection and dispatch are at
 `FoxCoreNativeSessionStarter.kt:79-105,252-283`.
 
 ### The native half
@@ -228,15 +250,31 @@ The DNS update repository wraps the durable store and invokes the runtime only a
 exact verified byte arrays have been committed (`DnsFilterUpdateRepository.kt:90-123,170-193`).
 `FoxCoreRuntime.installDnsRuleSet` snapshots the handle and generation only in a stable `RUNNING`
 state, invokes native verification, then commits the returned revision only if that owner is still
-current (`FoxCoreRuntime.kt:673-709`). Deferred, superseded, or rejected live activation does not
+current (`FoxCoreRuntime.kt:732-768,1048-1076`). Deferred, superseded, or rejected live activation does not
 discard the durable bundle: the next session re-reads it and uses the signed atomic start.
 
 What the core does with a fingerprint document (`proto-reality::install_fingerprint_tables`,
-`crates/proto-reality/src/reality/runtime_tables.rs:39-70`): bounded size, JSON object, schema check,
-no duplicate names, every entry must map to a profile this build already implements, and
-`verify_declared_digest` (`:154-169`) re-derives each `fingerprint_sha256`. Any failure refuses the
-**whole** document — never a partial install. A feed can change *which bytes a known parrot sends*
-and nothing else.
+`crates/proto-reality/src/reality/runtime_tables.rs:52,106`): bounded size, JSON object, schema check,
+no duplicate known names, and a re-derived `fingerprint_sha256` for every supported profile.
+Unknown names are ignored; at least one implemented profile must remain. Validation failure
+refuses the whole document. A feed can change the table of a compiled profile but cannot introduce
+a generator or alter frozen TLS/ALPN fields.
+
+Validation creates owned vectors, serialized under the registry writer lock; only a fully valid
+candidate is published as `Arc<OwnedProfile>`. Rejected candidates are freed, identical documents
+reuse the current set, and replaced tables live only while connections still hold them. Each
+connection pins its chosen table for the whole handshake. There is no permanent `Box::leak` or
+lifetime update-count ceiling (`crates/proto-reality/src/reality/runtime_tables.rs:25,56,187`;
+`crates/proto-reality/src/reality/reality_client_connection.rs:215`). ECH GREASE payload sizes are
+limited to the generator's 224-byte buffer (`runtime_tables.rs:552`).
+
+The bridge feed is also input, not authority to change the selected pluggable transport. At the
+next Tor start, `AUTO` means Snowflake and an explicit choice stays that exact transport; the client
+tries downloaded bridges first and the bundled inventory second **within the same transport**
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorBridgeTorrcLines.kt:50-81`). If neither
+source has a compatible bridge and executable, startup fails closed. Only protocols actually named
+by the final `Bridge` lines survive into the managed-transport plan
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorRuntimeInstaller.kt:169-198,296-305`).
 
 > **Closed.** The installer's comment claimed it ran "after every successful feed update" while it
 > had exactly one call site, `FoxholeVpnService.onCreate()` — so a table set downloaded into a live
@@ -295,7 +333,7 @@ sequenceDiagram
 | Which signers | `apkContentsSigners`, deliberately **not** `signingCertificateHistory`, and empty sets never match — `AppUpdateApkVerifier.kt:49-80` |
 | Static cert pin | none in the client. `foxhole_guard/config/release-cert-sha256.txt` (`e59de248…0df665`) is a **build-time** check, not a runtime one |
 | Install | user-driven `ACTION_VIEW`, no `PackageInstaller` session, no silent install — `HomeViewModelAppUpdateSupport.kt:99-126` |
-| Channel gate | `github` only; the F-Droid build stamps `updateFloorVersionCode` / `updateSupportedUntilEpochDay` instead — `app/build.gradle.kts:164-170` |
+| Channel gate | `github` enables the updater; F-Droid reproduces the upstream GitHub-channel APK (`metadata/com.foxhole.guard.yml:51-52`). The separate `fdroid` channel properties remain available for alternate builds (`app/build.gradle.kts:260-266`). |
 
 The manifest digest proves the bytes match what the source described; it does **not** prove the
 source is ours, because the releases URL and token are user-editable settings. That is why the
@@ -303,7 +341,37 @@ verifier re-reads the archive through `PackageManager` before the installer is e
 
 ---
 
-## 3.7 Smaller inconsistencies found
+## 3.7 Guard release provenance and F-Droid updates
+
+Guard release publication requires a GitHub-verified `main` commit and an unexpired,
+successful signed `dev` candidate with the same source tree. It verifies the candidate,
+then builds a new signed APK from that exact `main` commit; packaging compares the
+APK's root AGP VCS revision with `CANDIDATE.json.sourceCommit`. Matching trees alone do
+not authorize substituting the candidate APK for the release APK
+(`foxhole_guard/.github/workflows/release.yml:26-170,172-252`;
+`foxhole_guard/scripts/package-release-candidate.sh:339-348,518`;
+`foxhole_guard/scripts/verify-apk-source.py:9-29`).
+
+After signing, SBOM, native and package checks, the workflow creates a tag directly
+at the built commit. Draft assets are downloaded and compared before publication;
+existing tags and releases are refused, and a failed upload leaves its tag/draft for
+owner recovery instead of deleting history
+(`foxhole_guard/.github/workflows/release.yml:155-165,217-252,272-360`).
+
+F-Droid's `AutoUpdateMode: Version` and tag check generate future build entries from
+the latest recipe. F-Droid obtains `FoxHoleCore` as a srclib at a fixed bootstrap SHA.
+Prebuild validates the checked-out app's `config/foxcore-revision.txt`, fetches that SHA
+inside the srclib and verifies its detached HEAD before Cargo or Gradle runs. Changing
+the app pin selects a different Core without changing the bootstrap srclib revision.
+Pinned tools, the upstream binary URL and signer verification remain recipe inputs
+(`foxhole_guard/metadata/com.foxhole.guard.yml:15-16,27-53`).
+Build 117 keeps its historical candidate SHA because the published 0.1.0 APK embeds that
+SHA; later release APKs must embed the commit their tag resolves to
+(`foxhole_guard/metadata/com.foxhole.guard.yml:19-21`).
+
+---
+
+## 3.8 Smaller inconsistencies found
 
 | Finding | Where |
 |---|---|
@@ -313,3 +381,11 @@ verifier re-reads the archive through `PackageManager` before the installer is e
 > **Closed in this pass.** Earlier documentation said the DNS updater only persisted bundles and
 > that the APK updater required a manifest before it could report `UpToDate`. Both claims
 > contradicted current production paths and are corrected above.
+
+> **Release documentation correction.** The prior channel table described F-Droid as using
+> the separate `fdroid` updater channel. The accepted reproducible recipe actually selects
+> `github` to reproduce the upstream signed binary; the table now follows that recipe.
+
+> **Source-layout correction.** Core selection now happens inside the F-Droid srclib,
+> following maintainer review. The previous claim that the app-tree scanner removes
+> Core fuzz fixtures no longer describes this layout; no such scanner guarantee is made.

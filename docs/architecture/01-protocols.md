@@ -96,9 +96,11 @@ Stream carriers — `StreamTransportConfig`, tagged on `type`
 raw  websocket  http_upgrade  grpc  http2
 ```
 
-Bounds: ≤16 named outbounds (`engine.rs:74-78`), ≤64 selector members (`selector.rs:9`),
-engine config ≤1 MiB (`engine.rs:34-39`). Ids `default`, `primary`, `direct`, `block` are reserved;
-`tor` and `i2p` are id-locked in both directions (`engine.rs:86-115`).
+Bounds: ≤16 named outbounds (`crates/foxcore-api/src/config/engine.rs:74-78`), ≤64 selector members
+(`crates/foxcore-api/src/config/selector.rs:9`), engine config ≤1 MiB
+(`crates/foxcore-api/src/config/engine.rs:34-39`). Ids `default`, `primary`, `direct`, `block` are
+reserved; `tor` and `i2p` are id-locked in both directions
+(`crates/foxcore-api/src/config/engine.rs:86-115`).
 
 ---
 
@@ -167,20 +169,32 @@ On the client side, `i2pd` ships as `libi2pd.so` in `jniLibs` (Android only exec
 The Tor pluggable-transport helpers come from a Tor Expert Bundle in
 `app/src/main/assets/tor/<abi>/tor/pluggable_transports/`.
 
+Bridge selection is deliberately single-transport. `AUTO` resolves to one Snowflake transport
+group; an explicit selection never falls through to another transport. For that one transport the
+client tries the downloaded inventory, then the bundled inventory, and accepts the first non-empty
+compatible set (`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorBridgeTorrcLines.kt:50-81`).
+If no usable set exists, Tor preflight fails; the client does not fall back to direct Tor. Before the
+plan reaches FoxCore, the client keeps only managed-transport protocol names referenced by the
+selected `Bridge` lines and coalesces helpers that share one executable and argument vector
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorRuntimeInstaller.kt:169-198,274-305`).
+
 ---
 
 ## 1.5 DNS transports
 
-The resolver is **not** in `foxcore-dns` (that crate is wire parsing only). The outbound DNS client
-is `crates/foxcore-tun/src/dns/{proxy.rs,upstream.rs}`.
+`foxcore-dns` owns wire parsing, response caching, attributed routing hints and synthetic-address
+leases (`crates/foxcore-dns/src/lib.rs:114,217,253,372`). The outbound DNS client lives in
+`crates/foxcore-tun/src/dns/{proxy.rs,upstream.rs}`.
 
 ```mermaid
 flowchart TD
-    Q["query from TUN"] --> G1["overlay gate<br/>.onion / .i2p"]
+    Q["query from TUN"] --> V["validate one standard query question<br/>otherwise refuse before I/O"]
+    V --> G1["overlay gate<br/>.onion / .i2p"]
     G1 --> G2["blocklist -> NXDOMAIN<br/>never reaches an upstream"]
     G2 --> G3["cache / stale cache"]
     G3 --> G4["fake-IP"]
     G4 --> U["upstream"]
+    G4 --> F["synthetic answer or full-pool refusal"]
     U --> U1["udp"]
     U --> U2["tcp"]
     U --> U3["dot — TLS, insecure + SPKI pin supported"]
@@ -201,6 +215,37 @@ flowchart TD
 `dns.route` ∈ `direct` | `primary` | `tor`. A Tor DNS route with the overlay disabled is
 `PermissionDenied`, and the resolved outbound is re-checked against the overlay gates *after*
 selection (`dns/proxy.rs:671-711`).
+
+The interceptor rejects malformed, multi-question, response-marked and non-standard-opcode
+messages before cache lookup or upstream I/O (`crates/foxcore-tun/src/dns/proxy.rs:247`;
+`crates/foxcore-dns/src/wire.rs:17`). Supported fake-IP questions never fall through to a resolver
+when the pool is full. Reissuing an address refreshes both directions of its lease; live leases are
+shared across reloads and survive network cache flushes. Capacity pressure refuses new addresses
+until existing promises expire (`crates/foxcore-dns/src/lib.rs:114,372,423`).
+
+### Names inferred from DNS
+
+Only a validated response paired with an intercepted query may teach routing hints. The key is
+`UID + sorted package set + IP`; it retains all live names, follows only the question's CNAME chain,
+and ignores unrelated answer records. Hint expiry is bounded by both alias and address TTLs.
+There are at most 16 names per identity/address; overflow makes the hint unusable. Policy reload
+and network change discard hints, while passive/global reverse lookup remains telemetry only
+(`crates/foxcore-dns/src/lib.rs:160,217,253`; `crates/foxcore-dns/src/wire.rs:145`).
+
+A literal-IP flow subject to domain rules requires attributable, unambiguous routing evidence.
+Missing/expired hints or conflicting protected routes refuse admission. Inferred names may tighten
+Direct to a protected route or Block, but cannot weaken an IP/application Block or change a
+protected route to Direct. Shared-IP names are evaluated together, independent of arrival order
+(`crates/foxcore-tun/src/flow/route.rs:317,336`; `crates/foxcore-route/src/lib.rs:191`). This may refuse
+an application using an OS-cached address until it resolves again through the interceptor. DoH
+transport authentication authenticates the resolver, not the domain's ownership of an address.
+
+Explicit names, including the core's fake-IP bindings, retain schema-v1 rule precedence: exact
+domain, longest matching suffix, then IP/general rules; list order breaks equal-specificity ties.
+A specific exception can override a generic Block. `RouteTable::explain` reports the winning
+rule, whether gates applied it, and matching shadowed Block indices. It is a Rust diagnostic API;
+Guard's editor explains precedence, but does not yet expose an interactive native dry-run
+(`crates/foxcore-route/src/lib.rs:237`; `crates/foxcore-api/src/flow.rs:634`).
 
 ---
 
@@ -234,15 +279,25 @@ stateDiagram-v2
 | **`.onion` / `.i2p`** | refused rather than forwarded when fake-IP is off — "private overlay DNS is never forwarded to an upstream resolver". Tor/I2P routing *requires* `dns.mode='fake_ip'` or the profile is rejected at load | `foxcore-tun/src/dns/proxy.rs:248-268`, `:308-322`; `config/engine.rs:232-249` |
 | **Overlay switched off** | `gated()` turns a Tor/I2P action into `Block` immediately; `.onion`/`.i2p` hosts are force-routed to the overlay lane *before* the route table and return `None` ⇒ Block if the lane is gated or absent | `foxcore-route/src/lib.rs:301-315`; `foxcore-tun/src/flow/select.rs:344-358`, `:379-389` |
 | **Failed outbound build** | becomes a `DeferredOutbound` under the same id; the engine still starts and flows get `BlockReason::LaneUnavailable` — "never answered by another lane" | `foxcore-runtime/src/registry.rs:86-97`; `flow/select.rs:337-343` |
-| **L3 packet-tunnel primary** | a WireGuard primary has no stream semantics, so the registry's `default` is a flagged direct socket that every consumer refuses: flow engine, DNS interceptor, LAN proxy, and two config-load rules | `foxcore-outbound/src/lib.rs:207-219`; `flow/select.rs:396-397`; `dns/proxy.rs:671-690`; `lan.rs:80-92`; `engine.rs:193-218` |
+| **L3 packet-tunnel primary** | a WireGuard primary has no stream semantics, so the registry's `default` is a flagged direct socket that every consumer refuses: flow engine, DNS interceptor, LAN proxy, and two config-load rules | `foxcore-outbound/src/lib.rs:207-219`; `flow/select.rs:396-397`; `dns/proxy.rs:671-690`; `foxcore-runtime/src/lan.rs:80-92`; `foxcore-api/src/config/engine.rs:193-218` |
 | **Network moved, no protected socket** | `socket = None` is the fail-closed state — packets dropped and counted, never queued; a bounded run of receive errors closes the tunnel until a rebind | `foxcore-tun/src/relay/engine.rs:149-152`, `:253-260`, `:289-317` |
 | **Continuity hold** | turning off a continuity flag holds the lane blocked and raises `ConfirmationRequired`. There is deliberately no third outcome where packets keep moving; the removed `stop_engine_leaving_network_open` value is now *rejected* under `deny_unknown_fields` | `config/policy.rs:96-119`, `:139-146`, `:188-230` |
 | **Shared UID / quarantine** | an Android shared UID resolving to a mixed decision fails closed to Block; quarantined and unknown apps never reach the network | `foxcore-route/src/lib.rs:289-297`, `:206-212` |
 | **Protected socket refused** | `protect(fd)` returning false is a hard `PermissionDenied`, not a fallback | `foxcore-dialer/src/lib.rs:314-321` |
 | **DNS without a network handle** | protected resolution requires a non-zero Android `Network` handle; otherwise `NotConnected` | `foxcore-dialer/src/lib.rs:130-137` |
-| **Loopback inbound with a dead upstream** | answers `502`; never falls through to direct | `capabilities.rs:1168-1177`; `foxcore-component/src/lan.rs:952-956` |
+| **Loopback inbound with a dead upstream** | answers `502`; never falls through to direct. VPN/direct dials keep a 30 s ceiling; Tor receives 75 s for a fresh circuit. Stop cancellation still wins over either dial and releases the bounded session permit | `crates/foxcore-android/src/capabilities.rs:1165-1177`; `crates/foxcore-component/src/lan.rs:114-121,286-291,821-830,927-939,963-988` |
 
 ### Protocol-level refusals (offered ≠ accepted)
+
+Policy, DNS-rule installation and network change share one writer mutex. Ordinary reloads retain
+the live cancellation epoch; kill-switch activation and network changes publish a fresh epoch
+and cancel every retained session from the previous one. This prevents a network callback from
+restoring stale rules or losing earlier live generations (`crates/foxcore-tun/src/flow/policy.rs:117,180,267`).
+LAN/loopback sessions register before dialing and subscribe to both their flow token and the policy
+epoch. Independent read/write waiters wake on cancellation, drop the transport and release the
+traffic-map entry, including under backpressure (`crates/foxcore-runtime/src/lan.rs:140,174,202`).
+LAN clients have no Android package identity; package-targeted revocation applies only to an
+entry that actually carries that identity.
 
 | Refusal | Why |
 |---|---|
@@ -250,7 +305,7 @@ stateDiagram-v2
 | ECH refused at config time for **hysteria2, tuic, shadowtls** | QUIC reports no ECH status so acceptance cannot be enforced; ShadowTLS v3 rewrites the session id ECH seals as AAD (`config/tls.rs:82-98`; `capabilities.rs:1101`) |
 | **PQ downgrade guard** | `curve_preferences` *replaces* the provider list, so omitting `X25519MLKEM768` used to silently drop it. It is now prepended unless `allow_classical_only_key_exchange` is set (`foxcore-transport/src/tls.rs:468-486`) |
 | **REALITY** refuses TLS 1.2 selection, HelloRetryRequest, certificate compression, session resumption; never performs Xray's crawler fallback | `capabilities.rs:746-770`; `proto-reality/src/lib.rs:3-7` |
-| **VMess** rejects legacy `alter_id`; refuses a server instruction rather than obeying it | `proto-vmess/src/lib.rs:33-40`; `src/stream.rs:236-243` |
+| **VMess** rejects legacy `alter_id`; refuses a server instruction rather than obeying it | `proto-vmess/src/lib.rs:33-40`; `proto-vmess/src/stream.rs:236-243` |
 | **TUIC** `zero_rtt_handshake` is representable but rejected at validation | `config/outbound.rs:381-387` |
 | **Naive** padding is required; a server that does not negotiate it is refused | `proto-naive/src/lib.rs:3-8` |
 | **Selector** probe URL must be plain `http://`; only stream proxies may join, so failover cannot change privacy class | `config/selector.rs:90-96`, `:26-31` |
@@ -285,9 +340,20 @@ AmneziaWG are `experimental`.
 
 ## 1.8 Inconsistencies found
 
-No open protocol inconsistencies remain after this pass. The previous text and both top-level
+The audit found that the old cancellation and DNS descriptions promised stronger behavior than
+the implementation provided. Core 0.0.5 adds transactional epoch revocation, mandatory DNS ingress
+validation, scoped conservative routing hints and non-evicting fake-IP leases. Host regressions
+cover these invariants; Android network transitions, Private DNS and NAT64 still require device
+acceptance. The previous text and both top-level
 capability tables named the removed embedded `ipstack` fork and omitted the global TCP memory and
 raw-response queue bounds; they now describe the shipping smoltcp actor and Fox-owned UDP/ICMP
 boundary. The 497-line transparent-accept proof was also a `#[cfg(test)]` module under `src/`; it is
 now the integration contract `crates/foxcore-tun/tests/smoltcp_transparent_accept_contract.rs:1-497`,
-with no production module surface.
+with no production module surface. The loopback refusal description also hid one shared 30 s
+upstream ceiling for VPN, direct and Tor; the route-aware 30/75 s split now matches fresh bridged-Tor
+bootstrap while preserving bounded ownership (`crates/foxcore-component/src/lan.rs:114-121,286-291`).
+The client enum comment also described `AUTO` as a recommendation-ordered multi-transport fallback,
+although the runtime pins it to Snowflake and forbids cross-transport fallback; the comment and this
+architecture set now match the selector
+(`core/model/src/main/kotlin/com/foxhole/core/model/SettingsEnums.kt:260-270`;
+`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorBridgeTorrcLines.kt:50-81`).

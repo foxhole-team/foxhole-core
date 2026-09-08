@@ -49,11 +49,7 @@ jobs:
           # The release points at a commit signed by the owner's hardware key.
           # The generated tag is lightweight, so this verified commit is its
           # cryptographic identity rather than a second exportable signing key.
-          if [[ "$(gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA" \
-              --jq .commit.verification.verified)" != true ]]; then
-            echo "The main release commit is not verified by GitHub; refusing to tag it." >&2
-            exit 1
-          fi
+          python3 scripts/verify-release-signature.py "$GITHUB_SHA"
 
           git fetch --no-tags origin \
             '+refs/heads/dev:refs/remotes/origin/dev'
@@ -61,7 +57,7 @@ jobs:
 
           runs="$(gh api --method GET \
             "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs" \
-            -f branch=dev -f event=push -f status=success -f per_page=100)"
+            -f branch=dev -f status=success -f per_page=100)"
 
           run_id=
           source_sha=
@@ -76,10 +72,14 @@ jobs:
             run_id="$maybe_run"
             source_sha="$maybe_sha"
             break
-          done < <(jq -r '.workflow_runs[] | [.id, .head_sha] | @tsv' <<<"$runs")
+          done < <(jq -r '.workflow_runs[]
+            | select(.event == "push" or .event == "workflow_dispatch")
+            | select((now - (.updated_at | fromdateiso8601)) >= 0
+                and (now - (.updated_at | fromdateiso8601)) <= 86400)
+            | [.id, .head_sha] | @tsv' <<<"$runs")
 
           if [[ -z "$run_id" || -z "$source_sha" ]]; then
-            echo "No successful dev gate has the main source tree." >&2
+            echo "No successful dev gate within 24 hours has the main source tree." >&2
             echo "Run the full dev gate for this tree before releasing it." >&2
             exit 1
           fi

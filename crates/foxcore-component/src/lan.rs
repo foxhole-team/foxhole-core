@@ -111,12 +111,13 @@ const HEAD_READ_BUFFER: usize = 1024;
 /// tokio advances a paused clock whenever the runtime is idle, which is most of
 /// a socket read.
 const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
-/// Time allowed to reach the upstream once the client has named a target.
-///
-/// Longer than the handshake because building a Tor circuit legitimately takes
-/// seconds; bounded for the same reason the handshake is — a dial that never
-/// completes keeps the session slot as effectively as a silent client.
+/// Time allowed to reach a VPN or direct upstream once the client has named a
+/// target.
 const UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// A fresh managed-bridge Tor route can legitimately spend longer building its
+/// first usable circuit. It remains bounded because the dial holds a session
+/// slot until it succeeds, fails, or the listener is stopped.
+const TOR_UPSTREAM_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(75);
 /// Time allowed to hand the client its reply, before the relay starts.
 ///
 /// These writes are a handful of bytes and normally complete into an empty
@@ -278,6 +279,13 @@ impl LanRoute {
             Self::Tor => "tor",
             Self::Direct => "direct",
         }
+    }
+}
+
+fn upstream_connect_timeout(route: LanRoute) -> std::time::Duration {
+    match route {
+        LanRoute::Tor => TOR_UPSTREAM_CONNECT_TIMEOUT,
+        LanRoute::Vpn | LanRoute::Direct => UPSTREAM_CONNECT_TIMEOUT,
     }
 }
 
@@ -818,7 +826,7 @@ fn start_with_binding(
             route,
             slots: slots.clone(),
             handshake_timeout: config.handshake_timeout,
-            connect_timeout: UPSTREAM_CONNECT_TIMEOUT,
+            connect_timeout: upstream_connect_timeout(route),
         };
         let cancel = cancel.clone();
         handle.spawn(async move {
@@ -1396,6 +1404,22 @@ mod tests {
     }
 
     #[test]
+    fn only_tor_receives_the_extended_upstream_connect_budget() {
+        assert_eq!(
+            upstream_connect_timeout(LanRoute::Vpn),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            upstream_connect_timeout(LanRoute::Direct),
+            std::time::Duration::from_secs(30)
+        );
+        assert_eq!(
+            upstream_connect_timeout(LanRoute::Tor),
+            std::time::Duration::from_secs(75)
+        );
+    }
+
+    #[test]
     fn basic_credentials_are_decoded_only_from_a_basic_challenge() {
         use base64::Engine as _;
 
@@ -1465,6 +1489,20 @@ mod tests {
                 let echo = echo.ok_or_else(|| io::Error::other("no upstream"))?;
                 let stream = TcpStream::connect(echo).await?;
                 Ok(Box::new(stream) as Box<dyn LanIo>)
+            })
+        }
+    }
+
+    struct HangingUpstream {
+        started: Arc<tokio::sync::Notify>,
+    }
+
+    impl LanUpstream for HangingUpstream {
+        fn connect(&self, _route: LanRoute, _host: String, _port: u16) -> LanConnect {
+            let started = self.started.clone();
+            Box::pin(async move {
+                started.notify_one();
+                std::future::pending::<io::Result<Box<dyn LanIo>>>().await
             })
         }
     }
@@ -1869,6 +1907,60 @@ mod tests {
                 .iter()
                 .any(|event| event.kind == ComponentEventKind::LanProxyRefused),
             "{drain:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn stop_cancels_a_pending_tor_connect_without_waiting_for_its_budget() {
+        let provider = Arc::new(RecordingProvider {
+            acquired: StdMutex::new(Vec::new()),
+            unavailable: None,
+        });
+        let manager = ComponentManager::new(provider);
+        let started = Arc::new(tokio::sync::Notify::new());
+        let handle = manager
+            .start_loopback_inbound(
+                tokio::runtime::Handle::current(),
+                LoopbackInbound {
+                    id: ComponentId::new("runtime:tor-stop").unwrap(),
+                    http_port: 0,
+                    credentials: Some(LanCredentials::new("user", b"secret".to_vec()).unwrap()),
+                    route: LanRoute::Tor,
+                    max_sessions: 1,
+                },
+                1,
+                Arc::new(HangingUpstream {
+                    started: started.clone(),
+                }),
+            )
+            .unwrap();
+
+        use base64::Engine as _;
+        let token = base64::engine::general_purpose::STANDARD.encode("user:secret");
+        let mut stream = TcpStream::connect(handle.http_address().unwrap())
+            .await
+            .unwrap();
+        stream
+            .write_all(
+                format!(
+                    "CONNECT example.com:443 HTTP/1.1\r\nProxy-Authorization: Basic {token}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), started.notified())
+            .await
+            .expect("the Tor dial must have started");
+
+        handle.stop();
+
+        let mut byte = [0_u8; 1];
+        let closed =
+            tokio::time::timeout(std::time::Duration::from_secs(5), stream.read(&mut byte)).await;
+        assert!(
+            matches!(closed, Ok(Ok(0)) | Ok(Err(_))),
+            "stop must drop the pending session and its permit: {closed:?}"
         );
     }
 

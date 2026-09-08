@@ -275,6 +275,11 @@ impl FlowEngine {
         if is_onion(&context.destination.host) || is_i2p(&context.destination.host) {
             return PacketDecision::new(PacketRoute::Stack);
         }
+        if !bind_dns_context(&mut context, &policy.routes, &policy.dns) {
+            self.metrics.block_flow();
+            self.emit_block(BlockReason::Policy, transport, &context);
+            return PacketDecision::new(PacketRoute::Block);
+        }
         match policy.routes.decide(&context) {
             RouteAction::Block => {
                 self.metrics.block_flow();
@@ -406,6 +411,12 @@ impl FlowEngine {
             self.metrics.dns_encrypted_bypass();
             self.metrics.block_flow();
             self.emit_block(BlockReason::DnsEncryptedBypass, IpTransport::Tcp, &context);
+            Self::close_towards_app(&mut stream).await;
+            return;
+        }
+        if !bind_dns_context(&mut context, &policy.routes, &policy.dns) {
+            self.metrics.block_flow();
+            self.emit_block(BlockReason::Policy, context.transport, &context);
             Self::close_towards_app(&mut stream).await;
             return;
         }

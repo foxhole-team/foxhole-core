@@ -6,7 +6,7 @@
 # guard: Tor was optional, deny.toml was the shipped graph with no exceptions,
 # and Arti's findings lived here because they were about code no release
 # contained. Tor and onion publication are now default foxcore-android features,
-# so all four findings below describe the artifact and are decided in
+# so the findings below describe the resolved graph and are decided in
 # deny.toml too. This file remains because feature additions elsewhere must be
 # audited before they can enter the shipped default.
 #
@@ -18,7 +18,7 @@
 # Run: cargo deny --all-features --config deny-all-features.toml check
 #
 # ----------------------------------------------------------------------------
-# The four findings, all of them inside Arti's tree. Each is decided rather than
+# The advisory and licence inventory. Each is decided rather than
 # silenced; the matching rationale is kept beside each exception here and in
 # deny.toml.
 #
@@ -28,6 +28,8 @@
 # 3. notify 8.2.0 under CC0-1.0, via an unconditional tor-config dependency.
 #    Ships.
 # 4. xxhash-rust 0.8.18 under BSL-1.0, via onion publication. Ships.
+# 5. RUSTSEC-2025-0141 — bincode 2.0.1, unmaintained, resolved through
+#    typed-index-collections. SBOM inclusion alone does not establish reachability.
 # ----------------------------------------------------------------------------
 
 [graph]

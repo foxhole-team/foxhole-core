@@ -48,11 +48,10 @@ struct LoopbackInboundCapabilities {
     /// `Proxy`, which speaks CONNECT.
     socks5: bool,
     http_connect: bool,
-    /// Not optional and not configurable, and every inbound's credentials are
-    /// required to differ from every other's: these all listen on `127.0.0.1`,
-    /// where every app on the device can reach every port, so the credential is
-    /// the only separation there is.
+    /// False because explicit anonymous opt-in is supported; credentials are
+    /// otherwise required and provide separation from other local applications.
     mandatory_credentials: bool,
+    anonymous_requires_explicit_opt_in: bool,
     distinct_credentials_enforced: bool,
     /// The bind address is absent from the schema. A configuration cannot widen
     /// one of these to the LAN; that request belongs to the LAN surface, which
@@ -1171,7 +1170,8 @@ pub(crate) fn capabilities_json() -> &'static str {
                 ephemeral_port: true,
                 socks5: false,
                 http_connect: true,
-                mandatory_credentials: true,
+                mandatory_credentials: false,
+                anonymous_requires_explicit_opt_in: true,
                 distinct_credentials_enforced: true,
                 configurable_bind_address: false,
                 fail_closed_upstream: true,
@@ -2288,7 +2288,8 @@ mod tests {
             block["default_sessions_per_inbound"],
             DEFAULT_LOOPBACK_INBOUND_SESSIONS
         );
-        assert_eq!(block["mandatory_credentials"], true);
+        assert_eq!(block["mandatory_credentials"], false);
+        assert_eq!(block["anonymous_requires_explicit_opt_in"], true);
         assert_eq!(block["distinct_credentials_enforced"], true);
         assert_eq!(block["fail_closed_upstream"], true);
         // The bind address is not in the schema and never will be. A config that
@@ -2298,11 +2299,6 @@ mod tests {
         assert_eq!(block["socks5"], false);
         assert_eq!(block["http_connect"], true);
 
-        // The two ingress blocks agree about the one thing they share: neither
-        // has a direct-by-default state, and both authenticate always.
-        assert_eq!(
-            document["lan_proxy"]["mandatory_credentials"],
-            block["mandatory_credentials"]
-        );
+        assert_eq!(document["lan_proxy"]["mandatory_credentials"], true);
     }
 }

@@ -131,12 +131,10 @@ pub struct LoopbackInboundConfig {
     /// losing that flip is a listener that will not bind at all.
     #[serde(default)]
     pub http_port: u16,
-    /// Both credential fields are absent together or present together.
-    ///
-    /// Absent raises the listener without authentication. That is a real choice
-    /// and it is available here alone: this listener binds `127.0.0.1`, so the
-    /// set it opens to is the apps already installed on the phone rather than
-    /// the network — the LAN surface has no such variant and never will.
+    /// Explicit consent to let any application on this device use the listener.
+    #[serde(default)]
+    pub allow_anonymous: bool,
+    /// Omitted credentials require `allow_anonymous`; partial credentials are refused.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,8 +159,8 @@ impl LoopbackInboundConfig {
             ));
         }
         match (&self.username, &self.password) {
-            (None, None) => {}
-            (Some(username), Some(password)) => {
+            (None, None) if self.allow_anonymous => {}
+            (Some(username), Some(password)) if !self.allow_anonymous => {
                 if username.is_empty()
                     || username.len() > 64
                     || !username.is_ascii()
@@ -188,8 +186,7 @@ impl LoopbackInboundConfig {
             // silently become "anonymous".
             _ => {
                 return Err(ConfigError::Invalid(
-                    "runtime.loopback_inbounds[].username and password are set together or \
-                     omitted together"
+                    "runtime.loopback_inbounds[] requires credentials or explicit allow_anonymous, never both"
                         .into(),
                 ));
             }

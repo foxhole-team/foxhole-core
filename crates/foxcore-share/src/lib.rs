@@ -11,8 +11,9 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
+use tokio_util::sync::CancellationToken;
 
 use argon2::Argon2;
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
@@ -219,7 +220,7 @@ struct Session {
     expires_at_ms: u64,
     remaining_downloads: u32,
     files: HashMap<FileId, SharedFile>,
-    revoked: Arc<AtomicBool>,
+    revoked: CancellationToken,
     next_event_sequence: u64,
     events: VecDeque<ShareEvent>,
     dropped_events: u64,
@@ -320,7 +321,8 @@ pub struct DownloadPermit {
     share: ShareId,
     file: FileId,
     expected_bytes: u64,
-    revoked: Arc<AtomicBool>,
+    deadline: Instant,
+    revoked: CancellationToken,
     audit_state: Arc<Mutex<State>>,
 }
 
@@ -398,7 +400,7 @@ impl ShareManager {
             expires_at_ms: config.expires_at_ms,
             remaining_downloads: config.max_downloads,
             files: HashMap::new(),
-            revoked: Arc::new(AtomicBool::new(false)),
+            revoked: CancellationToken::new(),
             next_event_sequence: 1,
             failed_password_attempts: 0,
             password_retry_at_ms: 0,
@@ -441,7 +443,7 @@ impl ShareManager {
                 .is_some_and(|session| now_ms >= session.expires_at_ms)
             {
                 let mut session = state.sessions.remove(&share).ok_or(ShareError::NotFound)?;
-                session.revoked.store(true, Ordering::Release);
+                session.revoked.cancel();
                 push_event(&mut session, ShareEventKind::Expired, None);
                 insert_tombstone(
                     &mut state,
@@ -473,7 +475,7 @@ impl ShareManager {
         };
         let mut state = lock(&self.state);
         let session = state.sessions.get_mut(&share).ok_or(ShareError::Revoked)?;
-        if session.revoked.load(Ordering::Acquire) {
+        if session.revoked.is_cancelled() {
             let _ = self.vault.remove_file(share, file);
             return Err(ShareError::Revoked);
         }
@@ -504,7 +506,7 @@ impl ShareManager {
             .is_some_and(|session| now_ms >= session.expires_at_ms);
         if expired {
             let mut session = state.sessions.remove(&share).ok_or(ShareError::NotFound)?;
-            session.revoked.store(true, Ordering::Release);
+            session.revoked.cancel();
             push_event(&mut session, ShareEventKind::Expired, None);
             insert_tombstone(
                 &mut state,
@@ -519,7 +521,7 @@ impl ShareManager {
             return Err(ShareError::Expired);
         }
         let session = state.sessions.get_mut(&share).ok_or(ShareError::NotFound)?;
-        if session.revoked.load(Ordering::Acquire) {
+        if session.revoked.is_cancelled() {
             return Err(ShareError::Revoked);
         }
         if verify_capability(&session.download_digest, capability).is_err() {
@@ -564,6 +566,8 @@ impl ShareManager {
             share,
             file,
             expected_bytes: metadata.plaintext_bytes,
+            deadline: Instant::now()
+                + Duration::from_millis(session.expires_at_ms.saturating_sub(now_ms)),
             revoked: session.revoked.clone(),
             audit_state: self.state.clone(),
         };
@@ -583,7 +587,7 @@ impl ShareManager {
             verify_capability(&existing.owner_digest, owner)?;
             state.sessions.remove(&share).ok_or(ShareError::NotFound)?
         };
-        session.revoked.store(true, Ordering::Release);
+        session.revoked.cancel();
         push_event(&mut session, ShareEventKind::Revoked, None);
         {
             let mut state = lock(&self.state);
@@ -685,9 +689,7 @@ impl DownloadPermit {
     }
 
     fn write_plaintext_inner(&self, writer: &mut impl Write) -> Result<u64, ShareError> {
-        if self.revoked.load(Ordering::Acquire) {
-            return Err(ShareError::Revoked);
-        }
+        self.check_live()?;
         let mut options = OpenOptions::new();
         options.read(true);
         #[cfg(unix)]
@@ -723,9 +725,7 @@ impl DownloadPermit {
         let mut written = 0_u64;
         let mut counter = 1_u64;
         while written < header.plaintext_bytes {
-            if self.revoked.load(Ordering::Acquire) {
-                return Err(ShareError::Revoked);
-            }
+            self.check_live()?;
             let mut length = [0_u8; 4];
             read_exact_ciphertext(&mut file, &mut length)?;
             let length = u32::from_be_bytes(length) as usize;
@@ -733,7 +733,7 @@ impl DownloadPermit {
             if length == 0 || length > CHUNK_BYTES || length as u64 > remaining {
                 return Err(ShareError::Authentication);
             }
-            let mut body = vec![0_u8; length];
+            let mut body = Zeroizing::new(vec![0_u8; length]);
             read_exact_ciphertext(&mut file, &mut body)?;
             let mut tag = [0_u8; TAG_BYTES];
             read_exact_ciphertext(&mut file, &mut tag)?;
@@ -742,7 +742,19 @@ impl DownloadPermit {
             cipher
                 .decrypt_in_place_detached(&chunk_nonce, &aad, &mut body, Tag::from_slice(&tag))
                 .map_err(|_| ShareError::Authentication)?;
-            writer.write_all(&body)?;
+            let mut offset = 0;
+            while offset < body.len() {
+                self.check_live()?;
+                let count = writer.write(&body[offset..])?;
+                if count == 0 {
+                    return Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "download writer made no progress",
+                    )
+                    .into());
+                }
+                offset += count;
+            }
             written = written.saturating_add(length as u64);
             counter = counter.checked_add(1).ok_or(ShareError::Authentication)?;
         }
@@ -750,7 +762,18 @@ impl DownloadPermit {
         if file.read(&mut trailing)? != 0 {
             return Err(ShareError::Authentication);
         }
+        self.check_live()?;
         Ok(written)
+    }
+
+    fn check_live(&self) -> Result<(), ShareError> {
+        if self.revoked.is_cancelled() {
+            return Err(ShareError::Revoked);
+        }
+        if Instant::now() >= self.deadline {
+            return Err(ShareError::Expired);
+        }
+        Ok(())
     }
 }
 
@@ -1189,7 +1212,7 @@ impl SessionManifest {
             expires_at_ms: self.expires_at_ms,
             remaining_downloads: self.remaining_downloads,
             files,
-            revoked: Arc::new(AtomicBool::new(false)),
+            revoked: CancellationToken::new(),
             next_event_sequence: 1,
             failed_password_attempts: 0,
             password_retry_at_ms: 0,
@@ -1523,6 +1546,59 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_download_expires_between_partial_writes_without_another_api_call() {
+        let (_root, manager) = manager();
+        let created = manager
+            .create(
+                1_000,
+                ShareConfig {
+                    expires_at_ms: 60_000,
+                    max_downloads: 1,
+                },
+                None,
+            )
+            .unwrap();
+        let file = manager
+            .add_file(
+                created.id,
+                created.owner.as_bytes(),
+                1_000,
+                "a.bin",
+                "application/octet-stream",
+                3,
+                &mut &b"abc"[..],
+            )
+            .unwrap();
+        let mut permit = manager
+            .authorize_download(
+                created.id,
+                file.id,
+                created.download.as_bytes(),
+                None,
+                1_000,
+            )
+            .unwrap();
+        struct SlowWriter(Vec<u8>);
+        impl Write for SlowWriter {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0.push(bytes[0]);
+                std::thread::sleep(Duration::from_millis(20));
+                Ok(1)
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        permit.deadline = Instant::now() + Duration::from_millis(10);
+        let mut output = SlowWriter(Vec::new());
+        assert!(matches!(
+            permit.write_plaintext(&mut output),
+            Err(ShareError::Expired)
+        ));
+        assert!(output.0.len() < 3);
+    }
 
     fn manager() -> (tempfile::TempDir, ShareManager) {
         let root = tempfile::tempdir().unwrap();

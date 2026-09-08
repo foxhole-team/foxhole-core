@@ -272,7 +272,7 @@
       }
     },
     "loopback_inbounds": {
-      "description": "Named loopback CONNECT listeners: one authenticated proxy per application, which on Android is the only way to route two web apps in one process differently.",
+      "description": "Named loopback CONNECT listeners with credentials by default; anonymous access requires explicit consent.",
       "type": "object",
       "additionalProperties": false,
       "required": [
@@ -285,6 +285,7 @@
         "socks5",
         "http_connect",
         "mandatory_credentials",
+        "anonymous_requires_explicit_opt_in",
         "distinct_credentials_enforced",
         "configurable_bind_address",
         "fail_closed_upstream"
@@ -327,7 +328,7 @@
           "const": true
         },
         "mandatory_credentials": {
-          "const": true
+          "const": false
         },
         "distinct_credentials_enforced": {
           "const": true
@@ -338,6 +339,9 @@
         },
         "fail_closed_upstream": {
           "description": "An inbound whose upstream is unavailable refuses. It never falls through to direct.",
+          "const": true
+        },
+        "anonymous_requires_explicit_opt_in": {
           "const": true
         }
       }

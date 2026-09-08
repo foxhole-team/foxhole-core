@@ -124,6 +124,7 @@ pub(crate) struct LoopbackInbounds<'a> {
 
 #[derive(Serialize)]
 pub(crate) struct LoopbackInboundStatus<'a> {
+    pub(crate) authentication: &'static str,
     /// The name from the configuration, unchanged. This is the join key between
     /// what the app asked for and what is listening.
     pub(crate) name: &'a str,

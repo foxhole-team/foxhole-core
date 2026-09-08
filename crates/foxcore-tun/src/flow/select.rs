@@ -111,6 +111,11 @@ impl FlowEngine {
             self.emit_block(BlockReason::DnsEncryptedBypass, IpTransport::Udp, &context);
             return;
         }
+        if !bind_dns_context(&mut context, &policy.routes, &policy.dns) {
+            self.metrics.block_flow();
+            self.emit_block(BlockReason::Policy, context.transport, &context);
+            return;
+        }
         let SelectedRoute { outbound, route } = match self.select_route(&context, &policy.routes) {
             Ok(selected) => selected,
             Err(reason) => {
@@ -120,7 +125,6 @@ impl FlowEngine {
             }
         };
         let metrics = self.metrics.clone();
-        let dns = policy.dns.clone();
         let lane = route.lane;
         let policy_revoked = policy.revocation.clone();
         metrics.open_udp();
@@ -193,9 +197,6 @@ impl FlowEngine {
                             metrics.flow_error();
                             break;
                         };
-                        if context.destination.port == 53 {
-                            dns.observe_response(&datagram.payload);
-                        }
                         if stream.write_all(&datagram.payload).await.is_err() {
                             metrics.flow_error();
                             break;
@@ -240,7 +241,9 @@ impl FlowEngine {
         routes: &RouteTable,
         transport: IpTransport,
     ) -> bool {
-        if !routes.requires_identity() {
+        if !routes.requires_identity()
+            && !(routes.requires_domain_hints() && context.destination.ip().is_some())
+        {
             return true;
         }
         if !self.attributor.is_available() {

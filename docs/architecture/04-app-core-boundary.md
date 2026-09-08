@@ -29,11 +29,47 @@ flowchart TD
 | Shipped Engine seam | **33 Rust exports / 32 Java declarations** (`FoxholeNativeEngine.java:55-227`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
 | Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` expose the product-reachable subset; link import and continuity stop at Java compatibility declarations |
 | Cross-repository gate | The app compares every shipped Engine export with Java declarations and production Kotlin references (`scripts/verify-foxcore-jni-seam.sh`), then executes product-reachable calls against the packaged `.so` on Android (`FoxCoreNativeSeamAndroidTest.kt`). |
-| Core release version | `0.0.3` comes from the workspace package (`Cargo.toml:36-41`). `CORE_VERSION` is `CARGO_PKG_VERSION` (`crates/foxcore-api/src/lib.rs:38-40`) and supplies both JNI `nativeVersion` (`crates/foxcore-android/src/lib.rs:105-115`) and capabilities JSON (`crates/foxcore-android/src/capabilities.rs:699-707`). |
+| Core release version | `0.0.5` comes from the workspace package (`Cargo.toml:36-41`). `CORE_VERSION` is `CARGO_PKG_VERSION` (`crates/foxcore-api/src/lib.rs:38-40`) and supplies both JNI `nativeVersion` (`crates/foxcore-android/src/lib.rs:105-115`) and capabilities JSON (`crates/foxcore-android/src/capabilities.rs:699-707`). |
 | ABI version | `1`, frozen; class and package name are part of the ABI |
 | Structured documents | JSON, with no protobuf. TUN/network handles and signed DNS/fingerprint payloads use their native scalar/byte-array forms. |
 | Build-path contract | `scripts/android-build.sh:67-98` remaps the checkout, Cargo home and Rustup home before compiling. The ELF gate refuses build-host paths (`scripts/android-elf-gate.sh:138-166,222-225`), and the release reproducibility check compares bytes from different checkout and Cargo-home paths (`scripts/reproducible-build.sh:46-150`). |
-| Release provenance | release requires a verified main commit plus a successful dev CI run with the identical Git tree (`.github/workflows/release.yml:35-117`), then rebuilds and re-verifies the JNI manifest, both ARM ABIs and SBOM inputs on main (`.github/workflows/release.yml:133-177`). `RELEASE.json` binds both commits, their shared tree and the gate run; SHA-256 and keyless attestation cover the archive (`:179-210`). |
+| Release provenance | release verifies the main commit against a reviewed OpenPGP signing-subkey/primary-key pair (`scripts/verify-release-signature.py:15`), then requires successful dev CI evidence for the identical Git tree completed within 24 hours (`.github/workflows/release.yml:53`). It rebuilds and verifies JNI, both ARM ABIs, manifest and SBOM; `RELEASE.json` records the commits, shared tree and gate run. SHA-256 and keyless attestation cover the archive. |
+
+### Release trust and rotation
+
+`config/release-signers.asc:1` contains public keys only;
+`config/release-signing-fingerprints.txt:1` pins both the signing subkey and its primary key.
+The verifier uses an isolated GnuPG home and requires one valid signature from an allowed pair.
+GitHub's generic Verified flag or an unrelated trusted key cannot satisfy it. This proves key
+identity, not whether a particular signing operation happened on hardware
+(`scripts/verify-release-signature.py:15`).
+
+For rotation, the owner reviews and signs the addition of the replacement public key and complete
+fingerprint pair while the existing trust is still valid. After that change is accepted, release
+commits can use the new key; removal of the old pair is a separate owner-reviewed change. A lost
+or compromised sole trusted key requires an explicit out-of-band owner trust decision. Neither
+key material nor trust configuration is downloaded by the release job.
+
+The dev gate fetches fresh advisory data, and the daily advisory workflow checks the current dev
+lockfile for both dependency graphs (`.github/workflows/ci.yml:133`;
+`.github/workflows/advisories.yml:1`). These files do not enforce GitHub branch/tag protection or
+immutable releases: repository settings must separately require the gate, protect signed main
+updates, prevent tag rewrites/deletion, and limit bypass to the owner's approved release path.
+
+### Loopback authentication in 0.0.5
+
+An inbound requires either complete credentials or explicit `allow_anonymous: true`; omission,
+partial credentials, and mixing credentials with anonymous mode are rejected
+(`crates/foxcore-api/src/config/rt.rs:136,162`). Capabilities expose `mandatory_credentials: false` and
+`anonymous_requires_explicit_opt_in: true` for loopback listeners; LAN proxy credentials remain
+mandatory (`crates/foxcore-android/src/capabilities.rs:1173`). Runtime status reports `authentication` as
+`credentials` or `anonymous` (`crates/foxcore-runtime/src/snapshot.rs:127`). Anonymous listeners are
+reachable by other apps on the device. Guard sets consent only when the user explicitly disables
+proxy authentication; a missing password never creates it (`foxhole_guard/core/runtime/src/main/kotlin/com/foxhole/core/runtime/LocalProxyRuntime.kt:24`).
+
+The new optional field retains config schema and ABI v1, but legacy anonymous payloads now fail
+validation. Ship Core 0.0.5 before a Guard release that sends the field, then update Guard's exact
+revision pin; a client still built against 0.0.4 cannot use this new request contract.
 
 ---
 
@@ -65,11 +101,21 @@ Sub-translators, all in `core/runtime/src/main/kotlin/com/foxhole/core/runtime/`
 | `FoxCoreOutboundTranslator.kt:23` | `translate` | `FoxCoreOutboundPlan` — primary, named, packet-tunnel flag, overlays |
 | `FoxCoreProxyOutboundTranslator.kt:8` | `translateFoxCoreProxyOutbound` | per-protocol outbound object |
 | `FoxCoreWireGuardTranslator.kt:26` | `translateFoxCoreWireGuard` | `type:"wireguard"` |
-| `FoxCoreTorTranslator.kt:10,62` | `translateOverlay` / `translateOutbound` | named `tor` outbound |
+| `FoxCoreTorTranslator.kt:13,65` | `translateOverlay` / `translateOutbound` | named `tor` outbound |
 | `FoxCoreTlsTransportTranslator.kt:18,211` | `translateFoxCoreTls` / `translateFoxCoreTransport` | `tls` / `transport` sub-objects |
 | `FoxCorePolicyTranslator.kt:30` | `translate` | dns, routes, traffic, `dns.rule_sets[]` |
 
 Rejections are a closed enum (`FoxCoreConfigRejection`); the exception never echoes document values.
+
+Tor bridge policy is resolved before translation. `AUTO` selects one Snowflake group; explicit
+transports cannot cross-fallback, while downloaded-to-bundled fallback is allowed only for that
+same transport (`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorBridgeTorrcLines.kt:50-81`).
+The runtime derives the required protocol tokens from the resulting bridge lines, narrows and
+coalesces the PT process declarations, and fails preflight if any selected protocol has no helper
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorRuntimeInstaller.kt:169-198,274-305`).
+The translator therefore receives only the selected `bridges` and `pluggable_transports`, validates
+their shape, and emits those values without reopening transport selection
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/FoxCoreTorTranslator.kt:65-125,163-193`).
 
 ### The engine config the core accepts
 
@@ -125,8 +171,9 @@ sequenceDiagram
     Note over R,H: per-app attribution needs API 29 or later,<br/>package cache 5 min / 1024 entries
 ```
 
-Host contract: `RuntimeServiceHost` — `core/runtime/.../RuntimeNativeSupport.kt:12-32`;
-implementation `FoxholeVpnService.kt:462-481`.
+Host contract: `RuntimeServiceHost` —
+`core/runtime/src/main/kotlin/com/foxhole/core/runtime/RuntimeNativeSupport.kt:12-34`; implementation
+`app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeVpnService.kt:67,485-504`.
 
 Panic containment: every JNI entry is wrapped in `catch_unwind(AssertUnwindSafe(...))`; a contained
 panic becomes `IllegalStateException("panic inside FoxCore JNI boundary")` or a `-1`-family code.
@@ -254,6 +301,42 @@ sequenceDiagram
 engine.** `protect()` is never called before the engine exists — it is a Rust→Java upcall made per
 outbound socket.
 
+Direct bridged Tor-only validation is one authenticated runtime-proxy request with an 80 s call cap
+inside one monotonic 120 s validation deadline; 5 s is reserved for a classification-only control
+probe after a strict failure (`RuntimeValidationProbePlan.kt:139-175`;
+`RuntimeValidationRun.kt:331-360`; `RuntimeProxyEgressValidationSupport.kt:84-146,350-388`). The
+core assigns that Tor CONNECT route 75 s to build its upstream while VPN and direct routes retain
+30 s. The accepted session still owns a bounded permit, and listener cancellation races the whole
+serve future, so stop does not wait for either connect ceiling
+(`crates/foxcore-component/src/lan.rs:114-121,286-291,821-830,927-939,963-988`).
+
+### Policy publication during a network handoff
+
+`ActiveFoxCoreSession.sessionIdentity` remains stable when network metadata is copied
+(`core/runtime/src/main/kotlin/com/foxhole/core/runtime/FoxCoreNativeSeam.kt:338`). Reload admission
+checks that identity and its transition generation. Publication holds `stateLock` and retains the
+latest network handle, so a successful native policy update cannot be discarded solely because a
+network callback copied the session (`FoxCoreRuntime.kt:392,684,774`). A stopped or replaced
+session cannot acquire ownership through a late completion. Native policy reload, DNS installation,
+and network changes are serialized by Core's policy writer (`crates/foxcore-tun/src/flow/policy.rs:117`).
+
+### Authorized profile commands and WebApp ownership
+
+Notification actions carry a private, app-issued request bound to profile and protocol option,
+with a ten-minute monotonic expiry and boot identity. The UI admits commands after App Lock and
+consumes the request once before executing it. A caller-supplied profile ID alone cannot authorize
+a switch (`app/src/main/kotlin/com/foxhole/guard/runtime/NetworkRuleCommandRequests.kt:8,25,38`;
+`app/src/main/kotlin/com/foxhole/guard/ui/HomeViewModelNetworkRulesSupport.kt:204`).
+
+WebApp foreground state binds the app and a proxy lease generation. Under the polling mutex, the
+watchdog blocks and destroys the old view before changing the process-wide proxy; a late release
+only applies to its own lease. Failed proxy cleanup keeps polling suspended
+(`app/src/main/kotlin/com/foxhole/guard/core/webapps/WebAppsWatchdog.kt:194,224,237`). On WebView implementations supporting multiple profiles, named storage
+profiles are required before loading a page, and the installed profile name is checked. There is no
+fallback to shared storage after installation failure (`WebAppProfiles.kt:24`). Pending data
+removals persist before the database row is removed and are retried before a later profile load;
+a failed removal retains its record (`WebAppsDataCleaner.kt:29,38`; `WebAppProfiles.kt:29`).
+
 ### Desired Tor intent vs applied runtime
 
 ```mermaid
@@ -320,6 +403,13 @@ stateDiagram-v2
 The last resort kills the process so Android revokes every descriptor, including FoxCore's dup.
 This is the self-kill path recorded in the teardown notes.
 
+The Kotlin JNI fence lets `nativeStop` use the full graceful budget plus a 750 ms return-settlement
+margin (`FoxCoreNativeEngineOperations.kt:92-100`; `RuntimeStopSupport.kt:20-23,560-568`). With the
+production 3,000 ms policy, the native call therefore has 3,750 ms; its outer fail-closed supervisor
+has 5,750 ms, covering that complete window, the 1,500 ms `nativeForceKill` fence and 500 ms of
+scheduling overhead (`RuntimeStopSupport.kt:513-550`). Timeout arithmetic saturates at `Long.MAX_VALUE`
+instead of wrapping to an immediate timeout.
+
 ### States
 
 | Layer | Enum | Values |
@@ -353,7 +443,7 @@ The release surface and the product call graph are different questions:
 |---|---|---|
 | Engine lifecycle | 33 Rust exports, 32 Java declarations | Complete by design: only legacy `nativeStart` is omitted; every production start passes an Android `Network` handle. |
 | Signed DNS bootstrap | Java declaration, `FoxCoreNativeApi` methods and JNI calls are present (`FoxCoreNativeSeam.kt:73-99,219-270`); start dispatch is at `FoxCoreNativeSessionStarter.kt:252-283` | A persisted signed update is verified as part of `nativeStartWithNetworkAndDnsRuleSet`, before the engine is published; the same boundary also supports generation-fenced live signed install. |
-| Traffic map | `nativeTrafficMap` is declared and called by `JniFoxCoreNativeApi` (`FoxCoreNativeSeam.kt:284-288`) | `FoxCoreRuntime.runtimeTrafficMapJson` uses the canonical call (`FoxCoreRuntime.kt:655-658`); `nativeConnections` remains a compatibility alias. |
+| Traffic map | `nativeTrafficMap` is declared and called by `JniFoxCoreNativeApi` (`FoxCoreNativeSeam.kt:284-288`) | `FoxCoreRuntime.runtimeTrafficMapJson` uses the canonical call (`FoxCoreRuntime.kt:714-717`); `nativeConnections` remains a compatibility alias. |
 | Link import | The two Rust exports and Java declarations are retained as compatibility-only ABI and classified by `verify-foxcore-jni-seam.sh` | **No Kotlin product wrapper or importer/data-layer call site.** `ProfileImportParser` remains the app's parser. The native DTO is not a drop-in replacement for the app's normalized profile contract. |
 | Continuity | The Rust export and Java declaration are retained as compatibility-only ABI | Audit events are parsed and journalled, but the translator keeps automatic continuity defaults and no service/UI action exposes a confirmation token. |
 | Live DNS install | `nativeInstallDnsRuleSet` is called through a generation-fenced runtime method after the exact verified bytes are persisted | A stable engine with the same trust adopts the update live and commits the returned revision. Enable or trust rotation changes the immutable fingerprint and uses signed replacement start; no active engine defers to the next start. |
@@ -377,3 +467,20 @@ flowchart LR
 `foxcore-link/src/lib.rs:636-650` exposes the partial subscription import intended for applications.
 The JNI exports remain frozen, but the repository calls the Kotlin parser and the two disagree on
 four schemes. A product switch requires a shared DTO and policy/secret-handling corpus first.
+
+---
+
+## 4.8 Inconsistencies found
+
+The app's direct bridged-Tor proof budget had outgrown the core component's route-agnostic 30 s
+CONNECT ceiling, so the authenticated loopback proxy could return `502` before a fresh managed-
+bridge circuit was usable. FoxCore 0.0.4 makes only that internal policy route-aware (Tor 75 s,
+VPN/direct 30 s); ABI v1, configuration schema v1 and capabilities schema v1 are unchanged
+(`Cargo.toml:36-41`; `crates/foxcore-component/src/lan.rs:114-121,286-291`;
+`docs/abi.md:7-17`).
+
+Core 0.0.5 and Guard 0.1.1 repair the separate native policy-writer and Kotlin session-copy races.
+The loopback capability document previously claimed mandatory credentials while configuration
+could enable anonymous access. It now reports the explicit opt-in requirement and preserves the
+LAN credential requirement (`crates/foxcore-android/src/capabilities.rs:1173`). GitHub branch/tag
+settings remain an owner-controlled prerequisite, independent of the checked-in signer gate.

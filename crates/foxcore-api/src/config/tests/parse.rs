@@ -146,6 +146,27 @@ fn parses_named_loopback_inbounds_and_keeps_their_secrets_out_of_debug() {
     assert!(!rendered.contains("per-app-secret-b"));
 }
 
+#[test]
+fn anonymous_loopback_requires_explicit_consent_and_never_discards_credentials() {
+    for (extra, accepted) in [
+        ("", false),
+        (",\"allow_anonymous\":true", true),
+        (",\"allow_anonymous\":false", false),
+        (",\"username\":\"u\",\"password\":\"p\"", true),
+        (
+            ",\"allow_anonymous\":true,\"username\":\"u\",\"password\":\"p\"",
+            false,
+        ),
+        (",\"allow_anonymous\":true,\"username\":\"u\"", false),
+    ] {
+        let inbound: super::super::LoopbackInboundConfig = serde_json::from_str(&format!(
+            r#"{{"name":"local","upstream":"profile"{extra}}}"#
+        ))
+        .unwrap();
+        assert_eq!(inbound.validate().is_ok(), accepted, "{extra}");
+    }
+}
+
 /// The bind address is absent from the schema, exactly as it is for the control
 /// proxy. A loopback inbound that could be widened to the LAN would be the LAN
 /// surface without the network confirmation that surface exists to require.

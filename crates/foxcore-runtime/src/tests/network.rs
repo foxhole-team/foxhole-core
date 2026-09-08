@@ -474,6 +474,7 @@ fn a_deadline_cannot_stop_the_engine_and_the_config_that_asked_it_to_is_refused(
 fn inbound_config(name: &str, upstream: LoopbackUpstream) -> LoopbackInboundConfig {
     LoopbackInboundConfig {
         name: name.to_owned(),
+        allow_anonymous: false,
         // Ephemeral: the point of the status document is that the app reads the
         // port back rather than reserving one and hoping.
         http_port: 0,

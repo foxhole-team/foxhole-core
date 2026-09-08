@@ -101,7 +101,7 @@ impl From<RealityHelloProfile> for RealityHello {
 }
 
 enum HelloSource {
-    Parrot(RealityHelloProfile),
+    Parrot(runtime_tables::Profile),
     Randomized(RandomizedHello),
 }
 
@@ -211,7 +211,9 @@ impl RealityClientConnection {
         // Avoid an optional state field; this key is replaced before returning.
         let placeholder = ClientKeyExchange::generate(&[NamedGroup::X25519])?;
         let hello = match config.hello {
-            RealityHello::Parrot(profile) => HelloSource::Parrot(profile),
+            RealityHello::Parrot(profile) => {
+                HelloSource::Parrot(runtime_tables::table_for(profile))
+            }
             RealityHello::Randomized => {
                 HelloSource::Randomized(RandomizedHello::draw(&mut rand::rng()))
             }
@@ -252,7 +254,7 @@ impl RealityClientConnection {
     fn with_hello_profile<R>(&self, body: impl FnOnce(&HelloProfileData<'_>) -> R) -> R {
         match &self.hello {
             // Include values from an installed, verified runtime table.
-            HelloSource::Parrot(profile) => body(runtime_tables::table_for(*profile)),
+            HelloSource::Parrot(profile) => profile.with_profile(body),
             HelloSource::Randomized(drawn) => drawn.with_profile(body),
         }
     }

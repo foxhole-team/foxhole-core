@@ -17,6 +17,72 @@ use std::time::Duration;
 
 use super::*;
 
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test]
+async fn malformed_queries_are_rejected_before_any_upstream_io() {
+    let udp = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let tcp = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = tcp.local_addr().unwrap();
+    let query = dns_query_for(1, "private-test.onion");
+    let mut malformed = Vec::new();
+    for (offset, value) in [(2, 0x80), (2, 0x09), (5, 0), (5, 2), (12, 0xc0)] {
+        let mut bytes = query.clone();
+        bytes[offset] = value;
+        malformed.push(bytes);
+    }
+    malformed.push(query[..query.len() - 1].to_vec());
+    let mut two = query.clone();
+    two[5] = 2;
+    two.extend_from_slice(&dns_query_for(1, "other.invalid")[12..]);
+    malformed.push(two);
+    for upstream in [
+        DnsUpstream::Udp {
+            address: udp.local_addr().unwrap().to_string(),
+        },
+        DnsUpstream::Tcp {
+            address: address.to_string(),
+        },
+        DnsUpstream::Dot {
+            host: "localhost".into(),
+            port: address.port(),
+            server_ip: Some(address.ip()),
+            insecure: false,
+            pinned_spki_sha256: None,
+        },
+    ] {
+        let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+        let proxy = DnsProxy::new(
+            1,
+            DnsConfig {
+                route: DnsRoute::Direct,
+                upstreams: vec![upstream],
+                timeout_ms: 100,
+                ..DnsConfig::default()
+            },
+            Arc::new(DnsCache::new(8)),
+            Arc::new(OutboundRegistry::single(direct.clone())),
+            direct,
+        )
+        .unwrap();
+        for bytes in &malformed {
+            assert_eq!(
+                proxy.exchange_for_test(bytes).await.unwrap_err().kind(),
+                io::ErrorKind::InvalidData
+            );
+        }
+    }
+    let mut buffer = [0; 512];
+    assert_eq!(
+        udp.try_recv_from(&mut buffer).unwrap_err().kind(),
+        io::ErrorKind::WouldBlock
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), tcp.accept())
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn parses_dns_upstream_endpoints() {
     assert_eq!(
@@ -637,7 +703,12 @@ async fn a_shared_uid_bypasses_filtering_only_when_every_package_is_allowed() {
         "com.example.unlisted".to_owned(),
     ];
     let blocked = proxy
-        .exchange_for_identity(&query, Some("com.example.allowed"), &partially_allowed)
+        .exchange_for_identity(
+            &query,
+            Some(10001),
+            Some("com.example.allowed"),
+            &partially_allowed,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -651,7 +722,12 @@ async fn a_shared_uid_bypasses_filtering_only_when_every_package_is_allowed() {
         "com.example.second".to_owned(),
     ];
     let allowed = proxy
-        .exchange_for_identity(&query, Some("com.example.allowed"), &fully_allowed)
+        .exchange_for_identity(
+            &query,
+            Some(10001),
+            Some("com.example.allowed"),
+            &fully_allowed,
+        )
         .await
         .unwrap();
     assert_eq!(

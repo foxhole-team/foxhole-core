@@ -8,6 +8,7 @@
 //! presenting itself as the phone's tunnel — the one failure mode that makes
 //! this feature worse than not having it.
 
+use std::future::Future;
 use std::io;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -17,8 +18,9 @@ use foxcore_api::{Destination, FlowContext, IpTransport};
 use foxcore_component::{LanConnect, LanIo, LanRoute, LanUpstream};
 use foxcore_outbound::OutboundRegistry;
 use foxcore_trafficmap::{FlowHandle, FlowRoute, TrafficMap};
-use foxcore_tun::{ContinuityGate, FlowLane, FlowPolicyStore};
+use foxcore_tun::{ContinuityGate, FlowLane, FlowPolicyStore, PolicyGates};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio_util::sync::CancellationToken;
 
 /// The upstream the root runtime hands to a LAN proxy.
 ///
@@ -69,8 +71,11 @@ impl RegistryUpstream {
     /// Written as a single function returning `Option` so there is exactly one
     /// place a route can be produced, and no branch that could reach for a
     /// different one after this returns `None`.
-    fn resolve(&self, route: LanRoute) -> Option<Arc<foxcore_outbound::Outbound>> {
-        let policy = self.policy.gates();
+    fn resolve(
+        &self,
+        route: LanRoute,
+        policy: PolicyGates,
+    ) -> Option<Arc<foxcore_outbound::Outbound>> {
         if policy.kill_switch() {
             return None;
         }
@@ -118,7 +123,8 @@ impl RegistryUpstream {
 
 impl LanUpstream for RegistryUpstream {
     fn connect(&self, route: LanRoute, host: String, port: u16) -> LanConnect {
-        let Some(outbound) = self.resolve(route) else {
+        let (gates, epoch) = self.policy.gates_and_revocation();
+        let Some(outbound) = self.resolve(route, gates) else {
             return Box::pin(std::future::ready(Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 "LAN upstream is unavailable",
@@ -131,29 +137,25 @@ impl LanUpstream for RegistryUpstream {
             LanRoute::Tor => FlowLane::Tor,
             LanRoute::Direct => FlowLane::Direct,
         };
-        let map = self.map.clone();
+        // Register before dialing so a revoke also reaches pending handshakes.
+        let flow = self.map.open(
+            IpTransport::Tcp,
+            host,
+            port,
+            FlowRoute::new(lane, outbound.kind().name()),
+            Vec::new(),
+            None,
+        );
         Box::pin(async move {
             let context = FlowContext::new(generation, IpTransport::Tcp, destination.clone());
-            let stream = outbound.connect_stream(&context, destination).await?;
-            // Opened only once the dial succeeded, so a refused session does not
-            // leave a row that never carried anything.
-            //
-            // No packages and no uid, and that is the honest answer rather than a
-            // gap: the traffic belongs to another machine on the Wi-Fi, so there
-            // is no local app to name. Inventing one would file a neighbour's
-            // bytes under something that looks like an installed app.
-            let flow = map.open(
-                IpTransport::Tcp,
-                host,
-                port,
-                FlowRoute::new(lane, outbound.kind().name()),
-                Vec::new(),
-                None,
-            );
-            Ok(Box::new(CountedLanStream {
-                inner: stream,
-                flow,
-            }) as Box<dyn LanIo>)
+            let cancelled = flow.flow().revocation();
+            let stream = tokio::select! {
+                biased;
+                _ = epoch.cancelled() => return Err(revoked()),
+                _ = cancelled.cancelled() => return Err(revoked()),
+                stream = outbound.connect_stream(&context, destination) => stream?,
+            };
+            Ok(Box::new(CountedLanStream::new(stream, flow, epoch)) as Box<dyn LanIo>)
         })
     }
 }
@@ -170,8 +172,46 @@ impl LanUpstream for RegistryUpstream {
 /// crate does not otherwise depend on the transport crate, and a counting
 /// wrapper has no reason to be the thing that introduces the edge.
 struct CountedLanStream<S> {
-    inner: S,
-    flow: FlowHandle,
+    inner: Option<S>,
+    flow: Option<FlowHandle>,
+    read_cancel: Pin<Box<dyn Future<Output = ()> + Send>>,
+    write_cancel: Pin<Box<dyn Future<Output = ()> + Send>>,
+}
+
+fn revoked() -> io::Error {
+    io::Error::new(io::ErrorKind::ConnectionAborted, "LAN flow was revoked")
+}
+
+impl<S> CountedLanStream<S> {
+    fn new(inner: S, flow: FlowHandle, epoch: CancellationToken) -> Self {
+        let wait = |flow: CancellationToken,
+                    epoch: CancellationToken|
+         -> Pin<Box<dyn Future<Output = ()> + Send>> {
+            Box::pin(async move {
+                tokio::select! { _ = flow.cancelled() => {}, _ = epoch.cancelled() => {} }
+            })
+        };
+        Self {
+            inner: Some(inner),
+            read_cancel: wait(flow.flow().revocation(), epoch.clone()),
+            write_cancel: wait(flow.flow().revocation(), epoch),
+            flow: Some(flow),
+        }
+    }
+
+    fn check_revoked(&mut self, cx: &mut Context<'_>, write: bool) -> io::Result<()> {
+        let cancel = if write {
+            &mut self.write_cancel
+        } else {
+            &mut self.read_cancel
+        };
+        if self.inner.is_none() || cancel.as_mut().poll(cx).is_ready() {
+            self.inner.take();
+            self.flow.take();
+            return Err(revoked());
+        }
+        Ok(())
+    }
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for CountedLanStream<S> {
@@ -180,12 +220,16 @@ impl<S: AsyncRead + Unpin> AsyncRead for CountedLanStream<S> {
         cx: &mut Context<'_>,
         buf: &mut ReadBuf<'_>,
     ) -> Poll<io::Result<()>> {
+        self.check_revoked(cx, false)?;
         let before = buf.filled().len();
-        let result = Pin::new(&mut self.inner).poll_read(cx, buf);
+        let result = Pin::new(self.inner.as_mut().expect("checked live stream")).poll_read(cx, buf);
         if matches!(result, Poll::Ready(Ok(()))) {
             let read = buf.filled().len().saturating_sub(before);
             if read > 0 {
-                self.flow.add_down(read as u64);
+                self.flow
+                    .as_ref()
+                    .expect("checked live flow")
+                    .add_down(read as u64);
             }
         }
         result
@@ -198,19 +242,26 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for CountedLanStream<S> {
         cx: &mut Context<'_>,
         data: &[u8],
     ) -> Poll<io::Result<usize>> {
-        let result = Pin::new(&mut self.inner).poll_write(cx, data);
+        self.check_revoked(cx, true)?;
+        let result =
+            Pin::new(self.inner.as_mut().expect("checked live stream")).poll_write(cx, data);
         if let Poll::Ready(Ok(written)) = result {
-            self.flow.add_up(written as u64);
+            self.flow
+                .as_ref()
+                .expect("checked live flow")
+                .add_up(written as u64);
         }
         result
     }
 
     fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_flush(cx)
+        self.check_revoked(cx, true)?;
+        Pin::new(self.inner.as_mut().expect("checked live stream")).poll_flush(cx)
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.inner).poll_shutdown(cx)
+        self.check_revoked(cx, true)?;
+        Pin::new(self.inner.as_mut().expect("checked live stream")).poll_shutdown(cx)
     }
 }
 
@@ -229,6 +280,200 @@ mod tests {
     use foxcore_tun::FlowMetrics;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    #[tokio::test]
+    async fn revocation_wakes_idle_lan_reads_and_closes_the_peer() {
+        use foxcore_trafficmap::RevokeTarget;
+        use std::time::Duration;
+        for case in 0..5 {
+            let map = Arc::new(TrafficMap::default());
+            let upstream = upstream(&map);
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let mut stream = upstream
+                .connect(LanRoute::Direct, address.ip().to_string(), address.port())
+                .await
+                .unwrap();
+            let (mut peer, _) = listener.accept().await.unwrap();
+            stream.write_all(b"live").await.unwrap();
+            let mut bytes = [0; 4];
+            peer.read_exact(&mut bytes).await.unwrap();
+            assert_eq!(&bytes, b"live");
+            let reader = tokio::spawn(async move {
+                let mut bytes = [0; 4];
+                stream.read(&mut bytes).await.unwrap_err().kind()
+            });
+            tokio::task::yield_now().await;
+            for _ in 0..2 {
+                upstream
+                    .policy
+                    .reload(
+                        None,
+                        RouteTable::compile_with_traffic(
+                            Vec::new(),
+                            RouteAction::Direct,
+                            TrafficPolicyConfig::default(),
+                            false,
+                            false,
+                        ),
+                        Default::default(),
+                    )
+                    .unwrap();
+            }
+            match case {
+                0 => {
+                    assert_eq!(map.revoke(&RevokeTarget::All {}), 1);
+                }
+                1 => {
+                    assert_eq!(
+                        map.revoke(&RevokeTarget::Flow {
+                            flow: map.snapshot().connections[0].id
+                        }),
+                        1
+                    );
+                }
+                2 => {
+                    assert_eq!(
+                        map.revoke(&RevokeTarget::Lane {
+                            lane: FlowLane::Direct
+                        }),
+                        1
+                    );
+                }
+                3 => {
+                    upstream.policy.network_changed();
+                }
+                _ => {
+                    upstream
+                        .policy
+                        .reload(
+                            None,
+                            RouteTable::compile_with_traffic(
+                                Vec::new(),
+                                RouteAction::Direct,
+                                TrafficPolicyConfig {
+                                    kill_switch: true,
+                                    ..Default::default()
+                                },
+                                false,
+                                false,
+                            ),
+                            Default::default(),
+                        )
+                        .unwrap();
+                }
+            }
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), reader)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                io::ErrorKind::ConnectionAborted
+            );
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), peer.read(&mut bytes))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                0
+            );
+            assert!(map.snapshot().connections.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn package_revocation_wakes_both_split_waiters_under_backpressure() {
+        use foxcore_trafficmap::RevokeTarget;
+        use std::time::Duration;
+        let map = Arc::new(TrafficMap::default());
+        let flow = map.open(
+            IpTransport::Tcp,
+            "audit.invalid".into(),
+            443,
+            FlowRoute::new(FlowLane::Direct, "direct"),
+            vec!["test.owner".into()],
+            Some(42),
+        );
+        let (inner, mut peer) = tokio::io::duplex(4);
+        let mut stream = CountedLanStream::new(inner, flow, CancellationToken::new());
+        stream.write_all(b"live").await.unwrap();
+        let (mut read, mut write) = tokio::io::split(stream);
+        let (read_ready, read_waiting) = tokio::sync::oneshot::channel();
+        let (write_ready, write_waiting) = tokio::sync::oneshot::channel();
+        let reader = tokio::spawn(async move {
+            let mut byte = [0];
+            let mut ready = Some(read_ready);
+            let operation = read.read(&mut byte);
+            tokio::pin!(operation);
+            std::future::poll_fn(|cx| {
+                let result = operation.as_mut().poll(cx);
+                if result.is_pending()
+                    && let Some(ready) = ready.take()
+                {
+                    ready.send(()).unwrap();
+                }
+                result
+            })
+            .await
+            .unwrap_err()
+            .kind()
+        });
+        let writer = tokio::spawn(async move {
+            let mut ready = Some(write_ready);
+            let operation = write.write_all(b"after-revoke");
+            tokio::pin!(operation);
+            std::future::poll_fn(|cx| {
+                let result = operation.as_mut().poll(cx);
+                if result.is_pending()
+                    && let Some(ready) = ready.take()
+                {
+                    ready.send(()).unwrap();
+                }
+                result
+            })
+            .await
+            .unwrap_err()
+            .kind()
+        });
+        tokio::time::timeout(Duration::from_secs(2), async {
+            read_waiting.await.unwrap();
+            write_waiting.await.unwrap();
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            map.revoke(&RevokeTarget::Package {
+                package: "test.owner".into()
+            }),
+            1
+        );
+        for waiter in [reader, writer] {
+            assert_eq!(
+                tokio::time::timeout(Duration::from_secs(2), waiter)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                io::ErrorKind::ConnectionAborted
+            );
+        }
+        let mut delivered = Vec::new();
+        peer.read_to_end(&mut delivered).await.unwrap();
+        assert_eq!(&delivered, b"live");
+        assert!(map.snapshot().connections.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_lan_revoke_reaches_a_dial_that_has_not_completed() {
+        let map = Arc::new(TrafficMap::default());
+        let upstream = upstream(&map);
+        let pending = upstream.connect(LanRoute::Direct, "127.0.0.1".into(), 9);
+        assert_eq!(map.revoke(&foxcore_trafficmap::RevokeTarget::All {}), 1);
+        assert_eq!(
+            pending.await.err().unwrap().kind(),
+            io::ErrorKind::ConnectionAborted
+        );
+        assert!(map.snapshot().connections.is_empty());
+    }
 
     /// Echoes four bytes and closes, so the session has traffic in both
     /// directions and a definite end.

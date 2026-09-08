@@ -7,7 +7,7 @@
       "type": "application",
       "bom-ref": "foxcore-workspace",
       "name": "foxcore",
-      "version": "0.0.3",
+      "version": "0.0.5",
       "description": "FoxCore native VPN core"
     },
     "properties": [
@@ -1304,10 +1304,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/chacha20@0.10.1",
+      "bom-ref": "pkg:cargo/chacha20@0.10.2",
       "name": "chacha20",
-      "version": "0.10.1",
-      "purl": "pkg:cargo/chacha20@0.10.1",
+      "version": "0.10.2",
+      "purl": "pkg:cargo/chacha20@0.10.2",
       "scope": "required",
       "description": "The ChaCha20 stream cipher (RFC 8439) implemented in pure Rust using traits\nfrom the RustCrypto `cipher` crate, with optional architecture-specific\nhardware acceleration (AVX2, SSE2). Additionally provides the ChaCha8, ChaCha12,\nXChaCha20, XChaCha12 and XChaCha8 stream ciphers, and also optional\nrand_core-compatible RNGs based on those ciphers.\n",
       "licenses": [
@@ -1535,30 +1535,6 @@
         {
           "type": "vcs",
           "url": "https://github.com/Nullus157/async-compression"
-        },
-        {
-          "type": "distribution",
-          "url": "registry+https://github.com/rust-lang/crates.io-index"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:cargo/concurrent-queue@2.5.0",
-      "name": "concurrent-queue",
-      "version": "2.5.0",
-      "purl": "pkg:cargo/concurrent-queue@2.5.0",
-      "scope": "required",
-      "description": "Concurrent multi-producer multi-consumer queue",
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR MIT"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "vcs",
-          "url": "https://github.com/smol-rs/concurrent-queue"
         },
         {
           "type": "distribution",
@@ -3056,10 +3032,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/event-listener@5.4.1",
+      "bom-ref": "pkg:cargo/event-listener@5.4.2",
       "name": "event-listener",
-      "version": "5.4.1",
-      "purl": "pkg:cargo/event-listener@5.4.1",
+      "version": "5.4.2",
+      "purl": "pkg:cargo/event-listener@5.4.2",
       "scope": "required",
       "description": "Notify async tasks or threads",
       "licenses": [
@@ -12487,7 +12463,7 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/chacha20@0.10.1",
+      "ref": "pkg:cargo/chacha20@0.10.2",
       "dependsOn": [
         "pkg:cargo/cfg-if@1.0.4",
         "pkg:cargo/rand_core@0.10.1"
@@ -12558,12 +12534,6 @@
     {
       "ref": "pkg:cargo/compression-core@0.4.32",
       "dependsOn": []
-    },
-    {
-      "ref": "pkg:cargo/concurrent-queue@2.5.0",
-      "dependsOn": [
-        "pkg:cargo/crossbeam-utils@0.8.22"
-      ]
     },
     {
       "ref": "pkg:cargo/const-oid@0.10.2",
@@ -13027,9 +12997,8 @@
       ]
     },
     {
-      "ref": "pkg:cargo/event-listener@5.4.1",
+      "ref": "pkg:cargo/event-listener@5.4.2",
       "dependsOn": [
-        "pkg:cargo/concurrent-queue@2.5.0",
         "pkg:cargo/parking@2.2.1",
         "pkg:cargo/pin-project-lite@0.2.17"
       ]
@@ -13103,16 +13072,16 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-android@0.0.3",
+      "ref": "pkg:cargo/foxcore-android@0.0.5",
       "dependsOn": [
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-link@0.0.3",
-        "pkg:cargo/foxcore-runtime@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-link@0.0.5",
+        "pkg:cargo/foxcore-runtime@0.0.5",
         "pkg:cargo/jni@0.21.1",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/log@0.4.33",
-        "pkg:cargo/proto-reality@0.0.3",
+        "pkg:cargo/proto-reality@0.0.5",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/sha2@0.10.9",
@@ -13120,7 +13089,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-api@0.0.3",
+      "ref": "pkg:cargo/foxcore-api@0.0.5",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/ipnet@2.12.0",
@@ -13132,11 +13101,11 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-component@0.0.3",
+      "ref": "pkg:cargo/foxcore-component@0.0.5",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-relay@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-relay@0.0.5",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/subtle@2.6.1",
@@ -13148,22 +13117,22 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-dialer@0.0.3",
+      "ref": "pkg:cargo/foxcore-dialer@0.0.5",
       "dependsOn": [
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-dns@0.0.3",
+      "ref": "pkg:cargo/foxcore-dns@0.0.5",
       "dependsOn": [
         "pkg:cargo/ipnet@2.12.0"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-link@0.0.3",
+      "ref": "pkg:cargo/foxcore-link@0.0.5",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
-        "pkg:cargo/foxcore-api@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/ipnet@2.12.0",
         "pkg:cargo/percent-encoding@2.3.2",
@@ -13174,43 +13143,43 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-outbound@0.0.3",
+      "ref": "pkg:cargo/foxcore-outbound@0.0.5",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/ipnet@2.12.0",
-        "pkg:cargo/proto-anytls@0.0.3",
-        "pkg:cargo/proto-http@0.0.3",
-        "pkg:cargo/proto-hysteria2@0.0.3",
-        "pkg:cargo/proto-i2p@0.0.3",
-        "pkg:cargo/proto-naive@0.0.3",
-        "pkg:cargo/proto-shadowsocks@0.0.3",
-        "pkg:cargo/proto-shadowtls@0.0.3",
-        "pkg:cargo/proto-socks@0.0.3",
-        "pkg:cargo/proto-tor@0.0.3",
-        "pkg:cargo/proto-trojan@0.0.3",
-        "pkg:cargo/proto-tuic@0.0.3",
-        "pkg:cargo/proto-vless@0.0.3",
-        "pkg:cargo/proto-vmess@0.0.3",
-        "pkg:cargo/proto-wireguard@0.0.3",
+        "pkg:cargo/proto-anytls@0.0.5",
+        "pkg:cargo/proto-http@0.0.5",
+        "pkg:cargo/proto-hysteria2@0.0.5",
+        "pkg:cargo/proto-i2p@0.0.5",
+        "pkg:cargo/proto-naive@0.0.5",
+        "pkg:cargo/proto-shadowsocks@0.0.5",
+        "pkg:cargo/proto-shadowtls@0.0.5",
+        "pkg:cargo/proto-socks@0.0.5",
+        "pkg:cargo/proto-tor@0.0.5",
+        "pkg:cargo/proto-trojan@0.0.5",
+        "pkg:cargo/proto-tuic@0.0.5",
+        "pkg:cargo/proto-vless@0.0.5",
+        "pkg:cargo/proto-vmess@0.0.5",
+        "pkg:cargo/proto-wireguard@0.0.5",
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-relay@0.0.3",
+      "ref": "pkg:cargo/foxcore-relay@0.0.5",
       "dependsOn": [
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-route@0.0.3",
+      "ref": "pkg:cargo/foxcore-route@0.0.5",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.17.3",
-        "pkg:cargo/foxcore-api@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
         "pkg:cargo/fst@0.4.7",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
@@ -13219,18 +13188,18 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-runtime@0.0.3",
+      "ref": "pkg:cargo/foxcore-runtime@0.0.5",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-component@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-outbound@0.0.3",
-        "pkg:cargo/foxcore-relay@0.0.3",
-        "pkg:cargo/foxcore-route@0.0.3",
-        "pkg:cargo/foxcore-share@0.0.3",
-        "pkg:cargo/foxcore-trafficmap@0.0.3",
-        "pkg:cargo/foxcore-tun@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-component@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-outbound@0.0.5",
+        "pkg:cargo/foxcore-relay@0.0.5",
+        "pkg:cargo/foxcore-route@0.0.5",
+        "pkg:cargo/foxcore-share@0.0.5",
+        "pkg:cargo/foxcore-trafficmap@0.0.5",
+        "pkg:cargo/foxcore-tun@0.0.5",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/sha2@0.10.9",
@@ -13239,7 +13208,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-share@0.0.3",
+      "ref": "pkg:cargo/foxcore-share@0.0.5",
       "dependsOn": [
         "pkg:cargo/argon2@0.5.3",
         "pkg:cargo/base64@0.22.1",
@@ -13258,30 +13227,30 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-testkit@0.0.3",
+      "ref": "pkg:cargo/foxcore-testkit@0.0.5",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-component@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-dns@0.0.3",
-        "pkg:cargo/foxcore-link@0.0.3",
-        "pkg:cargo/foxcore-outbound@0.0.3",
-        "pkg:cargo/foxcore-relay@0.0.3",
-        "pkg:cargo/foxcore-route@0.0.3",
-        "pkg:cargo/foxcore-runtime@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
-        "pkg:cargo/foxcore-tun@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-component@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-dns@0.0.5",
+        "pkg:cargo/foxcore-link@0.0.5",
+        "pkg:cargo/foxcore-outbound@0.0.5",
+        "pkg:cargo/foxcore-relay@0.0.5",
+        "pkg:cargo/foxcore-route@0.0.5",
+        "pkg:cargo/foxcore-runtime@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
+        "pkg:cargo/foxcore-tun@0.0.5",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/tokio-util@0.7.18",
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-trafficmap@0.0.3",
+      "ref": "pkg:cargo/foxcore-trafficmap@0.0.5",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
-        "pkg:cargo/foxcore-api@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/tokio-util@0.7.18",
@@ -13289,13 +13258,13 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-transport@0.0.3",
+      "ref": "pkg:cargo/foxcore-transport@0.0.5",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/aws-lc-rs@1.17.3",
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/h2@0.4.18",
@@ -13312,26 +13281,26 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-tun@0.0.3",
+      "ref": "pkg:cargo/foxcore-tun@0.0.5",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/etherparse@0.19.0",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-dns@0.0.3",
-        "pkg:cargo/foxcore-outbound@0.0.3",
-        "pkg:cargo/foxcore-relay@0.0.3",
-        "pkg:cargo/foxcore-route@0.0.3",
-        "pkg:cargo/foxcore-trafficmap@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-dns@0.0.5",
+        "pkg:cargo/foxcore-outbound@0.0.5",
+        "pkg:cargo/foxcore-relay@0.0.5",
+        "pkg:cargo/foxcore-route@0.0.5",
+        "pkg:cargo/foxcore-trafficmap@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/log@0.4.33",
         "pkg:cargo/parking_lot@0.12.5",
-        "pkg:cargo/proto-wireguard@0.0.3",
+        "pkg:cargo/proto-wireguard@0.0.5",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/smoltcp@0.14.0",
@@ -14290,12 +14259,12 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-anytls@0.0.3",
+      "ref": "pkg:cargo/proto-anytls@0.0.5",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/md-5@0.10.6",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/sha2@0.10.9",
@@ -14304,25 +14273,25 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-http@0.0.3",
+      "ref": "pkg:cargo/proto-http@0.0.5",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-hysteria2@0.0.3",
+      "ref": "pkg:cargo/proto-hysteria2@0.0.5",
       "dependsOn": [
         "pkg:cargo/blake2@0.10.6",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/qpack@0.1.0",
         "pkg:cargo/quinn-proto@0.11.16",
@@ -14336,21 +14305,21 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-i2p@0.0.3",
+      "ref": "pkg:cargo/proto-i2p@0.0.5",
       "dependsOn": [
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-naive@0.0.3",
+      "ref": "pkg:cargo/proto-naive@0.0.5",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/rand@0.9.4",
@@ -14359,11 +14328,11 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-reality@0.0.3",
+      "ref": "pkg:cargo/proto-reality@0.0.5",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.17.3",
         "pkg:cargo/base64@0.22.1",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/rcgen@0.14.8",
         "pkg:cargo/serde_json@1.0.150",
@@ -14374,13 +14343,13 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-shadowsocks@0.0.3",
+      "ref": "pkg:cargo/proto-shadowsocks@0.0.5",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/shadowsocks@1.24.0",
         "pkg:cargo/tokio-util@0.7.18",
@@ -14388,12 +14357,12 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-shadowtls@0.0.3",
+      "ref": "pkg:cargo/proto-shadowtls@0.0.5",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/hmac@0.12.1",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/rustls-pki-types@1.15.0",
@@ -14407,25 +14376,25 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-socks@0.0.3",
+      "ref": "pkg:cargo/proto-socks@0.0.5",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-tor@0.0.3",
+      "ref": "pkg:cargo/proto-tor@0.0.5",
       "dependsOn": [
         "pkg:cargo/arti-client@0.44.0",
         "pkg:cargo/async-trait@0.1.89",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/safelog@0.9.0",
         "pkg:cargo/tokio-util@0.7.18",
@@ -14439,24 +14408,24 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-trojan@0.0.3",
+      "ref": "pkg:cargo/proto-trojan@0.0.5",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
         "pkg:cargo/tokio@1.52.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-tuic@0.0.3",
+      "ref": "pkg:cargo/proto-tuic@0.0.5",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/log@0.4.33",
         "pkg:cargo/quinn-proto@0.11.16",
         "pkg:cargo/quinn@0.11.11",
@@ -14466,7 +14435,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-vless@0.0.3",
+      "ref": "pkg:cargo/proto-vless@0.0.5",
       "dependsOn": [
         "pkg:cargo/aes-gcm@0.10.3",
         "pkg:cargo/aes@0.8.4",
@@ -14475,11 +14444,11 @@
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/chacha20poly1305@0.10.1",
         "pkg:cargo/ctr@0.9.2",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/getrandom@0.3.4",
-        "pkg:cargo/proto-reality@0.0.3",
+        "pkg:cargo/proto-reality@0.0.5",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
         "pkg:cargo/tokio@1.52.3",
@@ -14487,15 +14456,15 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-vmess@0.0.3",
+      "ref": "pkg:cargo/proto-vmess@0.0.5",
       "dependsOn": [
         "pkg:cargo/aes-gcm@0.10.3",
         "pkg:cargo/aes@0.8.4",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/chacha20poly1305@0.10.1",
-        "pkg:cargo/foxcore-api@0.0.3",
-        "pkg:cargo/foxcore-dialer@0.0.3",
-        "pkg:cargo/foxcore-transport@0.0.3",
+        "pkg:cargo/foxcore-api@0.0.5",
+        "pkg:cargo/foxcore-dialer@0.0.5",
+        "pkg:cargo/foxcore-transport@0.0.5",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/md-5@0.10.6",
         "pkg:cargo/sha2@0.10.9",
@@ -14506,7 +14475,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-wireguard@0.0.3",
+      "ref": "pkg:cargo/proto-wireguard@0.0.5",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.17.3",
         "pkg:cargo/blake2@0.10.6",
@@ -14576,7 +14545,7 @@
     {
       "ref": "pkg:cargo/rand@0.10.2",
       "dependsOn": [
-        "pkg:cargo/chacha20@0.10.1",
+        "pkg:cargo/chacha20@0.10.2",
         "pkg:cargo/getrandom@0.4.3",
         "pkg:cargo/rand_core@0.10.1"
       ]
@@ -15802,7 +15771,7 @@
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/event-listener@5.4.1",
+        "pkg:cargo/event-listener@5.4.2",
         "pkg:cargo/fs-mistrust@0.15.0",
         "pkg:cargo/fslock-guard@0.8.0",
         "pkg:cargo/futures@0.3.32",

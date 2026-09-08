@@ -275,7 +275,7 @@ pub struct HelloProfileData<'a> {
     pub extensions: &'a [ExtensionSlotData<'a>],
     /// Chrome 110+ shuffles the non-pinned extensions on every connection.
     pub permute_extensions: bool,
-    pub ech_grease: EchGreaseShape,
+    pub ech_grease: EchGreaseShapeData<'a>,
     pub reuse_classical_key_share: bool,
 }
 
@@ -440,10 +440,12 @@ const ECH_GREASE_SUITE: (u16, u16) = (HPKE_KDF_HKDF_SHA256, HPKE_AEAD_AES_128_GC
 const HPKE_AEAD_CHACHA20_POLY1305: u16 = 0x0003;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct EchGreaseShape {
-    pub suites: &'static [(u16, u16)],
-    pub payload_lens: &'static [usize],
+pub struct EchGreaseShapeData<'a> {
+    pub suites: &'a [(u16, u16)],
+    pub payload_lens: &'a [usize],
 }
+
+pub type EchGreaseShape = EchGreaseShapeData<'static>;
 
 pub const CHROME_ECH_GREASE: EchGreaseShape = EchGreaseShape {
     suites: &[ECH_GREASE_SUITE],
@@ -461,7 +463,8 @@ pub const FIREFOX_ECH_GREASE: EchGreaseShape = EchGreaseShape {
 /// AEAD ciphertext expansion for both candidate suites.
 const ECH_GREASE_TAG_LEN: usize = 16;
 
-const MAX_ECH_GREASE_PAYLOAD: usize = 224 + ECH_GREASE_TAG_LEN;
+pub(super) const MAX_ECH_GREASE_PLAINTEXT: usize = 224;
+const MAX_ECH_GREASE_PAYLOAD: usize = MAX_ECH_GREASE_PLAINTEXT + ECH_GREASE_TAG_LEN;
 
 /// Everything the ECH GREASE extension needs that must not repeat between
 /// connections.
@@ -475,8 +478,7 @@ const MAX_ECH_GREASE_PAYLOAD: usize = 224 + ECH_GREASE_TAG_LEN;
 pub struct EchGreaseParams {
     pub enc: [u8; 32],
     config_id: u8,
-    shape: EchGreaseShape,
-    suite: usize,
+    suite: (u16, u16),
     payload_len: usize,
     payload: [u8; MAX_ECH_GREASE_PAYLOAD],
 }
@@ -486,7 +488,11 @@ impl EchGreaseParams {
         Self::with_shape(enc, CHROME_ECH_GREASE, rng)
     }
 
-    pub fn with_shape(enc: [u8; 32], shape: EchGreaseShape, rng: &mut impl RngCore) -> Self {
+    pub fn with_shape(
+        enc: [u8; 32],
+        shape: EchGreaseShapeData<'_>,
+        rng: &mut impl RngCore,
+    ) -> Self {
         let mut chooser = [0_u8; 3];
         rng.fill_bytes(&mut chooser);
         let mut payload = [0_u8; MAX_ECH_GREASE_PAYLOAD];
@@ -494,16 +500,15 @@ impl EchGreaseParams {
         Self {
             enc,
             config_id: chooser[0],
-            suite: usize::from(chooser[1]) % shape.suites.len(),
-            payload_len: usize::from(chooser[2]) % shape.payload_lens.len(),
-            shape,
+            suite: shape.suites[usize::from(chooser[1]) % shape.suites.len()],
+            payload_len: shape.payload_lens[usize::from(chooser[2]) % shape.payload_lens.len()],
             payload,
         }
     }
 
     fn write_body(&self, out: &mut Vec<u8>) {
-        let (kdf, aead) = self.shape.suites[self.suite];
-        let payload_len = self.shape.payload_lens[self.payload_len] + ECH_GREASE_TAG_LEN;
+        let (kdf, aead) = self.suite;
+        let payload_len = self.payload_len + ECH_GREASE_TAG_LEN;
         // draft-ietf-tls-esni: ECHClientHello with type = outer(0).
         out.push(0x00);
         out.extend_from_slice(&kdf.to_be_bytes());

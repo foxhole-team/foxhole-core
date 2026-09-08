@@ -124,6 +124,20 @@ Security properties include:
 
 Plain UDP/TCP DNS remains susceptible to an on-path resolver attacker. A configured resolver, including a DoH provider, can observe the queries sent to it.
 
+Unsupported DNS questions are refused before any upstream I/O. Routing evidence comes only from
+paired queries/responses scoped to the originating UID and package set, not from passive packets
+or a global last-writer reverse map. Shared-address names are considered together; inferred names
+cannot weaken an IP/application Block or protected route. Missing, expired, overflowing or
+conflicting evidence refuses literal-IP admission when domain rules apply. A resolver's answer
+is still an inference, not proof that a domain owns an IP address
+(`crates/foxcore-tun/src/dns/proxy.rs:247`; `crates/foxcore-dns/src/lib.rs:217,253`;
+`crates/foxcore-route/src/lib.rs:191`).
+
+Fake-IP replies are core-owned name bindings. Repeated replies renew the mapping for their
+advertised TTL; unexpired mappings are never evicted to admit a new name. Exhaustion refuses new
+allocations, and reload/network changes preserve existing address promises
+(`crates/foxcore-dns/src/lib.rs:114,372`).
+
 ---
 
 ## Components and Web Apps
@@ -144,9 +158,20 @@ The core does not sandbox Web content. WebView isolation, rendering security and
 
 Loopback services are not assumed to be private from other Android applications.
 
-The core therefore relies on explicit credentials for local control/proxy access and uses generation-scoped credentials for LAN proxy sessions.
+Local control and LAN proxy sessions use credentials. Named loopback proxy inbounds require
+complete credentials by default; `allow_anonymous: true` explicitly permits every local app to
+use that listener. Missing or partial credentials cannot silently enable it, and runtime status
+reports the authentication mode (`crates/foxcore-api/src/config/rt.rs:136,162`;
+`crates/foxcore-runtime/src/snapshot.rs:127`).
 
 Vault content is encrypted with XChaCha20-Poly1305 using a key supplied by the application. File-sharing onion identities are ephemeral to the active publication/runtime.
+
+An authorized download carries its own monotonic expiry deadline and revocation token. The
+network server enforces both while waiting for capacity and under socket backpressure; decrypted
+chunks and queue entries zeroize on drop. A generic synchronous caller-provided writer can only
+be checked between writes, so an indefinitely blocked custom `Write` implementation must provide
+its own interruption mechanism (`crates/foxcore-share/src/lib.rs:318,769`;
+`crates/foxcore-share/src/serve.rs:279`).
 
 A local application that compromises FoxHole Guard's process, memory or stored credentials is outside the native core's trust boundary.
 
@@ -181,6 +206,16 @@ Properties:
 Policy reload does not generally re-route or terminate already established flows.
 
 Existing flows are cancelled when the kill switch is armed or when the underlying network changes. A newly added `Block` or quarantine rule applies to subsequent connections while already-open flows remain active until they close.
+
+Ordinary reloads share one live cancellation epoch; global revocation reaches sessions retained
+across any number of such reloads. Policy, DNS installation and network callbacks serialize
+publication through one writer lock. LAN/loopback pending dials and both I/O directions subscribe
+to their flow and epoch tokens (`crates/foxcore-tun/src/flow/policy.rs:117,180,267`;
+`crates/foxcore-runtime/src/lan.rs:140,174,202`).
+
+Schema-v1 explicit-name rules use specificity before list order. A specific allow exception can
+override a generic Block; the Rust explanation API identifies matching shadowed Blocks. DNS
+inference cannot grant this exception (`crates/foxcore-route/src/lib.rs:191,237`).
 
 Applications must use the capabilities document rather than assuming stronger live-flow semantics.
 
@@ -221,6 +256,6 @@ The native core does not claim to defend against:
 | Malicious configuration | Strictly parsed and bounded; provider trust is not established |
 | DNS attacker | Protected with DoT/DoH; plain DNS inherits normal on-path risk |
 | Malicious Web App/component | Route and identity isolation in core; content sandboxing is external |
-| Local unprivileged app | Credential-based protection for loopback services |
+| Local unprivileged app | Loopback credentials by default; explicit anonymous mode grants local apps access |
 | Rooted device | Out of scope |
 | Global timing/traffic correlation | Out of scope |

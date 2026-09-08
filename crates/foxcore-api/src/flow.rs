@@ -632,6 +632,10 @@ pub enum RouteAction {
     I2p,
 }
 
+/// Schema-v1 route rules use exact domain, longest suffix, then generic selectors;
+/// input order breaks ties. A more-specific non-Block rule can override a generic
+/// Block. Kill switch, quarantine, and the default-block application allowlist
+/// retain their independent gates. Inferred DNS names cannot grant an exception.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RouteRule {
