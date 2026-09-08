@@ -1304,10 +1304,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/chacha20@0.10.1",
+      "bom-ref": "pkg:cargo/chacha20@0.10.2",
       "name": "chacha20",
-      "version": "0.10.1",
-      "purl": "pkg:cargo/chacha20@0.10.1",
+      "version": "0.10.2",
+      "purl": "pkg:cargo/chacha20@0.10.2",
       "scope": "required",
       "description": "The ChaCha20 stream cipher (RFC 8439) implemented in pure Rust using traits\nfrom the RustCrypto `cipher` crate, with optional architecture-specific\nhardware acceleration (AVX2, SSE2). Additionally provides the ChaCha8, ChaCha12,\nXChaCha20, XChaCha12 and XChaCha8 stream ciphers, and also optional\nrand_core-compatible RNGs based on those ciphers.\n",
       "licenses": [
@@ -1535,30 +1535,6 @@
         {
           "type": "vcs",
           "url": "https://github.com/Nullus157/async-compression"
-        },
-        {
-          "type": "distribution",
-          "url": "registry+https://github.com/rust-lang/crates.io-index"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:cargo/concurrent-queue@2.5.0",
-      "name": "concurrent-queue",
-      "version": "2.5.0",
-      "purl": "pkg:cargo/concurrent-queue@2.5.0",
-      "scope": "required",
-      "description": "Concurrent multi-producer multi-consumer queue",
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR MIT"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "vcs",
-          "url": "https://github.com/smol-rs/concurrent-queue"
         },
         {
           "type": "distribution",
@@ -3056,10 +3032,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/event-listener@5.4.1",
+      "bom-ref": "pkg:cargo/event-listener@5.4.2",
       "name": "event-listener",
-      "version": "5.4.1",
-      "purl": "pkg:cargo/event-listener@5.4.1",
+      "version": "5.4.2",
+      "purl": "pkg:cargo/event-listener@5.4.2",
       "scope": "required",
       "description": "Notify async tasks or threads",
       "licenses": [
@@ -12487,7 +12463,7 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/chacha20@0.10.1",
+      "ref": "pkg:cargo/chacha20@0.10.2",
       "dependsOn": [
         "pkg:cargo/cfg-if@1.0.4",
         "pkg:cargo/rand_core@0.10.1"
@@ -12558,12 +12534,6 @@
     {
       "ref": "pkg:cargo/compression-core@0.4.32",
       "dependsOn": []
-    },
-    {
-      "ref": "pkg:cargo/concurrent-queue@2.5.0",
-      "dependsOn": [
-        "pkg:cargo/crossbeam-utils@0.8.22"
-      ]
     },
     {
       "ref": "pkg:cargo/const-oid@0.10.2",
@@ -13027,9 +12997,8 @@
       ]
     },
     {
-      "ref": "pkg:cargo/event-listener@5.4.1",
+      "ref": "pkg:cargo/event-listener@5.4.2",
       "dependsOn": [
-        "pkg:cargo/concurrent-queue@2.5.0",
         "pkg:cargo/parking@2.2.1",
         "pkg:cargo/pin-project-lite@0.2.17"
       ]
@@ -14576,7 +14545,7 @@
     {
       "ref": "pkg:cargo/rand@0.10.2",
       "dependsOn": [
-        "pkg:cargo/chacha20@0.10.1",
+        "pkg:cargo/chacha20@0.10.2",
         "pkg:cargo/getrandom@0.4.3",
         "pkg:cargo/rand_core@0.10.1"
       ]
@@ -15802,7 +15771,7 @@
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/event-listener@5.4.1",
+        "pkg:cargo/event-listener@5.4.2",
         "pkg:cargo/fs-mistrust@0.15.0",
         "pkg:cargo/fslock-guard@0.8.0",
         "pkg:cargo/futures@0.3.32",

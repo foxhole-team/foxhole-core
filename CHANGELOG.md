@@ -2,8 +2,14 @@
 
 ## Unreleased
 
+- Update transitive `chacha20` to 0.10.2 and `event-listener` to 5.4.2;
+  regenerate both SBOMs and include transitive `bincode` in the maintenance inventory.
+- Wait for peer-visible TCP resets before asserting that dropped sessions have
+  released table capacity in the bounded-stack regression.
+
 - Document Guard release provenance checks and F-Droid Core selection from the
-  app revision pin; correct the reproducible recipe's update-channel description.
+  app revision pin inside its srclib; correct the reproducible recipe's
+  update-channel and source-layout descriptions.
 
 - Set the workspace and native capabilities version to 0.0.4 while retaining
   ABI v1 and configuration schema v1.

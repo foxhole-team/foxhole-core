@@ -70,7 +70,7 @@ flowchart LR
 | Core → DB | `build-fingerprints.sh` sparse-checks out `foxhole-core/fingerprints/` at a pinned revision |
 | DB → client | five manifests under one configurable base URL, one pinned ECDSA P-256 key |
 | Release order | foxhole-db → foxhole-core → foxhole_guard → F-Droid |
-| F-Droid → core | Guard recipe reads `config/foxcore-revision.txt`, accepts only a full SHA, fetches that commit into `.foxcore-src` and checks HEAD; no independent srclib revision is copied between app versions (`foxhole_guard/metadata/com.foxhole.guard.yml:27-35,43-50`) |
+| F-Droid → core | Guard recipe reads `config/foxcore-revision.txt`, accepts only a full SHA, fetches and checks out that commit inside the `FoxHoleCore` srclib, then checks HEAD; the fixed srclib bootstrap revision need not change between app versions (`foxhole_guard/metadata/com.foxhole.guard.yml:27-34,42-47`) |
 
 The standalone FoxCore release archive ships `arm64-v8a` and `armeabi-v7a`
 (`scripts/android-build.sh:119-139`; `.github/workflows/release.yml:171-177`). Guard currently

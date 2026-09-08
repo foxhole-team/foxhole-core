@@ -264,6 +264,12 @@ flowchart TD
 - **No Ed25519, minisign or PGP** update signing. The only Ed25519 in the tree is REALITY's *server*
   certificate key, which is authenticated by HMAC-SHA512 under the derived `auth_key` — not pinned.
 
+The Rust lockfile pins the transitive RNG dependency `chacha20` to 0.10.2, replacing
+the yanked 0.10.1 release, and `event-listener` to 5.4.2, which fixes
+RUSTSEC-2026-0221 (`Cargo.lock:611-620`, `:1458-1466`). Both generated SBOMs follow
+that lockfile (`scripts/sbom.sh:64-71`). This dependency update does not change the
+protocol algorithms or host TLS-consent contract.
+
 The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 `foxhole-db/manifest.public.pem`, and its DER SHA-256 against `manifest.json`'s `key_sha256`.
 
@@ -271,6 +277,10 @@ The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 
 ## 2.7 Inconsistencies found
 
+- The maintenance inventory omitted transitive `bincode` 2.0.1 while it was
+  present in the lockfile and Android SBOM. Both deny policies now list it
+  alongside `paste`; the existing transitive-maintenance policy is unchanged
+  (`deny.toml:25-38`, `deny-all-features.toml:22-36`).
 - The previous text called `aws-lc-rs` the only primitive provider, while the actual dependency
   graph still contains `ring`. Fox-owned TLS selects aws-lc-rs; removing every transitive `ring`
   consumer is a separate supply-chain task and is not a reason to add BoringSSL.

@@ -32,11 +32,10 @@ yanked = "deny"
 # we depend on directly still fails; one fifteen levels down inside Arti does
 # not.
 #
-# What this currently absorbs is exactly one finding: RUSTSEC-2024-0436, `paste`
-# 1.0.15, archived upstream with no successor under the same name. Thirteen
-# tor-* crates depend on it directly, plus slotmap-careful. It is a proc-macro —
-# `cargo metadata` reports its only lib target as kind `proc-macro` — so it
-# produces identifiers at compile time and contributes no code to the artifact.
+# The transitive maintenance inventory includes `paste` 1.0.15
+# (RUSTSEC-2024-0436), a proc-macro used by Arti, and `bincode` 2.0.1
+# (RUSTSEC-2025-0141), resolved through `typed-index-collections`. Their presence
+# in the SBOM does not establish that a vulnerable runtime operation is reachable.
 unmaintained = "workspace"
 
 [[advisories.ignore]]

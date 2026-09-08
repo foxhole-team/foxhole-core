@@ -304,7 +304,7 @@ sequenceDiagram
 | Which signers | `apkContentsSigners`, deliberately **not** `signingCertificateHistory`, and empty sets never match — `AppUpdateApkVerifier.kt:49-80` |
 | Static cert pin | none in the client. `foxhole_guard/config/release-cert-sha256.txt` (`e59de248…0df665`) is a **build-time** check, not a runtime one |
 | Install | user-driven `ACTION_VIEW`, no `PackageInstaller` session, no silent install — `HomeViewModelAppUpdateSupport.kt:99-126` |
-| Channel gate | `github` enables the updater; F-Droid reproduces the upstream GitHub-channel APK (`metadata/com.foxhole.guard.yml:54-55`). The separate `fdroid` channel properties remain available for alternate builds (`app/build.gradle.kts:260-266`). |
+| Channel gate | `github` enables the updater; F-Droid reproduces the upstream GitHub-channel APK (`metadata/com.foxhole.guard.yml:51-52`). The separate `fdroid` channel properties remain available for alternate builds (`app/build.gradle.kts:260-266`). |
 
 The manifest digest proves the bytes match what the source described; it does **not** prove the
 source is ours, because the releases URL and token are user-editable settings. That is why the
@@ -330,11 +330,12 @@ owner recovery instead of deleting history
 (`foxhole_guard/.github/workflows/release.yml:155-165,217-252,272-360`).
 
 F-Droid's `AutoUpdateMode: Version` and tag check generate future build entries from
-the latest recipe. Its prebuild validates and fetches the Core SHA from the checked-out
-app's `config/foxcore-revision.txt`; changing that app pin changes the built Core without
-editing a second srclib pin. Pinned tools, the upstream binary URL and signer verification
-remain recipe inputs. The scanner removes binary fuzz corpus fixtures from the downloaded
-Core sources; production sources remain scanned (`foxhole_guard/metadata/com.foxhole.guard.yml:15-16,27-63`).
+the latest recipe. F-Droid obtains `FoxHoleCore` as a srclib at a fixed bootstrap SHA.
+Prebuild validates the checked-out app's `config/foxcore-revision.txt`, fetches that SHA
+inside the srclib and verifies its detached HEAD before Cargo or Gradle runs. Changing
+the app pin selects a different Core without changing the bootstrap srclib revision.
+Pinned tools, the upstream binary URL and signer verification remain recipe inputs
+(`foxhole_guard/metadata/com.foxhole.guard.yml:15-16,27-53`).
 Build 117 keeps its historical candidate SHA because the published 0.1.0 APK embeds that
 SHA; later release APKs must embed the commit their tag resolves to
 (`foxhole_guard/metadata/com.foxhole.guard.yml:19-21`).
@@ -355,3 +356,7 @@ SHA; later release APKs must embed the commit their tag resolves to
 > **Release documentation correction.** The prior channel table described F-Droid as using
 > the separate `fdroid` updater channel. The accepted reproducible recipe actually selects
 > `github` to reproduce the upstream signed binary; the table now follows that recipe.
+
+> **Source-layout correction.** Core selection now happens inside the F-Droid srclib,
+> following maintainer review. The previous claim that the app-tree scanner removes
+> Core fuzz fixtures no longer describes this layout; no such scanner guarantee is made.

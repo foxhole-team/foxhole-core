@@ -83,6 +83,22 @@ impl Bench {
         while self.app.try_recv(&mut buffer).is_ok() {}
     }
 
+    async fn await_resets(&self, client_ports: &[u16]) {
+        let mut pending = client_ports.to_vec();
+        let mut buffer = [0_u8; 4096];
+        let deadline = tokio::time::Instant::now() + SOON;
+        while !pending.is_empty() {
+            let read = tokio::time::timeout_at(deadline, self.app.recv(&mut buffer))
+                .await
+                .unwrap_or_else(|_| panic!("dropped sessions were not reset: {pending:?}"))
+                .expect("read the tun");
+            pending.retain(|port| {
+                !tunlab::tcp_for_port(&buffer[..read], *port)
+                    .is_some_and(|segment| segment.flags & FLAG_RST != 0)
+            });
+        }
+    }
+
     /// Collect segments for one client port until the deadline.
     async fn collect(&self, client_port: u16, within: Duration) -> Vec<Seen> {
         let deadline = tokio::time::Instant::now() + within;
@@ -187,9 +203,12 @@ async fn a_full_session_table_refuses_the_new_and_keeps_carrying_the_established
          it had no room for: {answers:?}"
     );
 
-    // Releasing a slot must clear the refusal condition.
+    // Drop queues an actor command; the wire reset confirms it was processed.
     drop(_second);
     drop(_third);
+    bench
+        .await_resets(&[ESTABLISHED + 1, ESTABLISHED + 2])
+        .await;
     let (_recovered, _) = bench.establish(REFUSED + 1, 11_000).await;
 }
 
