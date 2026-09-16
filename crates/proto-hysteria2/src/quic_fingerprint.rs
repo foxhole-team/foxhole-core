@@ -191,13 +191,17 @@ async fn the_first_flight_is_two_1200_byte_datagrams() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_quic_ja4_matches_the_published_chrome_prefix() {
+async fn the_quic_ja4_records_the_tls13_only_hello() {
     use foxcore_transport::ja;
     let flight = capture().await;
     let hello = ja::parse(&flight.client_hello);
     let (ja4, _raw) = ja::ja4_over(&hello, ja::Transport::Quic);
     let mut fields = ja4.split('_');
-    assert_eq!(fields.next(), Some("q13d0312h3"), "JA4_a");
+    assert!(
+        !hello.extensions.contains(&0x0023),
+        "QUIC must not advertise TLS 1.2 session tickets"
+    );
+    assert_eq!(fields.next(), Some("q13d0311h3"), "JA4_a");
     assert_eq!(fields.next(), Some("55b375c5d22e"), "JA4_b");
     assert_ne!(ja::ja4(&hello).0, ja4);
 }

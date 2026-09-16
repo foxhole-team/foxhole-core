@@ -233,7 +233,14 @@ fn the_generic_path_hello_is_recorded_field_by_field() {
         hello.signature_algorithms.contains(&0x0807),
         "rustls offers ed25519; Chrome does not"
     );
-    assert_eq!(hello.signature_algorithms.len(), 10);
+    assert_eq!(
+        hello.signature_algorithms,
+        vec![
+            0x0503, 0x0403, 0x0603, 0x0807, 0x0806, 0x0805, 0x0804, 0x0601, 0x0501, 0x0401, 0x0904,
+            0x0905, 0x0906,
+        ],
+        "the recorded rustls 0.23.45 signature schemes, including ML-DSA"
+    );
 }
 
 #[test]

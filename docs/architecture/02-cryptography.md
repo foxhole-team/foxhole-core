@@ -25,6 +25,17 @@ flowchart TD
     RU --> LC
 ```
 
+Core 0.0.6 requires rustls 0.23.45 (`Cargo.toml:75`, resolved in `Cargo.lock`). This closes
+[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html): TLS 1.3 handshake
+messages must not cross encryption-level changes within one record. The provider and
+application TLS-consent policy are unchanged. The updated provider also advertises ML-DSA
+signature schemes; the generic TLS JA4 regression fixture was re-measured against the live
+detector (`crates/foxcore-transport/tests/ja_fingerprint.rs:101`).
+For QUIC, rustls now omits the TLS 1.2 session-ticket extension, changing the JA4 prefix to
+`q13d0311h3`; the Hysteria2 and TUIC capture tests assert this TLS-1.3-only hello
+(`crates/proto-hysteria2/src/quic_fingerprint.rs:194`,
+`crates/proto-tuic/src/quic_fingerprint.rs:154`). REALITY's compiled browser profiles are unchanged.
+
 Fox-owned generic TLS explicitly builds rustls configurations with the `aws-lc-rs` provider because
 `ring` has no ML-KEM (`crates/foxcore-transport/src/tls.rs:454-505`). The dependency graph still
 contains `ring` through Arti, Shadowsocks compatibility and a negative ECH test; it is not the

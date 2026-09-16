@@ -99,7 +99,8 @@ fn the_local_computation_matches_a_live_detector() {
 
 #[test]
 fn the_shipped_default_differs_from_the_measured_hello_only_in_alpn() {
-    const MEASURED: &str = "t13d1011h1_61a7ad8aa9b6_f9531d972513";
+    // Confirmed by the live detector with rustls 0.23.45 on 2026-09-16.
+    const MEASURED: &str = "t13d1011h1_61a7ad8aa9b6_0d308c48d2a3";
 
     let mut http1 = TlsConfig {
         enabled: true,
