@@ -4,6 +4,7 @@
 
 - Update rustls to 0.23.45 to reject TLS 1.3 handshake messages across encryption-level boundaries (RUSTSEC-2026-0285).
 - Refresh workspace and fuzz lockfiles and delivery SBOMs; retain ABI and configuration schema v1.
+- Re-audit the RSA reachability fixture for aws-lc-rs 1.18.1 without changing its security conditions.
 - Re-measure generic TLS and QUIC fingerprints after the provider's signature-scheme and TLS-1.3-only QUIC updates.
 - Document Guard 0.1.2's separate GitHub and F-Droid APKs and per-channel verification.
 
