@@ -1,8 +1,7 @@
 //! Hysteria2 framing isolated from QUIC and platform concerns.
 //!
-//! Hysteria2 runs over QUIC (ALPN `h3`). The `foxhole-hy2-2` link uses `insecure=1`, i.e.
-//! a self-signed server cert the client must accept without a CA (see the design doc for
-//! how that is pinned rather than blindly trusted).
+//! Hysteria2 runs over QUIC (ALPN `h3`). Explicit certificate pinning and insecure
+//! certificate acceptance are separate TLS policies enforced by the transport.
 //!
 //! Three wire pieces live here (the QUIC/H3 transport that carries them is in the engine
 //! layer, not this crate):
@@ -91,6 +90,7 @@ pub struct AuthResponse {
     pub udp_enabled: bool,
     /// Server receive bandwidth in bytes/sec (client uses it as its Brutal target).
     pub cc_rx_bytes_per_sec: u64,
+    pub cc_rx_auto: bool,
 }
 
 /// Build the auth response view from decoded H3 header fields.
@@ -98,19 +98,46 @@ pub fn parse_auth_response<'a, I>(status: &str, headers: I) -> AuthResponse
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
+    try_parse_auth_response(status, headers).unwrap_or(AuthResponse {
+        ok: false,
+        udp_enabled: false,
+        cc_rx_bytes_per_sec: 0,
+        cc_rx_auto: false,
+    })
+}
+
+pub fn try_parse_auth_response<'a, I>(status: &str, headers: I) -> std::io::Result<AuthResponse>
+where
+    I: IntoIterator<Item = (&'a str, &'a str)>,
+{
     let mut resp = AuthResponse {
         ok: status == AUTH_OK_STATUS,
         udp_enabled: false,
         cc_rx_bytes_per_sec: 0,
+        cc_rx_auto: false,
     };
+    let mut received_rate = false;
     for (name, value) in headers {
         if name.eq_ignore_ascii_case("hysteria-udp") {
             resp.udp_enabled = value.eq_ignore_ascii_case("true");
         } else if name.eq_ignore_ascii_case("hysteria-cc-rx") {
-            resp.cc_rx_bytes_per_sec = value.parse().unwrap_or(0);
+            if received_rate {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "duplicate Hysteria receive limit",
+                ));
+            }
+            received_rate = true;
+            match crate::negotiated::ReceiveLimit::parse(value.as_bytes())? {
+                crate::negotiated::ReceiveLimit::Automatic => resp.cc_rx_auto = true,
+                crate::negotiated::ReceiveLimit::Unlimited => (),
+                crate::negotiated::ReceiveLimit::BytesPerSecond(rate) => {
+                    resp.cc_rx_bytes_per_sec = rate
+                }
+            }
         }
     }
-    resp
+    Ok(resp)
 }
 
 /// Encode the Hysteria2 TCP proxy request onto a freshly opened QUIC bidi stream.
@@ -355,8 +382,21 @@ mod tests {
             AuthResponse {
                 ok: true,
                 udp_enabled: true,
-                cc_rx_bytes_per_sec: 12_500_000
+                cc_rx_bytes_per_sec: 12_500_000,
+                cc_rx_auto: false
             }
+        );
+    }
+
+    #[test]
+    fn auth_auto_is_distinct_from_an_unlimited_zero_and_invalid_rates_fail_closed() {
+        let automatic = parse_auth_response("233", [("Hysteria-CC-RX", "auto")]);
+        assert!(automatic.ok && automatic.cc_rx_auto);
+        let unlimited = parse_auth_response("233", [("hysteria-cc-rx", "0")]);
+        assert!(unlimited.ok && !unlimited.cc_rx_auto);
+        assert!(!parse_auth_response("233", [("hysteria-cc-rx", "not-a-rate")]).ok);
+        assert!(
+            !parse_auth_response("233", [("hysteria-cc-rx", "0"), ("hysteria-cc-rx", "auto")]).ok
         );
     }
 

@@ -1,0 +1,258 @@
+# Reference recipe only. Authoritative execution belongs to Git LAN / the protected lab.
+# This directory is outside GitHub Actions workflow discovery.
+# Keep this gate aligned with `scripts/gate.sh`.
+name: gate
+
+# The full suite is intentionally limited to integration branches and manual runs.
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+  workflow_dispatch:
+
+# Crash artifacts need no repository write permission.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  # Pin nightly-only fuzz/Miri runs for reproducibility.
+  FOXCORE_NIGHTLY: nightly-2026-08-12
+  CARGO_FUZZ_VERSION: 0.13.2
+  # Bound concurrency for wall-clock-sensitive tests.
+  FOXCORE_TEST_THREADS: 4
+  # Per-target regression budget, not a full fuzzing campaign.
+  FOXCORE_FUZZ_SECONDS: 120
+
+jobs:
+  gate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      - name: Android Docker wrapper environment
+        run: python3 scripts/tests/test_docker_android_env.py
+
+      - name: Advisory reporting regressions
+        run: |
+          python3 scripts/tests/test_advisories.py
+          python3 scripts/tests/test_release_gate.py
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace -- --test-threads=${{ env.FOXCORE_TEST_THREADS }}
+
+      # Re-derive the accepted RSA advisory's non-reachability from this graph.
+      - name: RUSTSEC-2023-0071 is still unreachable
+        run: scripts/tor-rsa-gate.sh
+
+  # Catch accidental feature unification across shipping combinations.
+  features:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Minimal — one protocol only
+        run: cargo check -p foxcore-runtime --no-default-features --features vless
+
+      - name: No protocol at all
+        run: cargo check -p foxcore-android --no-default-features
+      - name: One protocol and one overlay
+        run: cargo check -p foxcore-android --no-default-features --features vless,tor
+      - name: The set that ships, named
+        run: cargo check -p foxcore-android --no-default-features --features shipped
+      - name: A reduced build passes its own tests
+        run: cargo test -p foxcore-android --no-default-features
+      - name: TUN tests without protocol features
+        run: cargo test --locked -p foxcore-tun --no-default-features --lib
+      - name: Everything, every optional feature at once
+        run: cargo check --workspace --all-features
+
+  # Cross-build the two shipping JNI libraries and Android-only paths.
+  android-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4
+        with:
+          packages: ndk;29.0.14206865
+      - name: Pinned Rust targets and cargo-ndk
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep
+          rustup target add aarch64-linux-android armv7-linux-androideabi i686-linux-android x86_64-linux-android
+          cargo install cargo-ndk --version 4.1.2 --locked
+          cargo fetch --locked
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/29.0.14206865" >> "$GITHUB_ENV"
+      - name: Release JNI for all four supported ABIs
+        env:
+          FOXCORE_JNI_OUTPUT: target/android-jni
+        run: scripts/android-build.sh
+      - name: Verify the release candidate recipe
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        run: |
+          scripts/rollback-artifact.sh record \
+            target/foxcore-release-candidate \
+            --libs target/android-jni
+          mkdir -p target/foxcore-release-candidate/sbom
+          cp sbom/foxcore-aarch64-linux-android.cdx.json \
+            sbom/workspace-all-targets.cdx.json \
+            target/foxcore-release-candidate/sbom/
+          scripts/rollback-artifact.sh verify target/foxcore-release-candidate
+          grep -qx 'abi-gate: PASS' \
+            target/foxcore-release-candidate/abi-gate.log
+          test "$(jq -r .git.commit target/foxcore-release-candidate/MANIFEST.json)" = "$GITHUB_SHA"
+          test "$(jq -r .git.dirty target/foxcore-release-candidate/MANIFEST.json)" = false
+          cmp sbom/foxcore-aarch64-linux-android.cdx.json \
+            target/foxcore-release-candidate/sbom/foxcore-aarch64-linux-android.cdx.json
+          cmp sbom/workspace-all-targets.cdx.json \
+            target/foxcore-release-candidate/sbom/workspace-all-targets.cdx.json
+      # Rebuild on main from pins instead of consuming artifact quota.
+
+  # Verify the locked dependency graph and its published SBOM.
+  supply-chain:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      - name: The lockfile is the build
+        run: |
+          cargo metadata --locked --format-version 1 > /dev/null
+          cargo check --workspace --locked --quiet
+          git diff --exit-code Cargo.lock
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --version 0.20.2 --locked
+
+      - name: Fetch current advisory data
+        run: cargo deny fetch
+
+      - name: Advisories, licences, sources — shipped graph
+        run: cargo deny check
+
+      - name: Advisories, licences, sources — plus onion-service
+        run: cargo deny --all-features --config deny-all-features.toml check
+
+      - name: SBOM is current
+        run: |
+          scripts/sbom.sh --check
+          scripts/sbom.sh --all --check
+
+  # Verify ABI v1 against frozen fixtures.
+  abi:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Exports, C ownership rules, capabilities, on-disk formats
+        run: scripts/abi-gate.sh
+
+  # Compile harnesses and exercise committed seeds on the pinned stable toolchain.
+  fuzz-harness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Harness, seeds and corpus
+        run: scripts/fuzz.sh check
+
+  # Run adversarial parsers independently and retain only crashing inputs.
+  fuzz:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - netstack_packet
+          - flow_key_from_packet
+          - dns_message
+          - wireguard_message
+          - socks_codec
+          - http_codec
+          - reality_records
+          - share_link
+          - shadowtls_server_stream
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+
+      - name: Nightly and cargo-fuzz
+        run: |
+          rustup toolchain install "$FOXCORE_NIGHTLY" --profile minimal
+          cargo +"$FOXCORE_NIGHTLY" install cargo-fuzz \
+            --version "$CARGO_FUZZ_VERSION" --locked
+
+      - name: ${{ matrix.target }}
+        run: scripts/fuzz.sh run ${{ matrix.target }} ${{ env.FOXCORE_FUZZ_SECONDS }}
+
+      - name: The input that crashed it
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # Miri only the sans-io, non-FFI crates it can execute.
+  miri:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - name: Nightly with Miri
+        run: >-
+          rustup toolchain install "$FOXCORE_NIGHTLY" --profile minimal
+          --component miri --component rust-src
+      # Frozen ABI fixtures require repository read access under Miri.
+      - name: Undefined behaviour in the host-safe crates
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+        run: |
+          cargo +"$FOXCORE_NIGHTLY" miri test \
+            -p foxcore-api \
+            -p foxcore-dns \
+            -p foxcore-link
+
+  sentinel-native:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c
+        with:
+          workspaces: native/sentinel-yara -> target
+      - uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699
+        with:
+          packages: ndk;29.0.14206865
+      - name: Scanner source, tests and locked graph
+        env:
+          YRX_REGENERATE_MODULES_RS: "false"
+        run: |
+          export ANDROID_NDK_HOME="$ANDROID_SDK_ROOT/ndk/29.0.14206865"
+          cargo fmt --manifest-path native/sentinel-yara/Cargo.toml --check
+          cargo clippy --manifest-path native/sentinel-yara/Cargo.toml --locked --all-targets -- -D warnings
+          cargo test --manifest-path native/sentinel-yara/Cargo.toml --locked --test engine -- --test-threads=1
+          cargo metadata --manifest-path native/sentinel-yara/Cargo.toml --locked --format-version 1 > /tmp/sentinel-metadata.json
+          python3 scripts/sentinel-sbom.py /tmp/sentinel-metadata.json sbom/sentinel-yara-all-targets.cdx.json --check
+          git diff --exit-code native/sentinel-yara/Cargo.lock
+      - name: Scanner supply chain
+        run: |
+          cargo install cargo-deny --version 0.20.2 --locked
+          cd native/sentinel-yara
+          cargo deny fetch
+          cargo deny --locked check

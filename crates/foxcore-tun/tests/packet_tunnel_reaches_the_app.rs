@@ -243,7 +243,7 @@ async fn a_routing_loop_is_reported_to_whoever_drains_events_not_only_counted() 
 }
 
 /// The other half of D15, on the same seam: a peer that has answered nothing
-/// while we kept sending. Four `REKEY_TIMEOUT` windows pass on tokio's clock.
+/// while we kept sending. Six `REKEY_TIMEOUT` windows pass on tokio's clock.
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn a_silent_peer_is_reported_to_whoever_drains_events_not_only_counted() {
@@ -254,7 +254,15 @@ async fn a_silent_peer_is_reported_to_whoever_drains_events_not_only_counted() {
     // One packet starts the handshake; nothing on the far side ever answers it.
     lab.inject(udp_packet(Ipv4Addr::new(93, 184, 216, 34), 443))
         .await;
+    let mut handshake = [0u8; 2048];
+    let received = tokio::time::timeout(Duration::from_secs(5), peer.recv(&mut handshake))
+        .await
+        .expect("the relay must start its handshake before measuring peer silence")
+        .unwrap();
+    assert!(received > 0);
     tokio::time::sleep(Duration::from_secs(25)).await;
+    assert_eq!(lab.counter("tunnel_peer_silences"), 0);
+    lab.wait_for("tunnel_peer_silences", 1).await;
 
     assert_eq!(
         lab.counter("tunnel_peer_silences"),

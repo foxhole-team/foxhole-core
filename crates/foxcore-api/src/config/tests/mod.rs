@@ -122,6 +122,7 @@ fn trojan_with_tls(tls: &str) -> String {
     )
 }
 
+mod bootstrap_dns;
 mod parse;
 mod policy_tls;
 mod protocols;

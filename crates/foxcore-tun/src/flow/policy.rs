@@ -11,7 +11,8 @@ use foxcore_outbound::{Outbound, OutboundRegistry};
 use foxcore_route::RouteTable;
 use foxcore_route::ruleset::{
     RuleSetArtifact, RuleSetBundle, RuleSetVerificationPolicy, TrustedRuleSetBundle,
-    VerifiedRuleSet, parse_trusted_embedded_rule_set, verify_rule_set,
+    VerifiedRuleSet, parse_trusted_categorized_rule_set, parse_trusted_embedded_rule_set,
+    verify_rule_set,
 };
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
@@ -77,10 +78,40 @@ impl FlowPolicyStore {
         bundles: Vec<RuleSetBundle>,
         trusted_bundles: Vec<TrustedRuleSetBundle>,
     ) -> io::Result<Self> {
+        Self::new_with_trusted_rule_sets_and_dns_continuation(
+            generation,
+            routes,
+            dns_config,
+            outbounds,
+            direct,
+            metrics,
+            events,
+            bundles,
+            trusted_bundles,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_trusted_rule_sets_and_dns_continuation(
+        generation: u64,
+        routes: RouteTable,
+        dns_config: DnsConfig,
+        outbounds: Arc<OutboundRegistry>,
+        direct: Arc<Outbound>,
+        metrics: Arc<FlowMetrics>,
+        events: EventSink,
+        bundles: Vec<RuleSetBundle>,
+        trusted_bundles: Vec<TrustedRuleSetBundle>,
+        dns_continuation: Option<Arc<DnsCache>>,
+    ) -> io::Result<Self> {
         let rule_sets = verify_initial_rule_sets(&dns_config, bundles)?;
         let trusted_rule_sets = parse_initial_trusted_rule_sets(&dns_config, trusted_bundles)?;
         let artifacts = active_rule_set_artifacts(&dns_config, &rule_sets, &trusted_rule_sets)?;
-        let dns = Arc::new(DnsCache::new(dns_config.cache_size));
+        let dns = Arc::new(match dns_continuation {
+            Some(previous) => previous.fork_for_policy(dns_config.cache_size),
+            None => DnsCache::new(dns_config.cache_size),
+        });
         let dns_proxy = DnsProxy::new_with_gates_and_rule_sets(
             generation,
             dns_config.clone(),
@@ -112,6 +143,11 @@ impl FlowPolicyStore {
                 trusted_rule_sets,
             }),
         })
+    }
+
+    /// The latest DNS state only. The runtime's clean-stop capability gates access.
+    pub fn dns_for_continuation(&self) -> Arc<DnsCache> {
+        self.current.load().dns.clone()
     }
 
     pub fn reload(
@@ -205,6 +241,8 @@ impl FlowPolicyStore {
         {
             if verified.metadata().artifact_sha256 == previous.metadata().artifact_sha256
                 && verified.metadata().public_key_sha256 == previous.metadata().public_key_sha256
+                && verified.metadata().categorized_manifest_sha256
+                    == previous.metadata().categorized_manifest_sha256
             {
                 return Ok(current.revision);
             }
@@ -389,13 +427,25 @@ fn parse_initial_trusted_rule_sets(
                 "trusted DNS rule-set bootstrap contains a duplicate name",
             ));
         }
-        if !config.rule_sets.iter().any(|source| source.name == name) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "trusted DNS rule-set bootstrap has no pinned update policy",
-            ));
+        let configured = config
+            .rule_sets
+            .iter()
+            .find(|source| source.name == name)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "trusted DNS rule-set bootstrap has no pinned update policy",
+                )
+            })?;
+        let parsed = if configured.enabled_categories.is_some() {
+            parse_trusted_categorized_rule_set(&name, &artifact)
+        } else if name.starts_with("foxhole-dns-categories-") {
+            Err(foxcore_route::ruleset::RuleSetError::UnsupportedManifest)
+        } else {
+            parse_trusted_embedded_rule_set(&artifact)
         }
-        let parsed = parse_trusted_embedded_rule_set(&artifact).map_err(|error| {
+        .and_then(|parsed| parsed.select_categories(configured.enabled_categories.as_deref()))
+        .map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("trusted DNS rule-set is invalid: {error}"),
@@ -440,6 +490,15 @@ fn active_rule_set_artifacts(
 ) -> io::Result<Vec<RuleSetArtifact>> {
     let mut artifacts = Vec::with_capacity(config.rule_sets.len());
     for configured in &config.rule_sets {
+        if let Some(rule_set) = installed.get(&configured.name)
+            && rule_set.metadata().categorized_manifest_sha256.is_some()
+        {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map_err(|_| io::Error::other("system clock is before the Unix epoch"))?
+                .as_secs();
+            validate_categorized_freshness(rule_set.metadata(), now)?;
+        }
         let public_key = configured
             .decoded_public_key()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
@@ -451,8 +510,17 @@ fn active_rule_set_artifacts(
                 && metadata.public_key_sha256 == expected_key
         });
         match (compatible, trusted.get(&configured.name)) {
-            (Some(rule_set), _) => artifacts.push(rule_set.artifact().clone()),
-            (None, Some(rule_set)) => artifacts.push(rule_set.clone()),
+            (Some(rule_set), _) => artifacts.push(
+                rule_set
+                    .artifact()
+                    .select_categories(configured.enabled_categories.as_deref())
+                    .map_err(category_selection_error)?,
+            ),
+            (None, Some(rule_set)) => artifacts.push(
+                rule_set
+                    .select_categories(configured.enabled_categories.as_deref())
+                    .map_err(category_selection_error)?,
+            ),
             (None, None) if configured.required => {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
@@ -466,4 +534,52 @@ fn active_rule_set_artifacts(
         }
     }
     Ok(artifacts)
+}
+
+fn validate_categorized_freshness(
+    metadata: &foxcore_route::ruleset::VerifiedRuleSetMetadata,
+    now: u64,
+) -> io::Result<()> {
+    if metadata.categorized_manifest_sha256.is_some()
+        && (now >= metadata.expires_at_unix || metadata.generated_at_unix > now.saturating_add(600))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "categorized DNS rule set is no longer fresh",
+        ));
+    }
+    Ok(())
+}
+
+fn category_selection_error(error: foxcore_route::ruleset::RuleSetError) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("DNS category selection is incompatible: {error}"),
+    )
+}
+
+#[cfg(test)]
+mod category_freshness_tests {
+    use super::*;
+
+    #[test]
+    fn reload_rechecks_categorized_expiry_without_inventing_embedded_freshness() {
+        let mut metadata = foxcore_route::ruleset::VerifiedRuleSetMetadata {
+            name: "foxhole-dns-categories-normal-medium".into(),
+            sequence: 1,
+            generated_at_unix: 1000,
+            expires_at_unix: 2000,
+            source_commit: "2".repeat(40),
+            block_entries: 1,
+            allow_entries: 0,
+            artifact_sha256: [0; 32],
+            public_key_sha256: [0; 32],
+            categorized_manifest_sha256: Some([0; 32]),
+        };
+        assert!(validate_categorized_freshness(&metadata, 1500).is_ok());
+        assert!(validate_categorized_freshness(&metadata, 2000).is_err());
+        assert!(validate_categorized_freshness(&metadata, 399).is_err());
+        metadata.categorized_manifest_sha256 = None;
+        assert!(validate_categorized_freshness(&metadata, 2000).is_ok());
+    }
 }

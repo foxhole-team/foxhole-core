@@ -229,3 +229,78 @@ async fn a_large_transfer_survives_being_split_across_many_buffer_loads() {
     let (moved, ()) = tokio::join!(relay, peers);
     assert_eq!(moved.unwrap().0, 64 * 1024);
 }
+
+#[tokio::test]
+async fn an_unrepresentable_buffer_is_an_error_before_stream_io() {
+    let pool = BufferPool::new(usize::MAX, 2);
+    let mut left = NeverWrites;
+    let mut right = NeverWrites;
+    let error = copy_bidirectional_pooled(&pool, &mut left, &mut right)
+        .await
+        .expect_err("buffer capacity must fail before streams are polled");
+    assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
+    assert_eq!(pool.idle(), 0);
+}
+
+#[tokio::test]
+async fn a_zero_buffer_is_rejected_without_reporting_false_eof() {
+    let pool = BufferPool::new(0, 2);
+    let (mut left, mut left_peer) = tokio::io::duplex(64);
+    let (mut right, mut right_peer) = tokio::io::duplex(64);
+    left_peer.write_all(b"must not disappear").await.unwrap();
+    left_peer.shutdown().await.unwrap();
+    right_peer.shutdown().await.unwrap();
+    let error = copy_bidirectional_pooled(&pool, &mut left, &mut right)
+        .await
+        .expect_err("empty buffer must not turn pending data into success");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn allocation_refusal_in_a_limited_child_does_not_abort_the_relay() {
+    const CHILD_MARKER: &str = "FOXHOLE_RELAY_ALLOCATION_CHILD";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let pool = BufferPool::new(128 * 1024 * 1024, 2);
+            let mut left = NeverWrites;
+            let mut right = NeverWrites;
+            let error = copy_bidirectional_pooled(&pool, &mut left, &mut right)
+                .await
+                .expect_err("a constrained process must reject the buffer allocation");
+            assert_eq!(error.kind(), io::ErrorKind::OutOfMemory);
+            assert_eq!(pool.idle(), 0);
+            let healthy = BufferPool::new(1024, 2);
+            let (mut a, a_peer) = tokio::io::duplex(1024);
+            let (mut b, b_peer) = tokio::io::duplex(1024);
+            drop(a_peer);
+            drop(b_peer);
+            assert_eq!(
+                copy_bidirectional_pooled(&healthy, &mut a, &mut b)
+                    .await
+                    .unwrap(),
+                (0, 0)
+            );
+        });
+        return;
+    }
+    let executable = std::env::current_exe().unwrap();
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("ulimit -v 65536 || exit 97; exec \"$1\" --exact tests::allocation_refusal_in_a_limited_child_does_not_abort_the_relay --nocapture")
+        .arg("relay-allocation-child")
+        .arg(executable)
+        .env(CHILD_MARKER, "1")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "bounded child failed: {:?}\n{}\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}

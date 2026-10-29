@@ -19,6 +19,8 @@ pub struct EngineConfig {
     pub tun: TunConfig,
     #[serde(default)]
     pub dns: DnsConfig,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bootstrap_dns: Option<BootstrapDnsConfig>,
     #[serde(default)]
     pub runtime: RuntimeConfig,
     #[serde(default)]
@@ -65,6 +67,12 @@ impl EngineConfig {
         self.dns.validate()?;
         self.traffic.validate()?;
         self.outbound.validate()?;
+        if let Some(bootstrap) = &self.bootstrap_dns {
+            bootstrap.validate(
+                std::iter::once(&self.outbound)
+                    .chain(self.outbounds.iter().map(|named| &named.outbound)),
+            )?;
+        }
         if matches!(self.outbound, OutboundConfig::Direct(_)) != self.runtime.local_guard {
             return Err(ConfigError::Invalid(
                 "a direct primary requires runtime.local_guard=true, and local_guard requires a direct primary"

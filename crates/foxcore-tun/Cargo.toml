@@ -51,6 +51,10 @@ foxcore-outbound = { path = "../foxcore-outbound", features = ["i2p", "wireguard
 proptest = "1.11.0"
 proto-wireguard = { path = "../proto-wireguard", features = ["test-support"] }
 rand.workspace = true
+rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"] }
+rustls.workspace = true
+tokio-rustls.workspace = true
+x509-parser.workspace = true
 # `start_paused`: the relay's liveness deadline is four `REKEY_TIMEOUT` windows,
 # and a test that waited them out in wall-clock time would cost twenty seconds
 # to assert one event.

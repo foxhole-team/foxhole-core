@@ -1,10 +1,13 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 
 use foxcore_api::DnsCategory;
-use foxcore_route::ruleset::compile_rule_set_artifact;
+use foxcore_route::ruleset::{
+    MAX_TAGGED_INPUT_BYTES, compile_rule_set_artifact, compile_tagged_rule_set_artifact,
+};
 
 const MAX_SOURCE_BYTES: usize = 64 * 1024 * 1024;
 
@@ -17,10 +20,19 @@ fn main() {
 
 fn run() -> Result<(), String> {
     let options = Options::parse(env::args().skip(1))?;
-    let source = fs::read(&options.input)
-        .map_err(|error| format!("read {}: {error}", options.input.display()))?;
-    if source.is_empty() || source.len() > MAX_SOURCE_BYTES {
-        return Err("input size must be in 1..=64 MiB".into());
+    let input_limit = if options.tagged {
+        MAX_TAGGED_INPUT_BYTES
+    } else {
+        MAX_SOURCE_BYTES
+    };
+    let source = read_bounded(&options.input, input_limit)?;
+    if source.is_empty() || source.len() > input_limit {
+        return Err(format!("input size must be in 1..={input_limit} bytes"));
+    }
+    if options.tagged {
+        let compiled =
+            compile_tagged_rule_set_artifact(&source).map_err(|error| error.to_string())?;
+        return write_output(&options.output, compiled);
     }
     let source_text =
         std::str::from_utf8(&source).map_err(|_| "input must be UTF-8".to_string())?;
@@ -39,8 +51,8 @@ fn run() -> Result<(), String> {
         }
     }
     if let Some(path) = &options.allowlist {
-        let text = fs::read_to_string(path)
-            .map_err(|error| format!("read {}: {error}", path.display()))?;
+        let data = read_bounded(path, MAX_SOURCE_BYTES)?;
+        let text = std::str::from_utf8(&data).map_err(|_| "allowlist must be UTF-8".to_string())?;
         for line in text.lines() {
             let line = line.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -59,12 +71,31 @@ fn run() -> Result<(), String> {
     let allow: Vec<String> = allow.into_iter().collect();
     let compiled = compile_rule_set_artifact(&source, &block, &allow, Some(options.category))
         .map_err(|error| error.to_string())?;
-    if let Some(parent) = options.output.parent() {
+    write_output(&options.output, compiled)
+}
+
+fn read_bounded(path: &std::path::Path, limit: usize) -> Result<Vec<u8>, String> {
+    let file = fs::File::open(path).map_err(|error| format!("read {}: {error}", path.display()))?;
+    let mut bytes = Vec::new();
+    file.take(limit as u64 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    if bytes.len() > limit {
+        return Err(format!("input exceeds {limit} bytes"));
+    }
+    Ok(bytes)
+}
+
+fn write_output(
+    output: &std::path::Path,
+    compiled: foxcore_route::ruleset::CompiledRuleSetArtifact,
+) -> Result<(), String> {
+    if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create {}: {error}", parent.display()))?;
     }
-    fs::write(&options.output, &compiled.bytes)
-        .map_err(|error| format!("write {}: {error}", options.output.display()))?;
+    fs::write(output, &compiled.bytes)
+        .map_err(|error| format!("write {}: {error}", output.display()))?;
     eprintln!(
         "compiled {} block and {} allow suffixes into {} bytes",
         compiled.block_entries,
@@ -80,6 +111,7 @@ struct Options {
     output: PathBuf,
     allowlist: Option<PathBuf>,
     category: DnsCategory,
+    tagged: bool,
 }
 
 impl Options {
@@ -88,6 +120,8 @@ impl Options {
         let mut output = None;
         let mut allowlist = None;
         let mut category = DnsCategory::Ads;
+        let mut tagged = None;
+        let mut category_set = false;
         let mut arguments = arguments.peekable();
         while let Some(argument) = arguments.next() {
             let value = |arguments: &mut std::iter::Peekable<_>, name: &str| {
@@ -97,26 +131,39 @@ impl Options {
             };
             match argument.as_str() {
                 "--input" => input = Some(PathBuf::from(value(&mut arguments, "--input")?)),
+                "--tagged-input" => {
+                    tagged = Some(PathBuf::from(value(&mut arguments, "--tagged-input")?))
+                }
                 "--output" => output = Some(PathBuf::from(value(&mut arguments, "--output")?)),
                 "--allowlist" => {
                     allowlist = Some(PathBuf::from(value(&mut arguments, "--allowlist")?));
                 }
                 "--category" => {
+                    category_set = true;
                     category = parse_category(&value(&mut arguments, "--category")?)?;
                 }
                 "--help" | "-h" => {
-                    return Err("usage: foxcore-dns-compile --input FILE --output FILE \
+                    return Err("usage: foxcore-dns-compile (--input FILE | --tagged-input FILE) --output FILE \
                          [--allowlist FILE] [--category ads|trackers|telemetry|malicious]"
                         .into());
                 }
                 _ => return Err(format!("unknown argument: {argument}")),
             }
         }
+        if tagged.is_some() && (input.is_some() || allowlist.is_some() || category_set) {
+            return Err(
+                "--tagged-input cannot be combined with --input, --allowlist or --category".into(),
+            );
+        }
+        let is_tagged = tagged.is_some();
         Ok(Self {
-            input: input.ok_or_else(|| "--input is required".to_string())?,
+            input: tagged
+                .or(input)
+                .ok_or_else(|| "--input or --tagged-input is required".to_string())?,
             output: output.ok_or_else(|| "--output is required".to_string())?,
             allowlist,
             category,
+            tagged: is_tagged,
         })
     }
 }
@@ -220,6 +267,36 @@ fn normalize_domain(value: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tagged_input_is_a_supported_separate_compiler_mode() {
+        let result = super::Options::parse(
+            ["--tagged-input", "owned.json", "--output", "owned.fhds"]
+                .into_iter()
+                .map(str::to_owned),
+        );
+        assert!(result.is_ok(), "tagged input mode was refused: {result:?}");
+    }
+
+    #[test]
+    fn tagged_input_cannot_mix_legacy_sources_or_modes() {
+        for extra in ["--input", "--allowlist", "--category"] {
+            assert!(
+                Options::parse(
+                    [
+                        "--tagged-input",
+                        "owned.json",
+                        "--output",
+                        "owned.fhds",
+                        extra,
+                        "ads"
+                    ]
+                    .into_iter()
+                    .map(str::to_owned)
+                )
+                .is_err()
+            );
+        }
+    }
     use super::*;
 
     #[test]

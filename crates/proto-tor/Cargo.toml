@@ -38,17 +38,17 @@ onion-service = [
 
 [dependencies]
 async-trait = { workspace = true, optional = true }
-arti-client = { version = "0.44.0", default-features = false, features = ["tokio", "rustls", "compression", "flowctl-cc"], optional = true }
+arti-client = { version = "0.47.0", default-features = false, features = ["tokio", "rustls", "compression"], optional = true }
 foxcore-api = { path = "../foxcore-api" }
 foxcore-dialer = { path = "../foxcore-dialer" }
 foxcore-transport = { path = "../foxcore-transport" }
 futures = { workspace = true, optional = true }
 tokio.workspace = true
 tokio-util = { workspace = true, optional = true }
-safelog = { version = "0.9.0", optional = true }
-tor-cell = { version = "0.44.0", default-features = false, optional = true }
-tor-config = { version = "0.44.0", default-features = false, optional = true }
-tor-hsservice = { version = "0.44.0", default-features = false, optional = true }
-tor-keymgr = { version = "0.44.0", default-features = false, features = ["keymgr", "ephemeral-keystore"], optional = true }
-tor-proto = { version = "0.44.0", default-features = false, optional = true }
-tor-rtcompat = { version = "0.44.0", default-features = false, features = ["tokio", "rustls"], optional = true }
+safelog = { version = "0.10.0", optional = true }
+tor-cell = { version = "0.47.0", default-features = false, optional = true }
+tor-config = { version = "0.47.0", default-features = false, optional = true }
+tor-hsservice = { version = "0.47.0", default-features = false, optional = true }
+tor-keymgr = { version = "0.47.0", default-features = false, features = ["keymgr", "ephemeral-keystore"], optional = true }
+tor-proto = { version = "0.47.0", default-features = false, optional = true }
+tor-rtcompat = { version = "0.47.0", default-features = false, features = ["tokio", "rustls"], optional = true }

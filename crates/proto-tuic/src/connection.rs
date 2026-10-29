@@ -24,19 +24,20 @@ pub struct TuicConnection {
 
 impl TuicConnection {
     pub async fn connect(config: &TuicConfig, dialer: &ProtectedDialer) -> io::Result<Arc<Self>> {
-        let addresses = dialer
-            .resolve_server_addresses(&config.server, config.port, config.server_ip)
-            .await?;
-        let mut last_error = None;
-        for address in addresses {
-            match Self::connect_address(config, dialer, address).await {
-                Ok(connection) => return Ok(connection),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error.unwrap_or_else(|| {
-            io::Error::new(io::ErrorKind::NotFound, "TUIC server has no address")
-        }))
+        let owned_config = config.clone();
+        let owned_dialer = dialer.clone();
+        dialer
+            .connect_server_candidates(
+                &config.server,
+                config.port,
+                config.server_ip,
+                move |address| {
+                    let config = owned_config.clone();
+                    let dialer = owned_dialer.clone();
+                    async move { Self::connect_address(&config, &dialer, address).await }
+                },
+            )
+            .await
     }
 
     pub(crate) async fn connect_address(
@@ -60,19 +61,20 @@ impl TuicConnection {
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "TUIC QUIC handshake timed out"))?
             .map_err(|error| other(format!("TUIC QUIC handshake: {error}")))?;
 
-        authenticate(&connection, config).await?;
+        let connection = Self {
+            connection,
+            _endpoint: endpoint,
+        };
+        authenticate(&connection.connection, config).await?;
         if let Some(diagnostic) = config.heartbeat_clamp() {
             log::warn!("{diagnostic}");
         }
         spawn_heartbeat(
-            connection.clone(),
+            connection.connection.clone(),
             Duration::from_millis(config.effective_heartbeat_ms()),
         );
 
-        Ok(Arc::new(Self {
-            connection,
-            _endpoint: endpoint,
-        }))
+        Ok(Arc::new(connection))
     }
 
     pub fn connection(&self) -> &Connection {
@@ -256,6 +258,77 @@ fn other(message: impl Into<String>) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use foxcore_dialer::SocketCallbacks;
+    use rustls_pki_types::PrivatePkcs8KeyDer;
+
+    #[cfg_attr(miri, ignore = "requires QUIC sockets")]
+    #[tokio::test]
+    async fn a_blackholed_first_address_does_not_hide_a_working_tuic_peer() {
+        let key = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_protocol_versions(&[&rustls::version::TLS13])
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![key.cert.der().clone()],
+            PrivatePkcs8KeyDer::from(key.signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+        tls.alpn_protocols = vec![quic::DEFAULT_ALPN.as_bytes().to_vec()];
+        let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(tls).unwrap();
+        let endpoint = Endpoint::server(
+            quinn::ServerConfig::with_crypto(Arc::new(crypto)),
+            "127.0.0.1:0".parse().unwrap(),
+        )
+        .unwrap();
+        let reachable = endpoint.local_addr().unwrap();
+        let black_hole = tokio::net::UdpSocket::bind(("127.0.0.2", reachable.port()))
+            .await
+            .unwrap();
+        let silent = black_hole.local_addr().unwrap();
+        let server_endpoint = endpoint.clone();
+        let server = tokio::spawn(async move {
+            let peer = server_endpoint.accept().await.unwrap().await.unwrap();
+            let mut authenticate = peer.accept_uni().await.unwrap();
+            let command = authenticate.read_to_end(50).await.unwrap();
+            assert_eq!(&command[..2], &[5, 0]);
+            assert_eq!(
+                &command[2..18],
+                &[
+                    0x2d, 0xd6, 0x1d, 0x93, 0x75, 0xd8, 0x4d, 0xa4, 0xac, 0x0e, 0x6a, 0xec, 0xe7,
+                    0xea, 0xc3, 0x65
+                ]
+            );
+            let mut expected_token = [0_u8; 32];
+            peer.export_keying_material(&mut expected_token, &command[2..18], b"synthetic")
+                .unwrap();
+            assert_eq!(&command[18..], &expected_token);
+            peer
+        });
+        let mut config = black_hole_config(reachable.port());
+        config.server = "localhost".into();
+        config.tls.insecure = true;
+        let callbacks =
+            SocketCallbacks::none().with_resolver(move |_, _, _| Ok(vec![silent, reachable]));
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_secs(1))
+            .with_handshake_timeout(Duration::from_secs(1));
+        dialer.set_network_handle(1);
+
+        let connection = tokio::time::timeout(
+            dialer.handshake_timeout(),
+            TuicConnection::connect(&config, &dialer),
+        )
+        .await
+        .expect("the reachable candidate must authenticate within the shared handshake budget")
+        .unwrap();
+        let peer = server.await.unwrap();
+        drop(connection);
+        tokio::time::timeout(Duration::from_millis(500), peer.closed())
+            .await
+            .expect("discarding the connection must stop its heartbeat task");
+    }
 
     #[test]
     fn uuid_parser_accepts_canonical_and_compact_forms() {

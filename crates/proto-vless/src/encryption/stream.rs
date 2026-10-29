@@ -113,12 +113,14 @@ impl EncryptedStream {
         }
     }
 
-    fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_fill(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<bool>> {
         let Self {
             inner,
             read_buf,
             read_need,
+            read_state,
             xor,
+            zero_rtt,
             ..
         } = self;
         while read_buf.len() < *read_need {
@@ -139,6 +141,14 @@ impl EncryptedStream {
                 Poll::Ready(Ok(())) => {
                     read_buf.truncate(start + filled);
                     if filled == 0 {
+                        // Only a new record boundary can end cleanly. A pending
+                        // 0-RTT response has not confirmed the peer yet.
+                        if start == 0
+                            && matches!(read_state, ReadState::Header)
+                            && zero_rtt.is_none()
+                        {
+                            return Poll::Ready(Ok(false));
+                        }
                         return Poll::Ready(Err(io::Error::new(
                             io::ErrorKind::UnexpectedEof,
                             "VLESS encryption stream ended mid-record",
@@ -150,7 +160,7 @@ impl EncryptedStream {
                 }
             }
         }
-        Poll::Ready(Ok(()))
+        Poll::Ready(Ok(true))
     }
 
     fn flush_out(&mut self, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -232,7 +242,9 @@ impl AsyncRead for EncryptedStream {
                 }
                 ReadState::Header => {
                     this.read_need = 5;
-                    ready!(this.poll_fill(cx))?;
+                    if !ready!(this.poll_fill(cx))? {
+                        return Poll::Ready(Ok(()));
+                    }
                     let mut header = [0_u8; 5];
                     header.copy_from_slice(&this.read_buf);
                     this.read_buf.clear();
@@ -326,5 +338,153 @@ impl AsyncWrite for EncryptedStream {
         let this = self.get_mut();
         ready!(this.flush_out(cx))?;
         Pin::new(&mut this.inner).poll_shutdown(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const PEER_CONTEXT: &[u8] = b"synthetic-vless-encryption-peer";
+    const SYNTHETIC_KEY: [u8; 64] = [0x31; 64];
+
+    fn authenticated_records(use_aes: bool, records: &[&[u8]]) -> Vec<u8> {
+        let mut aead = Aead::new(PEER_CONTEXT, &SYNTHETIC_KEY, use_aes);
+        let mut wire = Vec::new();
+        for plaintext in records {
+            let mut header = [0_u8; 5];
+            encode_header(&mut header, plaintext.len() + TAG_LEN);
+            let mut body = plaintext.to_vec();
+            body.resize(plaintext.len() + TAG_LEN, 0);
+            aead.seal_in_place(&header, &mut body, plaintext.len())
+                .unwrap();
+            wire.extend_from_slice(&header);
+            wire.extend_from_slice(&body);
+        }
+        wire
+    }
+
+    async fn reader(
+        wire: &[u8],
+        use_aes: bool,
+        peer_key_ready: bool,
+        peer_padding: Option<usize>,
+    ) -> EncryptedStream {
+        let (mut peer, inner) = tokio::io::duplex(wire.len() + 1);
+        peer.write_all(wire).await.unwrap();
+        drop(peer);
+        EncryptedStream::new(StreamParts {
+            inner: Box::new(inner),
+            use_aes,
+            united_key: SYNTHETIC_KEY.to_vec(),
+            aead: Aead::new(b"synthetic-local-direction", &SYNTHETIC_KEY, use_aes),
+            peer_aead: peer_key_ready.then(|| Aead::new(PEER_CONTEXT, &SYNTHETIC_KEY, use_aes)),
+            xor: None,
+            pre_write: None,
+            peer_padding,
+            zero_rtt: None,
+        })
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_after_one_authenticated_record_is_normal() {
+        for use_aes in [true, false] {
+            let expected = b"complete-authenticated-response";
+            let wire = authenticated_records(use_aes, &[expected]);
+            let mut stream = reader(&wire, use_aes, true, None).await;
+            let mut actual = Vec::new();
+            let result = stream.read_to_end(&mut actual).await;
+            assert_eq!(actual.as_slice(), &expected[..]);
+            assert!(
+                result.is_ok(),
+                "authenticated record-boundary EOF must be normal"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_after_multiple_authenticated_records_is_normal() {
+        for use_aes in [true, false] {
+            let records: &[&[u8]] = &[b"first", b"second-authenticated-record", b"last"];
+            let wire = authenticated_records(use_aes, records);
+            let mut stream = reader(&wire, use_aes, true, None).await;
+            let mut actual = Vec::new();
+            let result = stream.read_to_end(&mut actual).await;
+            assert_eq!(actual, records.concat());
+            assert!(
+                result.is_ok(),
+                "authenticated record-boundary EOF must be normal"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_in_a_partial_header_still_refuses() {
+        for use_aes in [true, false] {
+            let wire = authenticated_records(use_aes, &[b"synthetic-payload"]);
+            for length in 1..5 {
+                let mut stream = reader(&wire[..length], use_aes, true, None).await;
+                let mut actual = Vec::new();
+                let error = stream.read_to_end(&mut actual).await.unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+                assert!(actual.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_in_a_partial_body_still_refuses() {
+        for use_aes in [true, false] {
+            let wire = authenticated_records(use_aes, &[b"synthetic-payload"]);
+            for length in [5, wire.len() - TAG_LEN, wire.len() - 1] {
+                let mut stream = reader(&wire[..length], use_aes, true, None).await;
+                let mut actual = Vec::new();
+                let error = stream.read_to_end(&mut actual).await.unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+                assert!(actual.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_in_server_random_still_refuses() {
+        for length in [0, 1, 15] {
+            let mut stream = reader(&[0x42; 15][..length], true, false, None).await;
+            let mut actual = Vec::new();
+            let error = stream.read_to_end(&mut actual).await.unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+            assert!(actual.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_before_zero_rtt_authentication_still_refuses() {
+        let mut stream = reader(&[0x42; 16], true, false, None).await;
+        stream.zero_rtt = Some((Arc::new(SessionCache::default()), [0x44; PFS_KEY_LEN]));
+        let mut actual = Vec::new();
+        let error = stream.read_to_end(&mut actual).await.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+        assert!(actual.is_empty());
+    }
+
+    #[tokio::test]
+    async fn encryption_eof_in_authenticated_padding_still_refuses() {
+        for use_aes in [true, false] {
+            let mut aead = Aead::new(PEER_CONTEXT, &SYNTHETIC_KEY, use_aes);
+            let mut padding = vec![0_u8; 1 + TAG_LEN];
+            aead.seal_in_place(&[], &mut padding, 1).unwrap();
+            let mut stream = reader(
+                &padding[..padding.len() - 1],
+                use_aes,
+                true,
+                Some(padding.len()),
+            )
+            .await;
+            let mut actual = Vec::new();
+            let error = stream.read_to_end(&mut actual).await.unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+            assert!(actual.is_empty());
+        }
     }
 }

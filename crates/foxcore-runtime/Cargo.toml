@@ -43,25 +43,36 @@ wireguard = ["foxcore-outbound/wireguard", "foxcore-tun/wireguard"]
 
 [dependencies]
 arc-swap.workspace = true
+bytes.workspace = true
+getrandom.workspace = true
+h2.workspace = true
+http.workspace = true
 foxcore-api = { path = "../foxcore-api" }
 foxcore-component = { path = "../foxcore-component" }
 foxcore-dialer = { path = "../foxcore-dialer" }
+foxcore-dns = { path = "../foxcore-dns" }
 foxcore-outbound = { path = "../foxcore-outbound", default-features = false }
 foxcore-relay = { path = "../foxcore-relay" }
 foxcore-route = { path = "../foxcore-route" }
 foxcore-share = { path = "../foxcore-share" }
 foxcore-trafficmap = { path = "../foxcore-trafficmap" }
+foxcore-transport = { path = "../foxcore-transport" }
 foxcore-tun = { path = "../foxcore-tun", default-features = false }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 # Only the tests need it: the named-loopback-inbound tests speak HTTP CONNECT
 # with Basic credentials, which is a client concern. Nothing in this crate
 # encodes base64 on the data path.
 base64.workspace = true
+rcgen = { version = "0.14.5", default-features = false, features = ["aws_lc_rs"] }
+rustls.workspace = true
+tokio-rustls.workspace = true
+x509-parser.workspace = true
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }

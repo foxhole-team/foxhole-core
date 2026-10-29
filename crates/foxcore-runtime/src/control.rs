@@ -510,16 +510,21 @@ impl CoreRuntime {
         config
             .validate()
             .map_err(|error| PolicyError::new(PolicyRefusal::Invalid, error.to_string()))?;
+        let domain_routes_need_identity = config.dns.mode != foxcore_api::DnsMode::FakeIp
+            || !config.dns.intercepts()
+            || config.dns.advertised_resolver().is_none();
         if !self.attribution_available
-            && (config
-                .routes
-                .iter()
-                .any(|rule| rule.uid.is_some() || rule.package.is_some())
-                || config.traffic.requires_identity())
+            && (config.routes.iter().any(|rule| {
+                rule.uid.is_some()
+                    || rule.package.is_some()
+                    || (domain_routes_need_identity
+                        && (!rule.exact_domains.is_empty() || !rule.domain_suffixes.is_empty()))
+            }) || config.traffic.requires_identity()
+                || !config.dns.blocklist.bypass_packages.is_empty())
         {
             return Err(PolicyError::new(
                 PolicyRefusal::IdentityUnavailable,
-                "UID/package routes require a platform flow attributor",
+                "policy requires flow attribution for UID/package rules, DNS package bypass, or domain routing without advertised active fake-IP DNS",
             ));
         }
         for rule in &config.routes {

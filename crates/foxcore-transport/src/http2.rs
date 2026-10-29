@@ -90,7 +90,7 @@ where
 
 /// Adapts one HTTP/2 stream to `AsyncRead`/`AsyncWrite`, carrying raw bytes in
 /// the request/response DATA frames (no application framing).
-struct Http2Stream {
+pub(crate) struct Http2Stream {
     send: h2::SendStream<bytes::Bytes>,
     recv: h2::RecvStream,
     write_pending: Option<bytes::Bytes>,
@@ -99,7 +99,7 @@ struct Http2Stream {
 }
 
 impl Http2Stream {
-    fn new(send: h2::SendStream<bytes::Bytes>, recv: h2::RecvStream) -> Self {
+    pub(crate) fn new(send: h2::SendStream<bytes::Bytes>, recv: h2::RecvStream) -> Self {
         Self {
             send,
             recv,

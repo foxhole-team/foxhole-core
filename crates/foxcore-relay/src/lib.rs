@@ -59,7 +59,7 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 pub struct BufferPool {
     buffer_bytes: usize,
     max_idle: usize,
-    idle: Mutex<Vec<Box<[u8]>>>,
+    idle: Mutex<Vec<Vec<u8>>>,
 }
 
 impl BufferPool {
@@ -78,16 +78,34 @@ impl BufferPool {
 
     /// Take one buffer, allocating only if the pool is empty.
     pub fn lease(&self) -> BufferLease<'_> {
-        let buffer = self
+        self.try_lease().expect("relay buffer allocation failed")
+    }
+
+    /// Refuse an invalid size or failed allocation before stream I/O begins.
+    pub fn try_lease(&self) -> io::Result<BufferLease<'_>> {
+        if self.buffer_bytes == 0 {
+            return Err(io::ErrorKind::InvalidInput.into());
+        }
+        let cached = self
             .idle
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .pop()
-            .unwrap_or_else(|| vec![0_u8; self.buffer_bytes].into_boxed_slice());
-        BufferLease {
+            .pop();
+        let buffer = match cached {
+            Some(buffer) => buffer,
+            None => {
+                let mut buffer = Vec::new();
+                buffer
+                    .try_reserve_exact(self.buffer_bytes)
+                    .map_err(|_| io::Error::from(io::ErrorKind::OutOfMemory))?;
+                buffer.resize(self.buffer_bytes, 0);
+                buffer
+            }
+        };
+        Ok(BufferLease {
             pool: self,
             buffer: Some(buffer),
-        }
+        })
     }
 
     /// How many buffers are currently parked. Test observability only — a relay
@@ -99,7 +117,7 @@ impl BufferPool {
             .len()
     }
 
-    fn give_back(&self, buffer: Box<[u8]>) {
+    fn give_back(&self, buffer: Vec<u8>) {
         // A buffer of the wrong size can only come from a caller that shared a
         // lease between pools; dropping it is cheaper than reasoning about it,
         // and it cannot happen through this crate's own API.
@@ -112,7 +130,7 @@ impl BufferPool {
         // lock when an unrelated task panicked must not be the thing that turns
         // one panic into a crash.
         let mut idle = self.idle.lock().unwrap_or_else(PoisonError::into_inner);
-        if idle.len() < self.max_idle {
+        if idle.len() < self.max_idle && idle.try_reserve(1).is_ok() {
             idle.push(buffer);
         }
     }
@@ -124,7 +142,7 @@ pub struct BufferLease<'pool> {
     pool: &'pool BufferPool,
     /// `Option` only so `Drop` can take the buffer out; it is `Some` for the
     /// whole life of the lease.
-    buffer: Option<Box<[u8]>>,
+    buffer: Option<Vec<u8>>,
 }
 
 impl BufferLease<'_> {
@@ -156,8 +174,8 @@ where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
 {
-    let mut uplink = pool.lease();
-    let mut downlink = pool.lease();
+    let mut uplink = pool.try_lease()?;
+    let mut downlink = pool.try_lease()?;
     let mut a_to_b = Transfer::default();
     let mut b_to_a = Transfer::default();
 

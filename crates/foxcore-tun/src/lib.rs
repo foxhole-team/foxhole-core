@@ -24,7 +24,10 @@ mod split;
 /// Reusable packet storage exposed for `benches/packet_path.rs`.
 pub use arena::PacketArena;
 pub use continuity::{ContinuityConfirm, ContinuityExpiry, ContinuityGate, ContinuityOutcome};
-pub use device::{TunDevice, TunFdOwner, live_devices, open_named_fd, wait_for_devices_released};
+pub use device::{
+    TunDevice, TunFdOwner, live_devices, open_exclusive_named_fd, open_named_fd,
+    wait_for_devices_released,
+};
 pub use flow::{FlowEngine, FlowEngineContext, FlowPolicyStore, PolicyGates};
 /// Compatibility alias; new code should use [`TrafficMap`].
 pub use foxcore_trafficmap::TrafficMap as ConnectionTracker;

@@ -111,6 +111,7 @@ async fn reality_builds_an_outbound_under_every_stream_transport() {
     for transport in [
         "type=tcp",
         "type=grpc&serviceName=fox&mode=gun",
+        "type=xhttp&mode=auto",
         "type=ws&path=%2Fws",
         "type=httpupgrade&path=%2Fup",
     ] {
@@ -136,6 +137,71 @@ async fn grpc_frames_cross_a_completed_reality_stream() {
          ?encryption=none&security=reality&sni={SNI}&fp=chrome\
          &pbk={encoded}&sid=aabb&server_ip=127.0.0.1\
          &type=grpc&serviceName=fox&mode=gun#node"
+    );
+
+    let (outbound, _config, _dropped) = outbound_from(&link_text).await;
+
+    let dial = tokio::spawn(async move {
+        outbound
+            .connect_stream(&Destination::new("origin.example", 80))
+            .await
+            .map(|_| ())
+    });
+
+    let (mut socket, _) = tokio::time::timeout(Duration::from_secs(10), listener.accept())
+        .await
+        .expect("the outbound must dial")
+        .unwrap();
+
+    let handshake = tokio::time::timeout(Duration::from_secs(20), server.handshake(&mut socket))
+        .await
+        .expect("the handshake must not hang");
+    let mut session = match handshake {
+        Ok(session) => session,
+        Err(error) => {
+            let client = tokio::time::timeout(Duration::from_secs(5), dial).await;
+            panic!("server side: {error:?}; client side: {client:?}");
+        }
+    };
+
+    let header = session.initial_record_header();
+    assert_eq!(
+        [header[1], header[2]],
+        proto_reality::testkit::observed_initial_record_version(),
+        "the initial ClientHello record header is not what the parrot promises"
+    );
+    assert_eq!(&header[..3], &[0x16, 0x03, 0x01]);
+
+    let first = tokio::time::timeout(Duration::from_secs(20), session.read(&mut socket))
+        .await
+        .expect("the carrier must send something after the handshake")
+        .expect("application data must decrypt");
+
+    assert!(
+        first.starts_with(b"PRI * HTTP/2.0\r\n"),
+        "expected an HTTP/2 preface inside the REALITY stream, got {:?}",
+        &first[..first.len().min(32)]
+    );
+
+    dial.abort();
+}
+
+#[tokio::test]
+async fn xhttp_stream_one_crosses_a_completed_qq_reality_stream() {
+    use proto_reality::testkit::RealityTestServer;
+
+    const SERVER_PRIVATE: [u8; 32] = [0x4a; 32];
+    let server = RealityTestServer::new(SERVER_PRIVATE, SNI);
+    let public_key = server.public_key().expect("public key");
+    let encoded = base64_url_nopad(&public_key);
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let link_text = format!(
+        "vless://{UUID}@example.net:{port}\
+         ?encryption=none&security=reality&sni={SNI}&fp=qq\
+         &pbk={encoded}&sid=aabb&server_ip=127.0.0.1\
+         &type=xhttp&mode=auto#node"
     );
 
     let (outbound, _config, _dropped) = outbound_from(&link_text).await;

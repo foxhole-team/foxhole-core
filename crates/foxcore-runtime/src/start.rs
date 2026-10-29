@@ -34,6 +34,26 @@ impl CoreRuntime {
         )
     }
 
+    pub fn start_with_dns_continuation(
+        generation: u64,
+        config: EngineConfig,
+        tun_fd: OwnedFd,
+        callbacks: SocketCallbacks,
+        dns_continuation: Option<DnsContinuation>,
+    ) -> io::Result<Self> {
+        Self::start_on_network_with_attributor_and_trusted_rule_sets_and_dns_continuation(
+            generation,
+            config,
+            tun_fd,
+            callbacks,
+            0,
+            FlowAttributor::none(),
+            Vec::new(),
+            Vec::new(),
+            dns_continuation,
+        )
+    }
+
     pub fn start_on_network(
         generation: u64,
         config: EngineConfig,
@@ -103,17 +123,56 @@ impl CoreRuntime {
         rule_sets: Vec<RuleSetBundle>,
         trusted_rule_sets: Vec<TrustedRuleSetBundle>,
     ) -> io::Result<Self> {
+        Self::start_on_network_with_attributor_and_trusted_rule_sets_and_dns_continuation(
+            generation,
+            config,
+            tun_fd,
+            callbacks,
+            network_handle,
+            attributor,
+            rule_sets,
+            trusted_rule_sets,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_on_network_with_attributor_and_trusted_rule_sets_and_dns_continuation(
+        generation: u64,
+        config: EngineConfig,
+        tun_fd: OwnedFd,
+        callbacks: SocketCallbacks,
+        network_handle: u64,
+        attributor: FlowAttributor,
+        rule_sets: Vec<RuleSetBundle>,
+        trusted_rule_sets: Vec<TrustedRuleSetBundle>,
+        dns_continuation: Option<DnsContinuation>,
+    ) -> io::Result<Self> {
+        if config.bootstrap_dns.is_some() {
+            config
+                .validate()
+                .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+        }
+        let imported_dns = dns_continuation
+            .as_ref()
+            .map(|previous| previous.dns_for_start(config.outbound.is_packet_tunnel()))
+            .transpose()?;
         let attribution_available = attributor.is_available();
+        let domain_routes_need_identity = config.dns.mode != foxcore_api::DnsMode::FakeIp
+            || !config.dns.intercepts()
+            || config.dns.advertised_resolver().is_none();
         if !attribution_available
-            && (config
-                .routes
-                .iter()
-                .any(|rule| rule.uid.is_some() || rule.package.is_some())
-                || config.traffic.requires_identity())
+            && (config.routes.iter().any(|rule| {
+                rule.uid.is_some()
+                    || rule.package.is_some()
+                    || (domain_routes_need_identity
+                        && (!rule.exact_domains.is_empty() || !rule.domain_suffixes.is_empty()))
+            }) || config.traffic.requires_identity()
+                || !config.dns.blocklist.bypass_packages.is_empty())
         {
             return Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "UID/package routes require a platform flow attributor",
+                "policy requires flow attribution for UID/package rules, DNS package bypass, or domain routing without advertised active fake-IP DNS",
             ));
         }
         reap_quarantined_workers();
@@ -136,6 +195,11 @@ impl CoreRuntime {
         )
         .with_handshake_timeout(Duration::from_millis(handshake_timeout_ms));
         dialer.set_network_handle(network_handle);
+        let dialer = if let Some(bootstrap) = &config.bootstrap_dns {
+            crate::bootstrap_dns::install(dialer, bootstrap)
+        } else {
+            dialer
+        };
         let cancel = CancellationToken::new();
         let metrics = Arc::new(FlowMetrics::default());
         let connections = Arc::new(TrafficMap::default());
@@ -217,18 +281,9 @@ impl CoreRuntime {
                         return;
                     }
                 };
-                // Caught, not allowed to unwind. The release order below is the
-                // whole safety property of this thread, and a panic anywhere
-                // inside the engine future — building an outbound, compiling a
-                // policy, the accept loop itself — would skip all of it and
-                // instead drop the locals in reverse declaration order: the
-                // descriptor owner first, **while the runtime is still up and
-                // its workers are still polling tasks that hold that fd**. The
-                // number is free the instant it closes, so the next `socket()`
-                // in any surviving task takes it and the tun writer starts
-                // writing IP packets into somebody else's connection. Then the
-                // runtime would be dropped through `Runtime::drop`, which has no
-                // ceiling, instead of `shutdown_timeout`.
+                // Catch engine panics so every outcome uses bounded runtime
+                // shutdown. The fd owner also revokes its registration before
+                // closing, protecting tasks retained beyond the shutdown budget.
                 //
                 // The profile unwinds (`panic = "unwind"`), precisely so the JNI
                 // boundary can catch. This is the same boundary, one level in.
@@ -294,25 +349,27 @@ impl CoreRuntime {
                             tor_enabled,
                             i2p_enabled,
                         );
-                        let policy = match FlowPolicyStore::new_with_trusted_rule_sets(
-                            generation,
-                            route_table,
-                            dns,
-                            outbounds.clone(),
-                            direct.clone(),
-                            thread_metrics.clone(),
-                            thread_events.sink(),
-                            rule_sets,
-                            trusted_rule_sets,
-                        ) {
-                            Ok(policy) => Arc::new(policy),
-                            Err(error) => {
-                                let message = format!("initialize DNS policy: {error}");
-                                set_error(&thread_error, message.clone());
-                                let _ = ready_tx.send(Err(message));
-                                return;
-                            }
-                        };
+                        let policy =
+                            match FlowPolicyStore::new_with_trusted_rule_sets_and_dns_continuation(
+                                generation,
+                                route_table,
+                                dns,
+                                outbounds.clone(),
+                                direct.clone(),
+                                thread_metrics.clone(),
+                                thread_events.sink(),
+                                rule_sets,
+                                trusted_rule_sets,
+                                imported_dns,
+                            ) {
+                                Ok(policy) => Arc::new(policy),
+                                Err(error) => {
+                                    let message = format!("initialize DNS policy: {error}");
+                                    set_error(&thread_error, message.clone());
+                                    let _ = ready_tx.send(Err(message));
+                                    return;
+                                }
+                            };
                         let engine = FlowEngine::new(FlowEngineContext {
                             outbounds: outbounds.clone(),
                             direct,
@@ -391,16 +448,12 @@ impl CoreRuntime {
                 // join that had no ceiling. It now means "everything I own is
                 // released or abandoned", which is what the caller reads it as.
                 shutdown_worker_runtime(runtime);
-                // Here, and only here. The runtime is down, so no task will be
-                // polled again and nothing can still be reading the descriptor;
-                // dropping the owner closes it whether or not the task that was
-                // using it survived `shutdown_timeout`. That is the whole point
-                // of the owner living on this thread: "the runtime is down" and
-                // "the fd is closed" became the same statement again.
+                // Revoke registration before closing the fd, even when a task
+                // retained the wrapper beyond `shutdown_timeout`.
                 drop(tun_fd_owner);
                 // The wrapper's own release is still waited for, because the app
-                // asks about the descriptor and a `TunDevice` that outlives this
-                // means a task is still holding the reactor registration. Waited
+                // asks about retained device wrappers. Their registration is
+                // already revoked, but their lifetime remains diagnostic. Waited
                 // for on a plain thread with no runtime left, so nothing here
                 // can be starved by the executor that just failed to finish.
                 let released =
@@ -464,6 +517,13 @@ impl CoreRuntime {
                         io::Error::other(format!("start named loopback inbound: {error}"))
                     })?;
                 runtime.start_continuity_watch();
+                if let Some(previous) = &dns_continuation
+                    && let Err(error) = previous.check_ready()
+                {
+                    return Err(crate::dns_continuation::retire_revoked_successor(
+                        &runtime, error,
+                    ));
+                }
                 Ok(runtime)
             }
             Ok(Err(message)) => {

@@ -38,6 +38,8 @@ pub(crate) enum UpstreamState {
     Udp(BoxDatagramSession),
     Stream(BoxStream),
     Doh(h2::client::SendRequest<Bytes>),
+    Doq(std::sync::Arc<foxcore_transport::dns_quic::DnsQuicConnection>),
+    Doh3(std::sync::Arc<foxcore_transport::dns_quic::DnsQuicConnection>),
 }
 
 pub(crate) struct UpstreamPool {
@@ -52,7 +54,10 @@ impl UpstreamPool {
         // HTTP/2 already multiplexes requests after connection setup. UDP,
         // TCP and DoT need independent lanes so a lost response cannot hold
         // the only session mutex and stall every lookup behind it.
-        let lane_count = if matches!(upstream, DnsUpstream::Doh { .. }) {
+        let lane_count = if matches!(
+            upstream,
+            DnsUpstream::Doh { .. } | DnsUpstream::Doq { .. } | DnsUpstream::Doh3 { .. }
+        ) {
             1
         } else {
             DNS_UPSTREAM_POOL_LANES
@@ -76,6 +81,10 @@ impl UpstreamPool {
 
     pub(crate) fn try_lock(&self) -> Option<tokio::sync::MutexGuard<'_, UpstreamState>> {
         self.lanes.iter().find_map(|lane| lane.try_lock().ok())
+    }
+
+    pub(crate) async fn multiplexed_lock(&self) -> tokio::sync::MutexGuard<'_, UpstreamState> {
+        self.lanes[0].lock().await
     }
 
     pub(crate) fn reset_idle(&self) {

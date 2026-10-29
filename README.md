@@ -52,29 +52,39 @@ TUN → flow engine → routing policy → outbound
 ```
 
 > [!WARNING]
-> **Status:** early beta. Production hardening and part of the device gates are
-> not yet complete. Protocol maturity is listed in the table below; independently
+> **Release channel:** Stable. Device and interoperability acceptance remains
+> specific to each release artifact. Protocol maturity is listed in the table below; independently
 > verified interoperability is documented in [`interop.md`](docs/interop.md).
 >
 > **TLS fingerprint:** a Reality connection sends a browser-faithful
 > ClientHello — nine profiles, seven transcribed from uTLS and two from
 > first-party captures, matching real Chromium on
 > the human-readable part of JA4.
-> rustls exposes no API for GREASE or extension order, so REALITY keeps its
-> compiled Fox-owned ClientHello generator. Direct BoringSSL is deliberately not
-> another backend: it would add an Android C++/FFI path without replacing
-> REALITY, Quinn, or the non-Chromium profiles.
+> REALITY keeps its compiled Fox-owned ClientHello generator. Generic TCP TLS
+> separately supports an explicit `chrome_151` profile through the pinned rustls
+> fork; incompatible TLS settings are refused. These two mechanisms are described
+> in [TLS fingerprinting](docs/architecture/02-cryptography.md#25-tls-fingerprinting--two-disjoint-mechanisms).
 
 ### Documentation
 
 | Document | Purpose |
 | --- | --- |
-| [Beta architecture](docs/architecture/README.md) | cross-repository architecture, trust boundaries and release data flow for the public beta |
+| [Architecture](docs/architecture/README.md) | cross-repository architecture, trust boundaries and release data flow |
 | [SECURITY.md](SECURITY.md) | vulnerability reporting and security scope |
 | [threat-model.md](docs/threat-model.md) | threat model and security boundaries |
 | [abi.md](docs/abi.md) | FFI contract: handles, threads, panic boundaries, error codes and limits |
 | [interop.md](docs/interop.md) | independently verified interoperability |
 | [fingerprints/](fingerprints/) | provenance of REALITY ClientHello fingerprints |
+
+FoxHole VPN is a separate consumer of the same Core ABI. Its connection-data updater checks
+the signed FoxHole DB REALITY table feed against the pinned compiled baseline and applies
+changed tables only after a user action. It downloads data for known profiles, not native code
+or other Guard feeds. Native acceptance affects future handshakes in that application's process
+without reconnecting the tunnel; see [VPN client architecture](docs/architecture/06-vpn-client.md).
+
+[FoxHole OpenWRT Client](https://github.com/foxhole-team/foxhole-openwrt-client) is the
+public-beta router package using the same Core. The prepared package is `1.0.0-r4`;
+router compatibility and installation mode are selected during setup.
 
 ---
 
@@ -84,7 +94,7 @@ TUN → flow engine → routing policy → outbound
 | --- | --- |
 | **TUN** | exact-pinned smoltcp TCP actor, Fox-owned UDP demux and ICMPv4 echo, bounded flow/packet memory |
 | **Routing** | compiled indexes, O(1) package policy, Direct/VPN/Tor/Block, I2P gate |
-| **DNS** | UDP/TCP, DoT, DoH, cache, stale cache, fake-IP |
+| **DNS** | UDP/TCP, DoT, DoH over HTTP/2, DoQ, DoH over HTTP/3, cache, stale cache, fake-IP |
 | **Android protected dialer** | Android callback `protect(fd)` → bind to the selected Android `Network` → connect/send |
 | **TLS** | rustls/WebPKI, SNI, ALPN, SPKI SHA-256 pin, ECH and ECH GREASE |
 | **Firewall** | Block priority, kill switch, quarantine, TTL rules |
@@ -98,6 +108,30 @@ TUN → flow engine → routing policy → outbound
 Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow exceeding the limit is rejected and accounted for. TCP admission also shares a 64 MiB buffer budget, and a handshake that never establishes releases its reservation after 30 seconds. Each UDP flow retains at most 32 packets while its outbound is busy; UDP and raw responses use bounded 256-packet queues back to the TUN, and UDP overflow is dropped and counted.
 
 ---
+
+## Subscription and profile import
+
+| Input | Supported content |
+| --- | --- |
+| URI subscription | Plaintext links, one per line, or a Base64-encoded body |
+| Clash / Mihomo YAML | Compatible nodes in `proxies`; unsupported nodes and client settings are reported |
+| SIP008 JSON | Version 1 Shadowsocks server lists |
+| Outline JSON | One Shadowsocks access-key object; `ss://` links also work |
+
+URI schemes include `vless`, `vmess`, `hysteria2` / `hy2`, `trojan`, `ss`,
+`wg` / `wireguard`, `socks` / `socks4` / `socks5`, `http` / `https`,
+`naive` / `naive+https`, and `anytls`, subject to the protocol modules in the build.
+The CLI also imports canonical Core JSON and WireGuard `[Interface]` configuration;
+its `import` command requires exactly one profile. Arbitrary Xray or sing-box JSON
+is not a supported subscription format.
+
+Core parses subscription bodies without downloading them. Clients own download,
+redirect and TLS policy, including fetching dynamic Outline `ssconf://` sources.
+FoxHole Android apps additionally unwrap v2rayTun import links before calling Core.
+Partial import returns rejected entries explicitly; strict import rejects an
+unsupported entry. See the [subscription parser](crates/foxcore-link/src/lib.rs),
+[structured formats](crates/foxcore-link/src/structured.rs), and
+[CLI import](crates/foxcore-cli/src/import.rs).
 
 ## 🧭 Architecture and execution model
 
@@ -128,12 +162,12 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 
 | Protocol | Support | Maturity |
 | --- | --- | --- |
-| **VLESS** | raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH; Reality under any stream transport, Vision over raw TCP | `beta` |
-| **VMess** | AEAD (`alterId=0`), TCP/UDP, raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH | `beta` |
+| **VLESS** | raw, WebSocket, HTTP Upgrade, gRPC/H2, XHTTP stream-one over H2, TLS, ECH; Reality under stream transports, Vision over raw TCP | `beta` |
+| **VMess** | AEAD (`alterId=0`), TCP/UDP, raw, WebSocket, HTTP Upgrade, gRPC/H2, XHTTP stream-one over H2, TLS, ECH | `beta` |
 | **Hysteria2** | QUIC/H3, Brutal, Salamander obfs, TCP/UDP, destination port hopping | `beta` |
 | **WireGuard** | implementation of the Noise_IKpsk2 handshake, L3 tunnel, `reserved`, `wg://`, `.conf` | `beta` |
 | **AmneziaWG** | AWG parameters and 2.0 init-packet templates | `experimental` |
-| **Trojan** | TLS TCP/UDP, WebSocket, HTTP Upgrade, gRPC/H2, ECH | `beta` |
+| **Trojan** | TLS TCP/UDP, WebSocket, HTTP Upgrade, gRPC/H2, XHTTP stream-one over H2, ECH | `beta` |
 | **Shadowsocks** | AEAD + AEAD-2022, TCP/UDP | `beta` |
 | **Outline** | Shadowsocks variant, static prefix for AEAD over TCP | `beta` |
 | **Naive** | native HTTP/2 CONNECT with protocol padding, TCP only | `beta` |
@@ -155,6 +189,7 @@ The protocol list above is not a freely composable transport matrix:
 
 - **Reality** is a security layer, not a carrier, and is mutually exclusive with normal TLS. A stream transport may sit above it: WebSocket, HTTP Upgrade, gRPC and H2 are all accepted, gRPC being the common shape in the wild. **Vision** is the exception — it requires raw TCP.
 - **Vision**, in this implementation, requires TLS 1.3 on the outer layer and `packet_encoding = xudp`, and rejects UDP on port 443.
+- **XHTTP** implements only stream-one over HTTP/2. Other modes and unsupported settings are refused.
 - **Outline** `prefix=` applies to AEAD ciphers over TCP; it is not carried over to AEAD-2022 or UDP.
 - **Hysteria2 port hopping** rotates the destination port from the configured set while retaining one protected local UDP socket. The reference client also rotates the source port, so this implementation is deliberately narrower.
 - **ShadowTLS v3** carries Shadowsocks only; no share-link form is supported.
@@ -181,7 +216,7 @@ WireGuard is an L3 tunnel with an implementation of the Noise_IKpsk2 handshake. 
 
 Endpoint roaming is not implemented; there is no server role.
 
-AmneziaWG adds junk/header parameters (`Jc`, `Jmin`, `Jmax`, `S1`–`S4`, `H1`–`H4`) and 2.0 init-packet tag templates `I1`–`I5`. Ranges for `H1`–`H4` are not supported; single values are supported.
+AmneziaWG adds junk/header parameters (`Jc`, `Jmin`, `Jmax`, `S1`–`S4`, `H1`–`H4`), checked header ranges and 2.0 init-packet tag templates `I1`–`I5`. Optional `RandomTrailers`, content-padding ranges and `HeaderProtectionKey` have explicit validation and bounded allocation. Endpoint roaming, server mode and container-link imports remain unsupported; AmneziaWG remains experimental.
 
 ### Intentionally unsupported
 
@@ -425,17 +460,18 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-Release archive ABIs:
+The 1.0.0 release candidate requires the `android4` delivery profile:
 
 ```text
 arm64-v8a
 armeabi-v7a
+x86
+x86_64
 ```
 
-Both ARM libraries are rebuilt, ELF-gated and packaged by the core release workflow.
-`x86_64` remains an explicit emulator build and is not published. FoxHole Guard's APK
-currently defaults to `arm64-v8a`; that app packaging choice does not remove
-`armeabi-v7a` from the standalone FoxCore release archive.
+`config/foxcore-android-delivery.json` and the LAB release scope require current JNI
+artifacts, capabilities origins and ELF checks for all four ABIs. Compilation and
+packaging checks remain separate from runtime acceptance on each device class.
 
 Native build gates:
 
@@ -451,10 +487,11 @@ Native build gates:
 
 ## 🔏 Release integrity
 
-A `main` release is accepted only when its source tree is identical to a successful full `dev` gate.
-The dev artifact is not retained: `main` rebuilds both Android libraries from the same pinned
-Rust, NDK and lockfile inputs, then re-checks the rollback manifest, ABI, SBOM and hashes before
-signing or publishing anything.
+Native builds and full release checks run in the private LAB or on the authorized build host
+with pinned Rust, NDK and lockfile inputs. The GitHub publisher verifies the owner-signed source
+and immutable LAB handoff, checks the selected archive and required evidence, then publishes
+those exact bytes without rebuilding. The handoff binds the delivery source and compiled
+producer separately; documentation-only changes do not change a native producer identity.
 
 Each release archive contains the gated JNI libraries, their rollback manifest,
 the committed CycloneDX SBOMs and `Cargo.lock`. The release also contains
@@ -572,8 +609,15 @@ sbom/*.cdx.json
 
 ## 🔗 Related projects
 
-[![FoxHole Guard](https://img.shields.io/badge/GitHub-FoxHole_Guard-181717?logo=github)](https://github.com/foxhole-team/foxhole-guard)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-guard?label=version)](https://github.com/foxhole-team/foxhole-guard/releases)
+[![FoxHole DB](https://img.shields.io/badge/GitHub-FoxHole_DB-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-db)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-db?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-db/releases)
 
-[![FoxHole DB](https://img.shields.io/badge/GitHub-FoxHole_DB-181717?logo=github)](https://github.com/foxhole-team/foxhole-db)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-db?label=version)](https://github.com/foxhole-team/foxhole-db/releases)
+[![FoxHole Guard](https://img.shields.io/badge/GitHub-FoxHole_Guard-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-guard)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-guard?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-guard/releases)
+
+[![FoxHole VPN](https://img.shields.io/badge/GitHub-FoxHole_VPN-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-vpn)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-vpn?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-vpn/releases)
+
+[![FoxHole OpenWrt](https://img.shields.io/badge/GitHub-FoxHole_OpenWrt-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-openwrt-client)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-openwrt-client?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-openwrt-client/releases)
+

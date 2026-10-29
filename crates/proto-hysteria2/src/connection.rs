@@ -7,7 +7,7 @@
 //!      `qpack` crate) carrying `hysteria-auth` / `hysteria-cc-rx`; read the `:status 233` reply.
 //!   4. Each proxied TCP flow is a fresh bidi stream: `varint(0x401) | addr | padding`, then relay.
 //!
-//! Congestion is the Brutal controller ([`crate::brutal`]), targeted at `up_mbps` bytes/sec.
+//! Congestion and socket pacing switch only after the server's authenticated rate response.
 
 use std::io;
 use std::net::SocketAddr;
@@ -22,9 +22,11 @@ use qpack::{HeaderField, decode_stateless, encode_stateless};
 use quinn::{Connection, Endpoint, RecvStream, SendStream};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, Join};
 
-use crate::brutal::BrutalConfig;
+use crate::congestion::NegotiatedConfig;
 use crate::hop::{HopPlan, PortHopRuntime};
+use crate::negotiated::{ReceiveLimit, UploadControl, upload_mode};
 use crate::obfs::SalamanderRuntime;
+use crate::pacing::PacedRuntime;
 use crate::{codec as h2, varint};
 
 const H3_CONTROL_STREAM: u64 = 0x00;
@@ -48,7 +50,7 @@ pub struct Hysteria2Conn {
     conn: Connection,
     // Kept alive so the connection (and its H3 control stream) is not torn down.
     _endpoint: Endpoint,
-    _control: SendStream,
+    _control: Option<SendStream>,
     /// Whether the server advertised `hysteria-udp: true`.
     pub udp_enabled: bool,
 }
@@ -61,8 +63,7 @@ impl Hysteria2Conn {
         server_addr: SocketAddr,
         dialer: &ProtectedDialer,
     ) -> io::Result<Arc<Self>> {
-        // Build the UDP socket ourselves so its fd can be handed to `VpnService.protect()` before
-        // QUIC sends anything — an unprotected first datagram would route back into our own TUN.
+        // Protect before QUIC sends its first datagram, or it loops into our TUN.
         let socket = dialer.bind_udp_std(server_addr.is_ipv6())?;
         let mut endpoint_config = quinn::EndpointConfig::default();
         quic_shape::apply_endpoint_shape(&mut endpoint_config);
@@ -88,8 +89,10 @@ impl Hysteria2Conn {
             }
             None => runtime,
         };
+        let upload = Arc::new(UploadControl::default());
+        let runtime = PacedRuntime::for_upload(runtime, upload.clone(), cfg.up_mbps);
         let mut endpoint = Endpoint::new(endpoint_config, None, socket, runtime)?;
-        endpoint.set_default_client_config(build_client_config(cfg)?);
+        endpoint.set_default_client_config(build_client_config(cfg, upload.clone())?);
 
         let sni = cfg.tls.server_name.as_deref().unwrap_or(&cfg.server);
         let connecting = endpoint
@@ -105,18 +108,23 @@ impl Hysteria2Conn {
             })?
             .map_err(|e| other(format!("quic handshake: {e}")))?;
 
-        // H3 control stream + SETTINGS (stateless QPACK: advertise no dynamic table).
-        let mut control = conn.open_uni().await.map_err(quic_io)?;
-        control.write_all(&control_settings_frame()).await?;
-
-        let udp_enabled = authenticate(&conn, cfg).await?;
-
-        Ok(Arc::new(Self {
+        let mut connection = Self {
             conn,
             _endpoint: endpoint,
-            _control: control,
-            udp_enabled,
-        }))
+            _control: None,
+            udp_enabled: false,
+        };
+        // Own the close guard before either HTTP/3 stream can stall.
+        let mut control = connection.conn.open_uni().await.map_err(quic_io)?;
+        control.write_all(&control_settings_frame()).await?;
+        connection._control = Some(control);
+        let response = authenticate(&connection.conn, cfg).await?;
+        connection.udp_enabled = response.udp_enabled;
+        upload.apply(upload_mode(
+            u64::from(cfg.up_mbps) * 125_000,
+            response.receive_limit,
+        ));
+        Ok(Arc::new(connection))
     }
 
     /// The underlying QUIC connection, for the datagram-based UDP relay
@@ -149,6 +157,13 @@ impl Hysteria2Conn {
         h2::encode_tcp_request(target, &[], &mut req).map_err(|e| other(e.to_string()))?;
         send.write_all(&req).await?;
         Ok(LazyTcpResponse::new(tokio::io::join(recv, send)))
+    }
+}
+
+impl Drop for Hysteria2Conn {
+    fn drop(&mut self) {
+        self.conn
+            .close(quinn::VarInt::from_u32(0), b"Hysteria client closed");
     }
 }
 
@@ -350,8 +365,7 @@ fn control_settings_frame() -> Vec<u8> {
     out
 }
 
-/// Send the H3 `POST /auth` request and parse the response. Returns whether UDP is enabled.
-async fn authenticate(conn: &Connection, cfg: &Hysteria2Config) -> io::Result<bool> {
+async fn authenticate(conn: &Connection, cfg: &Hysteria2Config) -> io::Result<AuthResponse> {
     let (mut send, mut recv) = conn.open_bi().await.map_err(quic_io)?;
 
     let down_bps = u64::from(cfg.down_mbps) * 125_000;
@@ -403,26 +417,52 @@ async fn authenticate(conn: &Connection, cfg: &Hysteria2Config) -> io::Result<bo
     }
 }
 
-fn parse_auth_response(block: &[u8]) -> io::Result<bool> {
+#[derive(Debug, PartialEq, Eq)]
+struct AuthResponse {
+    udp_enabled: bool,
+    receive_limit: ReceiveLimit,
+}
+
+fn parse_auth_response(block: &[u8]) -> io::Result<AuthResponse> {
     let mut cursor: &[u8] = block;
     let decoded = decode_stateless(&mut cursor, MAX_RESPONSE_HEADERS_LEN as u64)
         .map_err(|e| other(format!("qpack decode: {e:?}")))?;
 
-    let mut ok = false;
-    let mut udp = false;
+    let mut status = None;
+    let mut headers = Vec::new();
     for f in &decoded.fields {
         let name = f.name.as_ref();
         let value = f.value.as_ref();
         if name == b":status" {
-            ok = value == h2::AUTH_OK_STATUS.as_bytes();
-        } else if name.eq_ignore_ascii_case(b"hysteria-udp") {
-            udp = value.eq_ignore_ascii_case(b"true");
+            if status
+                .replace(value == h2::AUTH_OK_STATUS.as_bytes())
+                .is_some()
+            {
+                return Err(other("duplicate Hysteria auth status"));
+            }
+        } else {
+            let name =
+                std::str::from_utf8(name).map_err(|_| other("invalid Hysteria header name"))?;
+            let value =
+                std::str::from_utf8(value).map_err(|_| other("invalid Hysteria header value"))?;
+            headers.push((name, value));
         }
     }
-    if !ok {
+    if status != Some(true) {
         return Err(other("hysteria2 auth rejected (status != 233)"));
     }
-    Ok(udp)
+    let response = h2::try_parse_auth_response(h2::AUTH_OK_STATUS, headers)?;
+    let receive_limit = if response.cc_rx_auto {
+        ReceiveLimit::Automatic
+    } else if response.cc_rx_bytes_per_sec == 0 {
+        ReceiveLimit::Unlimited
+    } else {
+        ReceiveLimit::BytesPerSecond(response.cc_rx_bytes_per_sec)
+    };
+    Ok(AuthResponse {
+        udp_enabled: response.udp_enabled,
+        receive_limit,
+    })
 }
 
 fn quic_timing(cfg: &Hysteria2Config) -> io::Result<(quinn::IdleTimeout, Duration)> {
@@ -432,7 +472,10 @@ fn quic_timing(cfg: &Hysteria2Config) -> io::Result<(quinn::IdleTimeout, Duratio
     Ok((idle_timeout, Duration::from_millis(cfg.keepalive_ms)))
 }
 
-fn build_client_config(cfg: &Hysteria2Config) -> io::Result<quinn::ClientConfig> {
+fn build_client_config(
+    cfg: &Hysteria2Config,
+    upload: Arc<UploadControl>,
+) -> io::Result<quinn::ClientConfig> {
     let mut tls_config = cfg.tls.clone();
     if tls_config.alpn.is_empty() {
         tls_config.alpn.push(quic::DEFAULT_ALPN.into());
@@ -445,10 +488,7 @@ fn build_client_config(cfg: &Hysteria2Config) -> io::Result<quinn::ClientConfig>
     client.initial_dst_cid_provider(Arc::new(quic_shape::initial_destination_connection_id));
 
     let mut transport = quinn::TransportConfig::default();
-    let target_bps = u64::from(cfg.up_mbps) * 125_000;
-    if target_bps > 0 {
-        transport.congestion_controller_factory(Arc::new(BrutalConfig::new(target_bps)));
-    }
+    transport.congestion_controller_factory(Arc::new(NegotiatedConfig(upload)));
     let (idle_timeout, keepalive) = quic_timing(cfg)?;
     transport.max_idle_timeout(Some(idle_timeout));
     transport.keep_alive_interval(Some(keepalive));

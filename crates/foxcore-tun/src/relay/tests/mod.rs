@@ -29,7 +29,11 @@ fn outbound(endpoint: SocketAddr) -> PacketTunnelOutbound {
 }
 
 fn outbound_through(endpoint: SocketAddr, dialer: ProtectedDialer) -> PacketTunnelOutbound {
-    let config = WireguardConfig {
+    PacketTunnelOutbound::wireguard(peer_config(endpoint), dialer).unwrap()
+}
+
+fn peer_config(endpoint: SocketAddr) -> WireguardConfig {
+    WireguardConfig {
         server: endpoint.ip().to_string(),
         port: endpoint.port(),
         server_ip: Some(endpoint.ip()),
@@ -42,8 +46,7 @@ fn outbound_through(endpoint: SocketAddr, dialer: ProtectedDialer) -> PacketTunn
         persistent_keepalive_s: None,
         reserved: None,
         amnezia: None,
-    };
-    PacketTunnelOutbound::wireguard(config, dialer).unwrap()
+    }
 }
 
 /// What the platform does to every socket the core opens, recorded in the

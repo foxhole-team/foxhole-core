@@ -69,7 +69,7 @@ impl PacketTunnelRelay {
                 ),
             ));
         }
-        let endpoint = PeerEndpoint::of(outbound);
+        let mut endpoint = PeerEndpoint::of(outbound);
         let (socket, peer) = endpoint.open().await?;
         let tunnel = PeerTunnel::new(outbound.settings().clone(), Box::new(OsEntropy))
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
@@ -129,7 +129,7 @@ impl PacketTunnelRelay {
         let Self {
             mut tunnel,
             socket,
-            endpoint,
+            mut endpoint,
             mut peer,
             mut network,
             network_keepalive,
@@ -207,7 +207,7 @@ impl PacketTunnelRelay {
                     // cancellation" when in fact it never asked.
                     let rebound = tokio::select! {
                         _ = cancel.cancelled() => return Ok(()),
-                        rebound = rebind(&endpoint, &mut tunnel, started, &metrics) => rebound,
+                        rebound = rebind(&mut endpoint, &mut tunnel, started, &metrics, true) => rebound,
                     };
                     match rebound {
                         Some((fresh, address)) => {
@@ -365,7 +365,7 @@ impl PacketTunnelRelay {
                         // Same reason as the network-change branch above.
                         tokio::select! {
                             _ = cancel.cancelled() => return Ok(()),
-                            rebound = rebind(&endpoint, &mut tunnel, started, &metrics) => rebound,
+                            rebound = rebind(&mut endpoint, &mut tunnel, started, &metrics, false) => rebound,
                         }
                     } else {
                         None
@@ -378,6 +378,27 @@ impl PacketTunnelRelay {
                     } else if socket.is_none() {
                         rebind_backoff =
                             (rebind_backoff * 2).min(REBIND_BACKOFF_MAX);
+                    }
+                    let now = elapsed_ms(started);
+                    if socket.is_some() && tunnel.unanswered_retry_due(now) {
+                        let replacement = tokio::select! {
+                            _ = cancel.cancelled() => return Ok(()),
+                            replacement = endpoint.next_candidate() => replacement,
+                        };
+                        match replacement {
+                            Ok(Some((fresh, address))) => {
+                                if tunnel.retry_on_new_endpoint(elapsed_ms(started)).is_ok() {
+                                    socket = Some(fresh);
+                                    peer = address;
+                                    receive_errors = 0;
+                                    metrics.tunnel_rebind();
+                                } else {
+                                    metrics.tunnel_unsealed();
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(_) => metrics.tunnel_rebind_failure(),
+                        }
                     }
                     let _ = tunnel.tick(elapsed_ms(started));
                     sent_since_heard |= flush(&mut tunnel, socket.as_ref(), &metrics).await;
@@ -476,12 +497,18 @@ async fn recv_from(socket: Option<&UdpSocket>, buffer: &mut [u8]) -> io::Result<
 /// not a reconnect — and the announcement below is what makes the peer start
 /// using the new address for the downstream direction.
 async fn rebind(
-    endpoint: &PeerEndpoint,
+    endpoint: &mut PeerEndpoint,
     tunnel: &mut PeerTunnel,
     started: Instant,
     metrics: &FlowMetrics,
+    refresh_dns: bool,
 ) -> Option<(UdpSocket, SocketAddr)> {
-    let Ok((socket, address)) = endpoint.open().await else {
+    let opened = if refresh_dns {
+        endpoint.refresh().await
+    } else {
+        endpoint.open().await
+    };
+    let Ok((socket, address)) = opened else {
         metrics.tunnel_rebind_failure();
         return None;
     };

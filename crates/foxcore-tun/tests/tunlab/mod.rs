@@ -210,6 +210,21 @@ pub fn datagram_from(
     ip
 }
 
+pub fn datagram_from_source(
+    source: Ipv4Addr,
+    client_port: u16,
+    server: Ipv4Addr,
+    destination_port: u16,
+    payload: &[u8],
+) -> Vec<u8> {
+    let mut packet = datagram_from(client_port, server, destination_port, payload);
+    packet[12..16].copy_from_slice(&source.octets());
+    packet[10..12].fill(0);
+    let checksum = internet_checksum(&[&packet[..IPV4_HEADER]]);
+    packet[10..12].copy_from_slice(&checksum.to_be_bytes());
+    packet
+}
+
 /// A TCP segment the core sent to our client port.
 ///
 /// The sequence number matters: the stack picks a random ISN, and an ACK that
@@ -640,6 +655,98 @@ impl Lab {
             }
         }
         false
+    }
+
+    pub async fn dns_datagram(
+        &self,
+        resolver: Ipv4Addr,
+        client_port: u16,
+        query: &[u8],
+        within: Duration,
+    ) -> Option<Vec<u8>> {
+        self.dns_datagram_from_source(CLIENT, resolver, client_port, query, within)
+            .await
+    }
+
+    pub async fn dns_datagram_from_source(
+        &self,
+        source: Ipv4Addr,
+        resolver: Ipv4Addr,
+        client_port: u16,
+        query: &[u8],
+        within: Duration,
+    ) -> Option<Vec<u8>> {
+        self.app
+            .send(&datagram_from_source(
+                source,
+                client_port,
+                resolver,
+                53,
+                query,
+            ))
+            .await
+            .expect("inject DNS datagram");
+        let deadline = tokio::time::Instant::now() + within;
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let length = tokio::time::timeout_at(deadline, self.app.recv(&mut buffer))
+                .await
+                .ok()?
+                .ok()?;
+            if length < 28 || buffer[9] != PROTOCOL_UDP {
+                continue;
+            }
+            let header = usize::from(buffer[0] & 0x0f) * 4;
+            if length < header + 8 {
+                continue;
+            }
+            let port = u16::from_be_bytes([buffer[header + 2], buffer[header + 3]]);
+            if port == client_port {
+                return Some(buffer[header + 8..length].to_vec());
+            }
+        }
+    }
+
+    pub async fn receive_tcp_payload(
+        &mut self,
+        within: Duration,
+        complete: impl Fn(&[u8]) -> bool,
+    ) -> Option<Vec<u8>> {
+        let deadline = tokio::time::Instant::now() + within;
+        let mut buffer = [0_u8; 4096];
+        let mut bytes = Vec::new();
+        loop {
+            let length = tokio::time::timeout_at(deadline, self.app.recv(&mut buffer))
+                .await
+                .ok()?
+                .ok()?;
+            let Some(seen) = tcp_for_client(&buffer[..length]) else {
+                continue;
+            };
+            if seen.flags & FLAG_RST != 0 {
+                return None;
+            }
+            let ip_header = usize::from(buffer[0] & 0x0f) * 4;
+            let tcp_header = usize::from(buffer[ip_header + 12] >> 4) * 4;
+            let payload = &buffer[ip_header + tcp_header..length];
+            if seen.sequence == self.acknowledgement {
+                bytes.extend_from_slice(payload);
+                assert!(bytes.len() <= 16_384, "bounded test stream");
+                self.acknowledgement = self.acknowledgement.wrapping_add(payload.len() as u32);
+                if seen.flags & FLAG_FIN != 0 {
+                    self.acknowledgement = self.acknowledgement.wrapping_add(1);
+                }
+            }
+            if !payload.is_empty() || seen.flags & FLAG_FIN != 0 {
+                self.send(FLAG_ACK, &[]).await;
+            }
+            if complete(&bytes) {
+                return Some(bytes);
+            }
+            if seen.flags & FLAG_FIN != 0 {
+                return None;
+            }
+        }
     }
 
     pub async fn stop(self) {

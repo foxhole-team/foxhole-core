@@ -1,30 +1,7 @@
 #!/usr/bin/env bash
-# CycloneDX SBOM of what actually ships, from cargo's own resolution.
-#
-# Generated from `cargo metadata --locked`, so the document describes the
-# lockfile in the tree rather than whatever crates.io resolves to today. Two
-# runs on the same lockfile produce byte-identical output: there is no timestamp
-# and no serial number in it, deliberately, because an SBOM that changes every
-# time it is generated cannot be reviewed as a diff — and a diff is the only way
-# anyone notices a dependency appearing.
-#
-# No new tool in the supply chain. cargo-cyclonedx and cargo-sbom would each add
-# a build-time dependency tree to a repository whose supply chain is part of its
-# threat model, to produce a document cargo already has all the inputs for.
-#
-# What is in the shipped SBOM (`--target`, default aarch64-linux-android):
-#   * only crates that survive platform filtering for that target;
-#   * only normal and build dependencies — dev-dependencies are excluded,
-#     because a test harness is not in the .so;
-#   * the resolved dependency graph, not just a flat list.
-# `--all` writes the unfiltered workspace graph instead, dev-dependencies and
-# every platform included: that is the graph `cargo deny` reasons about.
-#
-# Usage:
-#   scripts/sbom.sh                       # sbom/foxcore-aarch64-linux-android.cdx.json
-#   scripts/sbom.sh --target armv7-linux-androideabi
-#   scripts/sbom.sh --all                 # sbom/workspace-all-targets.cdx.json
-#   scripts/sbom.sh --check               # regenerate and fail if it differs
+# Deterministic CycloneDX graph from cargo metadata --locked.
+# Target graphs exclude dev dependencies; --all retains all platforms and dependency kinds.
+# Usage: scripts/sbom.sh [--target TARGET | --all] [--check]
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -73,10 +50,16 @@ cargo metadata --locked --format-version 1 "${METADATA_ARGS[@]+"${METADATA_ARGS[
 FOXCORE_METADATA="$WORK/metadata.json" \
     FOXCORE_TARGET="$([ "$ALL" = "1" ] && echo "all-targets" || echo "$TARGET")" \
     FOXCORE_ALL="$ALL" \
+FOXCORE_SOURCE_ROOT="$ROOT" \
     python3 - >"$WORK/sbom.json" <<'PYTHON'
+import hashlib
+import importlib.util
 import json
 import os
+import re
+import stat
 import sys
+from pathlib import Path
 
 metadata = json.load(open(os.environ["FOXCORE_METADATA"], encoding="utf-8"))
 target = os.environ["FOXCORE_TARGET"]
@@ -87,9 +70,42 @@ workspace = set(metadata["workspace_members"])
 resolve = metadata["resolve"]
 nodes = {node["id"]: node for node in resolve["nodes"]}
 
+source_root = Path(os.environ["FOXCORE_SOURCE_ROOT"])
+fork_origin = None
+fork_ids = set()
+fork_module = None
+fork_candidates = [p for p in packages.values() if p.get("source") is None and p["name"] == "rustls"]
+if fork_candidates or (source_root / "config/source-forks/rustls-0.23.46.json").exists():
+    if len(fork_candidates) != 1:
+        raise ValueError("Frozen rustls fork must resolve to exactly one path package")
+    fork_package = fork_candidates[0]
+    if (fork_package["version"] != "0.23.46" or fork_package["id"] in workspace or
+            Path(fork_package["manifest_path"]).resolve() != (source_root / "vendor/rustls/Cargo.toml").resolve()):
+        raise ValueError("Only the exact non-workspace vendor/rustls0.23.46 source is admitted")
+    revision = os.environ.get("FOXCORE_SOURCE_REVISION", "")
+    if re.fullmatch("[0-9a-f]{40}", revision) is None:
+        raise ValueError("Modified rustls SBOM requires the actual FOXCORE_SOURCE_REVISION")
+    spec = importlib.util.spec_from_file_location("rustls_fork_origin", source_root / "scripts/rustls-fork-origin.py")
+    fork_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fork_module)
+    vendor_root = source_root / fork_module.VENDOR_PATH
+    if any(p.is_symlink() for p in vendor_root.rglob("*")):
+        raise ValueError("Vendor source cannot contain symlinks")
+    names = {str(p.relative_to(source_root)) for p in vendor_root.rglob("*") if p.is_file()}
+    names.update((fork_module.ORIGIN_PATH, fork_module.UPSTREAM_PATH, fork_module.PATCH_PATH, fork_module.NOTICE_PATH))
+    def read_source(name):
+        path = source_root / name
+        if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file() or path.stat().st_nlink != 1:
+            raise ValueError("Fork source must be regular and cannot traverse symlinks")
+        return path.read_bytes(), stat.S_IMODE(path.stat().st_mode)
+    fork_origin = fork_module.validate_origin(read_source, names)
+    fork_ids = {fork_package["id"]}
+
 
 def ref(package_id: str) -> str:
     package = packages[package_id]
+    if package_id in fork_ids:
+        return fork_module.identity_url(fork_origin, revision)
     return f"pkg:cargo/{package['name']}@{package['version']}"
 
 
@@ -130,6 +146,8 @@ for package_id in sorted(reachable, key=ref):
     package = packages[package_id]
     if package_id in workspace:
         continue  # the workspace itself is metadata.component, not a dependency
+    if package.get("source") is None and package_id not in fork_ids:
+        raise ValueError("Unadmitted non-workspace path dependency in Core SBOM")
     component = {
         "type": "library",
         "bom-ref": ref(package_id),
@@ -138,6 +156,8 @@ for package_id in sorted(reachable, key=ref):
         "purl": ref(package_id),
         "scope": "required",
     }
+    if package_id in fork_ids:
+        component["properties"] = fork_module.component_properties(fork_origin, revision)
     if package.get("description"):
         component["description"] = package["description"]
     entries = licenses(package)
@@ -187,6 +207,9 @@ document = {
     "dependencies": dependencies,
 }
 
+if fork_origin is not None:
+    document["metadata"]["properties"] += [{"name": "foxhole:native:vendored-fork-components", "value": "1"},
+                                            {"name": "foxcore:source-revision", "value": revision}]
 json.dump(document, sys.stdout, indent=2, sort_keys=False)
 sys.stdout.write("\n")
 print(

@@ -2,7 +2,7 @@
 name = "foxcore-fuzz-harness"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.92"
 license = "GPL-3.0-or-later"
 publish = false
 description = "Fuzz target bodies for the FoxCore parsers that read the network"
@@ -39,3 +39,6 @@ proto-socks = { path = "../../crates/proto-socks", features = ["fuzzing"] }
 # needs the decoder objects themselves, not a free function.
 proto-shadowtls = { path = "../../crates/proto-shadowtls", features = ["fuzzing"] }
 proto-wireguard = { path = "../../crates/proto-wireguard" }
+
+[patch.crates-io]
+rustls = { path = "../../vendor/rustls" }

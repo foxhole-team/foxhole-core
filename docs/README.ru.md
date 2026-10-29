@@ -52,28 +52,39 @@ TUN → flow engine → routing policy → outbound
 ```
 
 > [!WARNING]
-> **Статус:** ранняя бета. Production hardening и часть device-гейтов ещё не
-> завершены. Зрелость отдельных протоколов указана в таблице ниже; фактически
+> **Канал выпуска:** Stable. Проверки устройств и совместимости относятся
+> к конкретной сборке. Зрелость отдельных протоколов указана в таблице ниже; фактически
 > проверенную совместимость см. в [`interop.md`](interop.md).
 >
 > **TLS-отпечаток:** соединение Reality отправляет браузерный ClientHello —
 > девять профилей: семь транскрибированы из uTLS, ещё два — из first-party
 > captures; читаемая часть JA4 совпадает с реальным Chromium.
-> rustls не даёт API для GREASE или порядка расширений, поэтому REALITY
-> сохраняет скомпилированный собственный генератор ClientHello. Прямой
-> BoringSSL намеренно не добавляется вторым backend: он принёс бы Android
-> C++/FFI-путь, но не заменил бы REALITY, Quinn или не-Chromium профили.
+> REALITY сохраняет скомпилированный Fox-owned генератор ClientHello. Обычный
+> TCP TLS отдельно поддерживает явный профиль `chrome_151` через закреплённый fork
+> rustls; несовместимые TLS-настройки отклоняются. Оба механизма описаны в
+> [архитектуре TLS](architecture/02-cryptography.md#25-tls-fingerprinting--two-disjoint-mechanisms).
 
 ### Документация
 
 | Документ | Назначение |
 | --- | --- |
-| [Бета-архитектура](architecture/README.md) | архитектура трёх репозиториев, границы доверия и доставка данных публичной беты |
+| [Архитектура](architecture/README.md) | архитектура системы, границы доверия и доставка данных |
 | [SECURITY.md](../SECURITY.md) | сообщение об уязвимости и security scope |
 | [threat-model.md](threat-model.md) | модель угроз и границы безопасности |
 | [abi.md](abi.md) | FFI-контракт: handles, потоки, паники, коды ошибок и лимиты |
 | [interop.md](interop.md) | фактически проверенная совместимость с независимыми пирами |
 | [fingerprints/](../fingerprints/) | происхождение REALITY ClientHello fingerprints |
+
+FoxHole VPN — отдельный потребитель того же ABI Core. Проверка данных подключения сравнивает
+подписанный набор таблиц REALITY из FoxHole DB со встроенным набором закреплённого ядра;
+изменения применяются только после действия пользователя. Загружаются данные известных
+профилей, а не нативный код или остальные наборы Guard. Принятые ядром таблицы используются
+будущими соединениями в процессе этого приложения без переподключения туннеля;
+подробности — в [архитектуре VPN-клиента](architecture/06-vpn-client.md).
+
+[FoxHole OpenWRT Client](https://github.com/foxhole-team/foxhole-openwrt-client) —
+роутерный пакет на том же ядре, доступный в публичной бете. Подготовленная версия
+пакета — `1.0.0-r4`; совместимость роутера и режим установки определяются при настройке.
 
 ---
 
@@ -83,7 +94,7 @@ TUN → flow engine → routing policy → outbound
 | --- | --- |
 | **TUN** | TCP-актор на точно закреплённом smoltcp, собственные UDP-demux и ICMPv4 echo, ограниченная память потоков и пакетов |
 | **Маршрутизация** | скомпилированные индексы, O(1) package policy, Direct/VPN/Tor/Block, I2P gate |
-| **DNS** | UDP/TCP, DoT, DoH, cache, stale cache, fake-IP |
+| **DNS** | UDP/TCP, DoT, DoH по HTTP/2, DoQ, DoH по HTTP/3, cache, stale cache, fake-IP |
 | **Android protected dialer** | Android-callback `protect(fd)` → привязка к выбранному Android `Network` → connect/send |
 | **TLS** | rustls/WebPKI, SNI, ALPN, SPKI SHA-256 pin, ECH и ECH GREASE |
 | **Фаервол** | приоритет Block, kill switch, карантин, TTL-правила |
@@ -103,6 +114,30 @@ TUN → flow engine → routing policy → outbound
 учитывается счётчиком.
 
 ---
+
+## Импорт подписок и профилей
+
+| Входной формат | Что поддерживается |
+| --- | --- |
+| URI-подписка | Ссылки по одной на строке или тело подписки в Base64 |
+| Clash / Mihomo YAML | Совместимые узлы в `proxies`; неподдерживаемые узлы и настройки клиента обозначаются явно |
+| SIP008 JSON | Списки серверов Shadowsocks версии 1 |
+| Outline JSON | Объект одного ключа Shadowsocks; также поддерживаются ссылки `ss://` |
+
+Поддерживаемые URI-схемы: `vless`, `vmess`, `hysteria2` / `hy2`, `trojan`, `ss`,
+`wg` / `wireguard`, `socks` / `socks4` / `socks5`, `http` / `https`,
+`naive` / `naive+https`, `anytls` — с учётом протокольных модулей конкретной сборки.
+CLI также импортирует канонический JSON Core и конфигурацию WireGuard `[Interface]`;
+команде `import` нужен ровно один профиль. Произвольные JSON-конфигурации Xray и
+sing-box не являются поддерживаемым форматом подписки.
+
+Core разбирает тело подписки без сетевой загрузки. Загрузка, перенаправления и
+проверка TLS относятся к клиенту, включая динамические источники Outline `ssconf://`.
+Android-приложения FoxHole дополнительно раскрывают ссылки импорта v2rayTun перед
+вызовом Core. Частичный импорт явно возвращает отклонённые записи; строгий импорт
+отклоняет неподдерживаемую запись. См. [разбор подписок](../crates/foxcore-link/src/lib.rs),
+[структурированные форматы](../crates/foxcore-link/src/structured.rs) и
+[CLI-импорт](../crates/foxcore-cli/src/import.rs).
 
 ## 🧭 Архитектура и модель работы
 
@@ -141,12 +176,12 @@ I2P-процессом.
 
 | Протокол        | Поддержка                                                                      | Зрелость       |
 | --------------- | ------------------------------------------------------------------------------ | -------------- |
-| **VLESS**       | raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH; Reality и Vision на raw TCP   | `beta`         |
-| **VMess**       | AEAD (`alterId=0`), TCP/UDP, raw, WebSocket, HTTP Upgrade, gRPC/H2, TLS, ECH   | `beta`         |
+| **VLESS**       | raw, WebSocket, HTTP Upgrade, gRPC/H2, XHTTP stream-one по H2, TLS, ECH; Reality под потоковыми транспортами, Vision только на raw TCP | `beta` |
+| **VMess**       | AEAD (`alterId=0`), TCP/UDP, raw, WebSocket, HTTP Upgrade, gRPC/H2, XHTTP stream-one по H2, TLS, ECH | `beta` |
 | **Hysteria2**   | QUIC/H3, Brutal, Salamander obfs, TCP/UDP, hopping порта назначения            | `beta`         |
 | **WireGuard**   | реализация рукопожатия Noise_IKpsk2, L3-туннель, `reserved`, `wg://`, `.conf` | `beta`         |
 | **AmneziaWG**   | параметры AWG и шаблоны init-пакетов 2.0                                       | `experimental` |
-| **Trojan**      | TLS TCP/UDP, WebSocket, HTTP Upgrade, gRPC/H2, ECH                             | `beta`         |
+| **Trojan**      | TLS TCP/UDP, WebSocket, HTTP Upgrade, gRPC/H2, XHTTP stream-one по H2, ECH | `beta` |
 | **Shadowsocks** | AEAD + AEAD-2022, TCP/UDP                                                      | `beta`         |
 | **Outline**     | вариант Shadowsocks, статический prefix (AEAD по TCP)                          | `beta`         |
 | **Naive**       | нативный HTTP/2 CONNECT с padding по протоколу, только TCP                     | `beta`         |
@@ -167,9 +202,12 @@ I2P-процессом.
 
 Списки выше - по протоколам, а не свободно сочетающееся меню:
 
-- **Reality** работает только по raw TCP и взаимоисключим с обычным TLS; его
-  нельзя положить под WebSocket, HTTP Upgrade, gRPC или H2.
-- **Vision** в этой реализации требует TLS 1.3 на внешнем слое и
+- **Reality** — слой безопасности, взаимоисключимый с обычным TLS. Поверх него
+  поддерживаются потоковые транспорты, включая WebSocket, HTTP Upgrade, gRPC/H2 и
+  XHTTP stream-one. Vision требует raw TCP.
+- **XHTTP** реализует только stream-one по HTTP/2; другие режимы и неподдерживаемые
+  параметры отклоняются.
+- **Vision** работает только по raw TCP и требует TLS 1.3 на внешнем слое и
   `packet_encoding = xudp` и отклоняет UDP на порт 443.
 - **Outline** `prefix=` применяется к AEAD-шифрам по TCP; для AEAD-2022 и UDP
   не переносится.
@@ -206,8 +244,10 @@ WireGuard - L3-туннель с реализацией рукопожатия N
 Endpoint roaming не реализован; серверной роли нет.
 
 AmneziaWG добавляет junk/header-параметры (`Jc`, `Jmin`, `Jmax`, `S1`–`S4`,
-`H1`–`H4`) и шаблоны тегов init-пакетов 2.0 `I1`–`I5`. Диапазоны `H1`–`H4` не
-поддерживаются; одиночные значения - да.
+`H1`–`H4`), проверяемые диапазоны заголовков и шаблоны init-пакетов 2.0 `I1`–`I5`.
+Для `RandomTrailers`, диапазонов content padding и `HeaderProtectionKey` действуют
+явная валидация и ограничения выделения памяти. Endpoint roaming, серверный режим
+и container-link imports не поддерживаются; AmneziaWG остаётся экспериментальным.
 
 ### Отклонено
 
@@ -469,17 +509,18 @@ Capabilities включают:
 - опциональные функции;
 - неподдерживаемые расширения.
 
-ABI в релизном архиве:
+Кандидат релиза 1.0.0 требует профиль поставки `android4`:
 
 ```text
 arm64-v8a
 armeabi-v7a
+x86
+x86_64
 ```
 
-Обе ARM-библиотеки заново собираются, проходят ELF-гейт и упаковываются релизным
-workflow ядра. `x86_64` остаётся явной сборкой для эмулятора и не публикуется.
-APK FoxHole Guard сейчас по умолчанию включает `arm64-v8a`, но это решение упаковки
-приложения не удаляет `armeabi-v7a` из отдельного релизного архива FoxCore.
+`config/foxcore-android-delivery.json` и LAB release scope требуют актуальные JNI,
+происхождение capabilities и ELF-проверки для всех четырёх ABI. Компиляция и
+проверки упаковки не заменяют runtime-проверки каждого класса устройств.
 
 Гейты нативной сборки:
 
@@ -496,10 +537,12 @@ APK FoxHole Guard сейчас по умолчанию включает `arm64-v
 
 ## 🔏 Целостность релиза
 
-Релиз из `main` допускается только тогда, когда его дерево исходников совпадает с
-успешно прошедшим полный гейт `dev`. Артефакт `dev` не сохраняется: `main` заново
-собирает обе Android-библиотеки из тех же закреплённых Rust-, NDK- и lockfile-входов,
-а затем повторно проверяет rollback-манифест, ABI, SBOM и хеши до подписи и публикации.
+Нативные сборки и полные релизные проверки выполняются в приватной LAB или на
+разрешённом build host с закреплёнными Rust, NDK и lockfile. GitHub publisher
+проверяет подписанные владельцем исходники, неизменяемый LAB handoff, выбранный
+архив и обязательные свидетельства, затем публикует проверенные байты без
+пересборки. Handoff отдельно связывает исходники поставки и фактический нативный
+producer; правки документации не меняют идентичность нативного producer.
 
 Архив каждого релиза содержит прошедшие гейт JNI-библиотеки,
 их rollback-манифест, зафиксированные CycloneDX SBOM и `Cargo.lock`. Релиз
@@ -620,8 +663,15 @@ sbom/*.cdx.json
 
 ## 🔗 Связанные проекты
 
-[![FoxHole Guard](https://img.shields.io/badge/GitHub-FoxHole_Guard-181717?logo=github)](https://github.com/foxhole-team/foxhole-guard)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-guard?label=version)](https://github.com/foxhole-team/foxhole-guard/releases)
+[![FoxHole DB](https://img.shields.io/badge/GitHub-FoxHole_DB-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-db)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-db?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-db/releases)
 
-[![FoxHole DB](https://img.shields.io/badge/GitHub-FoxHole_DB-181717?logo=github)](https://github.com/foxhole-team/foxhole-db)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-db?label=version)](https://github.com/foxhole-team/foxhole-db/releases)
+[![FoxHole Guard](https://img.shields.io/badge/GitHub-FoxHole_Guard-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-guard)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-guard?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-guard/releases)
+
+[![FoxHole VPN](https://img.shields.io/badge/GitHub-FoxHole_VPN-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-vpn)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-vpn?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-vpn/releases)
+
+[![FoxHole OpenWrt](https://img.shields.io/badge/GitHub-FoxHole_OpenWrt-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-openwrt-client)
+[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-openwrt-client?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-openwrt-client/releases)
+

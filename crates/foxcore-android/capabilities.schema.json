@@ -103,6 +103,8 @@
         "tcp",
         "dot",
         "doh_http2",
+        "doq",
+        "doh_http3",
         "fake_ip",
         "private_namespaces_fail_closed"
       ],
@@ -117,6 +119,12 @@
           "type": "boolean"
         },
         "doh_http2": {
+          "type": "boolean"
+        },
+        "doq": {
+          "type": "boolean"
+        },
+        "doh_http3": {
           "type": "boolean"
         },
         "fake_ip": {
@@ -474,14 +482,15 @@
       ]
     },
     "streamCarrier": {
-      "description": "The five variants StreamTransportConfig can express.",
+      "description": "The six variants StreamTransportConfig can express; xhttp is stream-one over HTTP/2.",
       "type": "string",
       "enum": [
         "raw",
         "websocket",
         "http_upgrade",
         "grpc",
-        "http2"
+        "http2",
+        "xhttp"
       ]
     },
     "flowOutcome": {

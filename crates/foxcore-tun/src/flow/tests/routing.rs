@@ -290,3 +290,151 @@ fn a_flow_records_the_lane_protocol_and_group_it_actually_used() {
         Some(BlockReason::Policy)
     );
 }
+
+fn dns_policy_for_continuation(
+    generation: u64,
+    config: DnsConfig,
+    cache: Option<Arc<DnsCache>>,
+    route: RouteAction,
+) -> FlowPolicyStore {
+    let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+    FlowPolicyStore::new_with_trusted_rule_sets_and_dns_continuation(
+        generation,
+        RouteTable::compile(Vec::new(), route),
+        config,
+        Arc::new(OutboundRegistry::single(direct.clone())),
+        direct,
+        Arc::new(FlowMetrics::default()),
+        EventSink::none(),
+        Vec::new(),
+        Vec::new(),
+        cache,
+    )
+    .unwrap()
+}
+
+fn synthetic_address(cache: &DnsCache, query: &[u8], config: &DnsConfig) -> IpAddr {
+    let response = cache
+        .fake_response(
+            query,
+            config.fake_ipv4_pool,
+            config.fake_ipv6_pool,
+            config.fake_ttl_s,
+        )
+        .unwrap();
+    let bytes = &response[response.len() - 4..];
+    IpAddr::V4(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]))
+}
+
+#[test]
+fn explicit_dns_continuation_keeps_allocator_and_uses_only_the_new_policy() {
+    let config = DnsConfig {
+        mode: foxcore_api::DnsMode::FakeIp,
+        ..Default::default()
+    };
+    let previous = dns_policy_for_continuation(1, config.clone(), None, RouteAction::Direct);
+    let query = dns_query(7);
+    let cache = previous.dns_for_continuation();
+    let address = synthetic_address(&cache, &query, &config);
+    let response = cache
+        .fake_response(&query, config.fake_ipv4_pool, config.fake_ipv6_pool, 300)
+        .unwrap();
+    assert!(cache.cache_response(&query, &response, true));
+    let identity = foxcore_dns::DnsIdentity::new(10001, vec!["app".into()]);
+    cache.learn_route_hints(&query, &response, &identity);
+    assert!(cache.route_hints(&identity, address).is_some());
+
+    let successor = dns_policy_for_continuation(
+        2,
+        config.clone(),
+        Some(previous.dns_for_continuation()),
+        RouteAction::Block,
+    );
+    let current = successor.current.load();
+    assert!(current.dns.cached_response(&query, false).is_none());
+    assert!(current.dns.route_hints(&identity, address).is_none());
+    assert_eq!(
+        current.dns.fake_domain(address).as_deref(),
+        Some("example.com")
+    );
+    let context = context_for(
+        2,
+        IpTransport::Tcp,
+        SocketAddr::from(([10, 77, 0, 2], 49152)),
+        SocketAddr::new(address, 443),
+        &current.dns,
+    );
+    assert_eq!(current.routes.decide(&context), &RouteAction::Block);
+    assert!(!Arc::ptr_eq(&successor.outbounds, &previous.outbounds));
+    let mut other_query = dns_query(8);
+    other_query[13] = b'a';
+    assert_ne!(
+        synthetic_address(&current.dns, &other_query, &config),
+        address
+    );
+}
+
+#[test]
+fn explicit_dns_continuation_reduced_capacity_cannot_withdraw_live_promises() {
+    let config = DnsConfig {
+        mode: foxcore_api::DnsMode::FakeIp,
+        ..Default::default()
+    };
+    let previous = dns_policy_for_continuation(1, config.clone(), None, RouteAction::Direct);
+    let cache = previous.dns_for_continuation();
+    let first = synthetic_address(&cache, &dns_query(1), &config);
+    let mut query = dns_query(2);
+    query[13] = b'a';
+    let second = synthetic_address(&cache, &query, &config);
+    let reduced = DnsConfig {
+        cache_size: 1,
+        ..config.clone()
+    };
+    let successor =
+        dns_policy_for_continuation(2, reduced.clone(), Some(cache), RouteAction::Direct);
+    let current = successor.current.load();
+    assert_eq!(
+        current.dns.fake_domain(first).as_deref(),
+        Some("example.com")
+    );
+    assert_eq!(
+        current.dns.fake_domain(second).as_deref(),
+        Some("axample.com")
+    );
+    query[13] = b'b';
+    assert!(
+        current
+            .dns
+            .fake_response(&query, reduced.fake_ipv4_pool, reduced.fake_ipv6_pool, 300)
+            .is_none()
+    );
+}
+
+#[test]
+fn explicit_dns_continuation_does_not_reset_original_expiry() {
+    let config = DnsConfig {
+        mode: foxcore_api::DnsMode::FakeIp,
+        fake_ttl_s: 1,
+        ..Default::default()
+    };
+    let previous = dns_policy_for_continuation(1, config.clone(), None, RouteAction::Direct);
+    let cache = previous.dns_for_continuation();
+    let address = synthetic_address(&cache, &dns_query(1), &config);
+    std::thread::sleep(std::time::Duration::from_millis(700));
+    let successor = dns_policy_for_continuation(
+        2,
+        DnsConfig {
+            fake_ttl_s: 300,
+            ..config
+        },
+        Some(cache),
+        RouteAction::Direct,
+    );
+    let current = successor.current.load();
+    assert!(current.dns.fake_domain(address).is_some());
+    std::thread::sleep(std::time::Duration::from_millis(450));
+    assert!(
+        current.dns.fake_domain(address).is_none(),
+        "handoff extended the original TTL"
+    );
+}

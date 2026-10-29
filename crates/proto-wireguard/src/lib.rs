@@ -8,6 +8,7 @@
 #![forbid(unsafe_code)]
 
 pub mod amnezia;
+pub mod header_protection;
 pub mod initpacket;
 pub mod message;
 pub mod noise;

@@ -17,11 +17,13 @@ test-support = []
 aws-lc-rs.workspace = true
 blake2.workspace = true
 chacha20poly1305.workspace = true
+chacha20 = { version = "0.9.1", features = ["zeroize"] }
 getrandom.workspace = true
 subtle.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 criterion.workspace = true
 proptest = "1.11.0"
 

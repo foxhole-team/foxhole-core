@@ -1,0 +1,39 @@
+# Reference recipe only. Authoritative execution belongs to Git LAN / the protected lab.
+# This directory is outside GitHub Actions workflow discovery.
+name: fresh-advisories
+
+on:
+  schedule:
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fresh-advisories-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  advisories:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
+      - run: cargo install cargo-deny --version 0.20.2 --locked
+      - name: Check every locked graph against fresh advisories
+        run: python3 scripts/advisories.py --output "$RUNNER_TEMP/advisories"
+      - name: Preserve advisory results and scanner failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dependency-advisories-${{ github.run_id }}
+          path: ${{ runner.temp }}/advisories/
+          if-no-files-found: warn
+          retention-days: 14

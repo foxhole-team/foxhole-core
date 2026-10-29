@@ -86,11 +86,14 @@ pub(crate) fn outbound_allowed(outbound: &Outbound, routes: &RouteTable) -> bool
 
 pub(crate) async fn serve_dns_tcp(
     stream: &mut TcpFlow,
-    policy: Arc<FlowPolicyStore>,
-    context: FlowContext,
-    metrics: &FlowMetrics,
+    engine: &FlowEngine,
+    mut context: FlowContext,
     cancel: CancellationToken,
 ) {
+    let policy = &engine.policy;
+    let metrics = engine.metrics.as_ref();
+    let source = stream.local_addr();
+    let destination = stream.peer_addr();
     loop {
         let length = tokio::select! {
             _ = cancel.cancelled() => return,
@@ -112,9 +115,31 @@ pub(crate) async fn serve_dns_tcp(
             return;
         }
         metrics.add_up(length as u64);
+        if DnsCache::question(&query).is_none() {
+            metrics.flow_error();
+            return;
+        }
+        let current = policy.current.load_full();
+        let admitted = engine
+            .attribute_dns_context(
+                &mut context,
+                source,
+                destination,
+                &current.routes,
+                &current.dns_config,
+                IpTransport::Tcp,
+            )
+            .await;
+        drop(current);
+        if !admitted {
+            metrics.attribution_error();
+            metrics.block_flow();
+            engine.emit_block(BlockReason::Unattributed, context.transport, &context);
+            return;
+        }
         let response = tokio::select! {
             _ = cancel.cancelled() => return,
-            response = exchange_dns(&policy, &context, &query, metrics) => {
+            response = exchange_dns(policy, &context, &query, metrics) => {
                 response.or_else(|| servfail_response(&query))
             }
         };
@@ -143,11 +168,14 @@ pub(crate) async fn serve_dns_tcp(
 
 pub(crate) async fn serve_dns_udp(
     stream: &mut DatagramFlow,
-    policy: Arc<FlowPolicyStore>,
-    context: FlowContext,
-    metrics: &FlowMetrics,
+    engine: &FlowEngine,
+    mut context: FlowContext,
     cancel: CancellationToken,
 ) {
+    let policy = &engine.policy;
+    let metrics = engine.metrics.as_ref();
+    let source = stream.local_addr();
+    let destination = stream.peer_addr();
     let mut buffer = vec![0_u8; stream.max_payload()];
     loop {
         let length = tokio::select! {
@@ -159,9 +187,31 @@ pub(crate) async fn serve_dns_udp(
         };
         let query = &buffer[..length];
         metrics.add_up(length as u64);
+        if DnsCache::question(query).is_none() {
+            metrics.flow_error();
+            continue;
+        }
+        let current = policy.current.load_full();
+        let admitted = engine
+            .attribute_dns_context(
+                &mut context,
+                source,
+                destination,
+                &current.routes,
+                &current.dns_config,
+                IpTransport::Udp,
+            )
+            .await;
+        drop(current);
+        if !admitted {
+            metrics.attribution_error();
+            metrics.block_flow();
+            engine.emit_block(BlockReason::Unattributed, context.transport, &context);
+            continue;
+        }
         let response = tokio::select! {
             _ = cancel.cancelled() => return,
-            response = exchange_dns(&policy, &context, query, metrics) => {
+            response = exchange_dns(policy, &context, query, metrics) => {
                 response.or_else(|| servfail_response(query))
             }
         };
@@ -201,6 +251,7 @@ pub(super) async fn exchange_dns(
     query: &[u8],
     metrics: &FlowMetrics,
 ) -> Option<Vec<u8>> {
+    DnsCache::question(query)?;
     let current = policy.current.load();
     // Report DNS policy refusals through the same audit surface as other flows.
     let unattributed = (current.routes.requires_uid() && context.uid.is_none())

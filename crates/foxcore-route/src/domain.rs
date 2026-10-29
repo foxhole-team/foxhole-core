@@ -85,11 +85,23 @@ pub struct DomainBlocklist {
     /// One compact automaton for inline rules and one per verified update
     /// artifact. Keeping them separate avoids rebuilding a multi-megabyte FST
     /// every time a signed list is atomically replaced.
-    maps: Vec<Arc<Map<Vec<u8>>>>,
+    maps: Vec<BlockMap>,
     /// Exception maps are checked first. A signed allow rule is deliberately
     /// fail-open for that name only; it cannot alter routing or execute code.
     allow_maps: Vec<Arc<Map<Vec<u8>>>>,
     entries: usize,
+}
+
+#[derive(Debug)]
+struct BlockMap {
+    map: Arc<Map<Vec<u8>>>,
+    enabled_categories: Option<u64>,
+}
+
+impl BlockMap {
+    fn lookup(&self, key: &str) -> Option<u64> {
+        lookup_map_selected(&self.map, key, self.enabled_categories)
+    }
 }
 
 impl DomainBlocklist {
@@ -130,7 +142,10 @@ impl DomainBlocklist {
             return Self::default();
         };
         Self {
-            maps: vec![Arc::new(map)],
+            maps: vec![BlockMap {
+                map: Arc::new(map),
+                enabled_categories: None,
+            }],
             allow_maps: Vec::new(),
             entries,
         }
@@ -163,9 +178,15 @@ impl DomainBlocklist {
     /// trust root or has passed `ruleset::verify_rule_set`.
     pub fn with_rule_sets(mut self, rule_sets: Vec<RuleSetArtifact>) -> Self {
         for rule_set in rule_sets {
+            if rule_set.enabled_category_mask == Some(0) {
+                continue;
+            }
             self.entries = self.entries.saturating_add(rule_set.block_entries);
             if rule_set.block_entries > 0 {
-                self.maps.push(rule_set.block);
+                self.maps.push(BlockMap {
+                    map: rule_set.block,
+                    enabled_categories: rule_set.enabled_category_mask,
+                });
             }
             if rule_set.allow_entries > 0 {
                 self.allow_maps.push(rule_set.allow);
@@ -206,7 +227,7 @@ impl DomainBlocklist {
         let flags = self
             .maps
             .iter()
-            .filter_map(|map| lookup_map(map, key))
+            .filter_map(|map| map.lookup(key))
             .fold(0, |combined, flags| combined | flags);
         (flags != 0).then_some(BlockVerdict { flags })
     }
@@ -229,6 +250,14 @@ fn compile_map(keys: &BTreeMap<String, u64>) -> Option<Map<Vec<u8>>> {
 }
 
 fn lookup_map(map: &Map<Vec<u8>>, key: &str) -> Option<u64> {
+    lookup_map_selected(map, key, None)
+}
+
+fn lookup_map_selected(
+    map: &Map<Vec<u8>>,
+    key: &str,
+    enabled_categories: Option<u64>,
+) -> Option<u64> {
     let fst = map.as_fst();
     let mut node = fst.root();
     let mut output = Output::zero();
@@ -238,7 +267,7 @@ fn lookup_map(map: &Map<Vec<u8>>, key: &str) -> Option<u64> {
         if *byte == b'.' && node.is_final() {
             let flags = output.cat(node.final_output()).value();
             if flags & FLAG_SUFFIX != 0 {
-                matched |= flags;
+                matched |= selected_flags(flags, enabled_categories);
             }
         }
         let Some(index) = node.find_input(*byte) else {
@@ -251,10 +280,20 @@ fn lookup_map(map: &Map<Vec<u8>>, key: &str) -> Option<u64> {
     if node.is_final() {
         let flags = output.cat(node.final_output()).value();
         if flags & (FLAG_EXACT | FLAG_SUFFIX) != 0 {
-            matched |= flags;
+            matched |= selected_flags(flags, enabled_categories);
         }
     }
     (matched != 0).then_some(matched)
+}
+
+fn selected_flags(flags: u64, mask: Option<u64>) -> u64 {
+    let Some(mask) = mask else { return flags };
+    let categories = flags & mask;
+    if categories == 0 {
+        0
+    } else {
+        (flags & (FLAG_EXACT | FLAG_SUFFIX)) | categories
+    }
 }
 
 /// Lowercase `domain` into `buf` with its labels reversed, trimming root dots.
@@ -445,6 +484,9 @@ mod tests {
             block_entries: 1,
             allow_entries: 1,
             source_sha256: [0; 32],
+            enabled_category_mask: None,
+            categorized_available_mask: None,
+            categorized_counts: None,
         };
         let list = DomainBlocklist::default().with_rule_sets(vec![rule_set]);
 
@@ -452,5 +494,86 @@ mod tests {
         assert!(!list.blocks("safe.example.com"));
         assert!(!list.blocks("child.safe.example.com"));
         assert!(list.blocks("unsafe.example.com"));
+    }
+
+    #[test]
+    fn categorized_artifact_selection_does_not_block_disabled_categories() {
+        let mut builder = fst::MapBuilder::memory();
+        builder
+            .insert(
+                "invalid.owned.ads",
+                FLAG_SUFFIX | category_bit(DnsCategory::Ads),
+            )
+            .unwrap();
+        let block = Arc::new(Map::new(builder.into_inner().unwrap()).unwrap());
+        let list = DomainBlocklist {
+            maps: vec![BlockMap {
+                map: block,
+                enabled_categories: Some(category_bit(DnsCategory::Telemetry)),
+            }],
+            allow_maps: Vec::new(),
+            entries: 1,
+        };
+        let enabled_categories = [DnsCategory::Telemetry];
+        let verdict = list.lookup("ads.owned.invalid");
+        assert!(
+            verdict.is_none(),
+            "disabled Ads still blocked with {enabled_categories:?}: {verdict:?}"
+        );
+    }
+
+    #[test]
+    fn category_selection_is_applied_at_each_matching_label_boundary() {
+        let mut builder = fst::MapBuilder::memory();
+        builder
+            .insert(
+                "invalid.owned",
+                FLAG_SUFFIX | category_bit(DnsCategory::Malicious),
+            )
+            .unwrap();
+        builder
+            .insert(
+                "invalid.owned.ads",
+                FLAG_SUFFIX | category_bit(DnsCategory::Ads) | category_bit(DnsCategory::Telemetry),
+            )
+            .unwrap();
+        let map = Arc::new(Map::new(builder.into_inner().unwrap()).unwrap());
+        for (selected, expected) in [
+            (0, None),
+            (category_bit(DnsCategory::Ads), Some(DnsCategory::Ads)),
+            (
+                category_bit(DnsCategory::Telemetry),
+                Some(DnsCategory::Telemetry),
+            ),
+            (
+                category_bit(DnsCategory::Malicious) | category_bit(DnsCategory::Ads),
+                Some(DnsCategory::Malicious),
+            ),
+        ] {
+            let list = DomainBlocklist {
+                maps: vec![BlockMap {
+                    map: map.clone(),
+                    enabled_categories: Some(selected),
+                }],
+                allow_maps: Vec::new(),
+                entries: 2,
+            };
+            assert_eq!(
+                list.lookup("child.ads.owned.invalid")
+                    .and_then(BlockVerdict::category),
+                expected
+            );
+            assert_eq!(list.lookup("not-owned.invalid"), None);
+            if selected == category_bit(DnsCategory::Ads) {
+                assert_eq!(
+                    list.lookup("ads.owned.invalid")
+                        .unwrap()
+                        .categories()
+                        .collect::<Vec<_>>(),
+                    vec![DnsCategory::Ads]
+                );
+                assert_eq!(list.lookup("else.owned.invalid"), None);
+            }
+        }
     }
 }

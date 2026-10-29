@@ -402,6 +402,60 @@ fn vmess_requires_modern_aead_and_redacts_uuid() {
     assert!(EngineConfig::parse(&json.replace("\"alter_id\":0", "\"alter_id\":64")).is_err());
 }
 
+fn vmess_cipher_engine_json(cipher: &str) -> String {
+    serde_json::json!({
+        "schema_version": 1,
+        "outbound": {
+            "type": "selector",
+            "members": [{
+                "id": "synthetic-android-node",
+                "outbound": {
+                    "type": "vmess", "server": "peer.example", "port": 443,
+                    "uuid": "d0cf0001-0000-4000-8000-000000000000",
+                    "alter_id": 0, "cipher": cipher,
+                    "transport": {"type": "raw"}, "tls": {"enabled": false}
+                }
+            }]
+        },
+        "tun": {"mtu": 1500, "ipv4": "172.19.0.1"}
+    })
+    .to_string()
+}
+
+fn assert_vmess_aes_engine(cipher: &str) {
+    let config = EngineConfig::parse(&vmess_cipher_engine_json(cipher))
+        .expect("Android VMess AES cipher spelling must enter the native EngineConfig");
+    let OutboundConfig::Selector(selector) = &config.outbound else {
+        panic!("Android selector must remain a selector");
+    };
+    let OutboundConfig::Vmess(vmess) = &selector.members[0].outbound else {
+        panic!("Android member must remain VMess");
+    };
+    assert_eq!(vmess.cipher, VmessCipher::Aes128Gcm);
+    let serialized = serde_json::to_value(&config).unwrap();
+    assert_eq!(
+        serialized["outbound"]["members"][0]["outbound"]["cipher"], "aes128-gcm",
+        "the established native serialization must remain unchanged"
+    );
+}
+
+#[test]
+fn vmess_cipher_android_standard_spelling_enters_engine_config() {
+    assert_vmess_aes_engine("aes-128-gcm");
+}
+
+#[test]
+fn vmess_cipher_legacy_spelling_keeps_its_engine_contract() {
+    assert_vmess_aes_engine("aes128-gcm");
+}
+
+#[test]
+fn vmess_cipher_unknown_spellings_are_refused_by_engine_config() {
+    for cipher in ["aes-256-gcm", "aes128gcm", "synthetic-invalid-cipher"] {
+        assert!(EngineConfig::parse(&vmess_cipher_engine_json(cipher)).is_err());
+    }
+}
+
 #[test]
 fn validates_vless_reality_as_a_fail_closed_security_layer() {
     let json = r#"{

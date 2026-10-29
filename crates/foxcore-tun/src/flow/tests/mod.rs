@@ -103,6 +103,7 @@ fn signed_rule_set() -> (DnsRuleSetConfig, RuleSetBundle) {
             public_key: STANDARD.encode(public_key),
             minimum_sequence: 7,
             required: true,
+            enabled_categories: None,
         },
         RuleSetBundle {
             name: "foxhole-test-dns".into(),
@@ -171,6 +172,72 @@ async fn required_signed_dns_rule_set_is_present_before_the_first_query_and_surv
         .await
         .unwrap();
     assert_eq!(still_blocked[3] & 0x0f, 3);
+}
+
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test]
+async fn trusted_categorized_dns_policy_applies_explicit_selection_before_fake_ip() {
+    use foxcore_api::DnsCategory;
+    use foxcore_route::ruleset::{TrustedRuleSetBundle, compile_rule_set_artifact};
+    let artifact = compile_rule_set_artifact(
+        b"owned-fixture",
+        &["example.com".into()],
+        &[],
+        Some(DnsCategory::Ads),
+    )
+    .unwrap();
+    let name = "foxhole-dns-categories-normal-medium";
+    for (selected, expected_rcode) in [
+        (Some(vec![DnsCategory::Ads]), Some(3)),
+        (Some(Vec::new()), Some(0)),
+        (None, None),
+        (Some(vec![DnsCategory::Telemetry]), None),
+    ] {
+        let config = DnsConfig {
+            mode: foxcore_api::DnsMode::FakeIp,
+            rule_sets: vec![DnsRuleSetConfig {
+                name: name.into(),
+                public_key: "AQ==".into(),
+                minimum_sequence: 0,
+                required: true,
+                enabled_categories: selected,
+            }],
+            ..DnsConfig::default()
+        };
+        let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+        let store = FlowPolicyStore::new_with_trusted_rule_sets(
+            1,
+            RouteTable::compile(Vec::new(), RouteAction::Direct),
+            config,
+            Arc::new(OutboundRegistry::single(direct.clone())),
+            direct,
+            Arc::new(FlowMetrics::default()),
+            EventSink::none(),
+            Vec::new(),
+            vec![TrustedRuleSetBundle::from_signed_package(
+                name.into(),
+                artifact.bytes.clone(),
+            )],
+        );
+        if let Some(expected) = expected_rcode {
+            let store = store.unwrap();
+            let response = store
+                .current
+                .load()
+                .dns_proxy
+                .clone()
+                .unwrap()
+                .exchange_for_test(&dns_query(33))
+                .await
+                .unwrap();
+            assert_eq!(response[3] & 15, expected);
+        } else {
+            assert!(
+                store.is_err(),
+                "absent or unavailable category selection was accepted"
+            );
+        }
+    }
 }
 
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
@@ -297,7 +364,7 @@ async fn a_dns_query_refused_by_policy_is_counted_and_reported() {
     let context = FlowContext::new(1, IpTransport::Udp, Destination::new("example.com", 53));
 
     assert!(
-        exchange_dns(&policy, &context, &[0_u8; 12], &metrics)
+        exchange_dns(&policy, &context, &dns_query(0x1234), &metrics)
             .await
             .is_none()
     );

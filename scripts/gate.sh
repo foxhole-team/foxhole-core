@@ -1,14 +1,5 @@
 #!/usr/bin/env bash
-# The gate every change has to pass before it is called done.
-#
-# Runs the same checks CI runs, in the same order, so a green run here means a
-# green run there. Kept as a script rather than only a workflow file so the
-# release gate remains reproducible outside GitHub Actions.
-#
-# Usage:
-#   scripts/gate.sh          # stray test binaries, fmt, clippy, tests, android check, tor-rsa-gate
-#   scripts/gate.sh --supply # also lockfile, cargo-deny on both graphs, both SBOMs, abi-gate
-#                            # (needs `cargo install cargo-deny`)
+# Match local and CI gates; --supply also checks advisories, SBOMs and frozen ABI fixtures.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
@@ -30,10 +21,7 @@ fail() {
     status=1
 }
 
-# A killed `cargo test` leaves its test binaries alive, holding loopback ports.
-# The next run then fails in the network tests and looks exactly like a
-# regression — this cost real debugging time more than once, so the gate checks
-# for it instead of letting the failure be mysterious.
+# Abandoned test processes retain loopback sockets and invalidate the next run.
 step "stray test binaries"
 strays="$(pgrep -f 'target/debug/deps/' 2>/dev/null | wc -l | tr -d ' ')"
 if [ "$strays" != "0" ]; then
@@ -44,6 +32,9 @@ if [ "$strays" != "0" ]; then
 fi
 echo "none"
 
+step "Android Docker wrapper environment"
+python3 scripts/tests/test_docker_android_env.py || fail "android-docker-wrapper-env"
+
 step "cargo fmt --check"
 cargo fmt --all -- --check || fail "formatting"
 
@@ -53,31 +44,17 @@ cargo clippy --workspace --all-targets -- -D warnings || fail "clippy"
 step "cargo test --workspace (--test-threads=$TEST_THREADS)"
 cargo test --workspace -- --test-threads="$TEST_THREADS" || fail "tests"
 
-# Everything above builds for the host, so nothing above compiles a line behind
-# `cfg(target_os = "android")` — which is most of what actually ships. A split of
-# foxcore-runtime left a private static reachable only from Android code, and
-# fmt, clippy and the whole test suite stayed green while the .so would not link.
+# Host gates do not compile cfg(target_os = "android") or its NDK dependencies.
 step "cargo ndk check (shipping Android ABIs)"
-# A plain `cargo check --target` cannot do this: aws-lc-sys and ring run build
-# scripts that need the NDK toolchain, which cargo-ndk is what supplies.
 if [ "$(cargo ndk --version 2>/dev/null || true)" = "cargo-ndk 4.1.2" ]; then
-    cargo ndk -t arm64-v8a -t armeabi-v7a check --workspace --all-features ||
+    cargo ndk -t arm64-v8a -t armeabi-v7a -t x86 -t x86_64 --platform 26 check --locked --workspace --all-features ||
         fail "android cross-check"
 else
     printf '!! cargo-ndk 4.1.2 is required; install it with: cargo install cargo-ndk --version 4.1.2 --locked\n'
     status=1
 fi
 
-# RUSTSEC-2023-0071 (rsa, Marvin Attack) is accepted on the strength of an
-# argument — the Arti graph performs no private-key RSA operation — and this
-# re-derives that argument from the resolved graph.
-#
-# It used to live under --supply, next to cargo-deny, on the reasoning that Tor
-# was an optional feature and its advisories were about code the release did not
-# contain. `tor` is now in foxcore-android's default features, so the crate
-# carrying that advisory is in every shipped .so, and a check that only runs when
-# somebody remembers to type --supply is not a gate on it. Here it runs on every
-# gate, and a release commit cannot be green without it.
+# Re-derive the accepted rsa advisory exception: shipped Arti must have no private-key RSA path.
 step "Tor: RSA private-key reachability"
 "$HERE/scripts/tor-rsa-gate.sh" || fail "tor-rsa-gate"
 

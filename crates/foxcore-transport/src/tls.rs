@@ -47,6 +47,15 @@ where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     if !tls.enabled {
+        if tls.fingerprint.is_some()
+            || tls.pinned_spki_sha256.is_some()
+            || tls.pinned_certificate_sha256.is_some()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "TLS pins and fingerprint require TLS",
+            ));
+        }
         return Ok(Box::new(stream));
     }
 
@@ -272,7 +281,37 @@ fn build_client_config(
     tls: &TlsConfig,
     alpn_override: Option<&[&str]>,
 ) -> io::Result<Arc<ClientConfig>> {
-    let roots = webpki_roots_store();
+    build_client_config_with_roots(tls, alpn_override, webpki_roots_store())
+}
+
+fn build_client_config_with_roots(
+    tls: &TlsConfig,
+    alpn_override: Option<&[&str]>,
+    roots: Arc<RootCertStore>,
+) -> io::Result<Arc<ClientConfig>> {
+    if tls.fingerprint.is_some() {
+        if tls.ech.is_some()
+            || tls.min_version.is_some_and(|v| v != TlsVersion::Tls12)
+            || tls.max_version.is_some_and(|v| v != TlsVersion::Tls13)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Chrome151 cannot drop ECH or TLS version requirements",
+            ));
+        }
+        let groups = [
+            CurveGroup::X25519MlKem768,
+            CurveGroup::X25519,
+            CurveGroup::Secp256r1,
+            CurveGroup::Secp384r1,
+        ];
+        if !tls.curve_preferences.is_empty() && tls.curve_preferences != groups {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Chrome151 cannot drop curve preferences",
+            ));
+        }
+    }
     let provider = crypto_provider(tls)?;
     // `builder_with_provider`, not `builder`. `builder` asks rustls for the
     // *process* default provider, and rustls can only derive one when exactly
@@ -286,8 +325,19 @@ fn build_client_config(
     let base = WebPkiServerVerifier::builder_with_provider(roots, provider.clone())
         .build()
         .map_err(|error| io::Error::other(format!("TLS verifier: {error}")))?;
+    if tls.pinned_spki_sha256.is_some() && tls.pinned_certificate_sha256.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "ambiguous TLS pin types",
+        ));
+    }
     let expected_pin = tls
         .pinned_spki_sha256
+        .as_deref()
+        .map(decode_pin)
+        .transpose()?;
+    let expected_certificate_pin = tls
+        .pinned_certificate_sha256
         .as_deref()
         .map(decode_pin)
         .transpose()?;
@@ -295,6 +345,7 @@ fn build_client_config(
         base,
         insecure: tls.insecure,
         expected_pin,
+        expected_certificate_pin,
     };
 
     let versions = protocol_versions(tls);
@@ -328,6 +379,11 @@ fn build_client_config(
             .collect(),
     };
 
+    if tls.fingerprint.is_some() {
+        config
+            .enable_chrome_151()
+            .map_err(|error| io::Error::other(format!("TLS Chrome151: {error}")))?;
+    }
     Ok(Arc::new(config))
 }
 
@@ -514,13 +570,13 @@ fn decode_pin(encoded: &str) -> io::Result<[u8; 32]> {
         .map_err(|error| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
-                format!("invalid SPKI pin base64: {error}"),
+                format!("invalid TLS SHA-256 pin base64: {error}"),
             )
         })?;
     bytes.try_into().map_err(|_| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
-            "SPKI SHA-256 pin must decode to 32 bytes",
+            "TLS SHA-256 pin must decode to 32 bytes",
         )
     })
 }
@@ -529,6 +585,7 @@ struct ConfiguredVerifier {
     base: Arc<WebPkiServerVerifier>,
     insecure: bool,
     expected_pin: Option<[u8; 32]>,
+    expected_certificate_pin: Option<[u8; 32]>,
 }
 
 impl fmt::Debug for ConfiguredVerifier {
@@ -536,6 +593,10 @@ impl fmt::Debug for ConfiguredVerifier {
         f.debug_struct("ConfiguredVerifier")
             .field("insecure", &self.insecure)
             .field("has_pin", &self.expected_pin.is_some())
+            .field(
+                "has_certificate_pin",
+                &self.expected_certificate_pin.is_some(),
+            )
             .finish()
     }
 }
@@ -549,6 +610,22 @@ impl ServerCertVerifier for ConfiguredVerifier {
         ocsp_response: &[u8],
         now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
+        if let Some(expected) = self.expected_certificate_pin {
+            let actual: [u8; 32] = Sha256::digest(end_entity.as_ref()).into();
+            if actual != expected {
+                return Err(rustls::Error::General(
+                    "server certificate fingerprint mismatch".into(),
+                ));
+            }
+            let (remaining, _) = X509Certificate::from_der(end_entity.as_ref())
+                .map_err(|_| rustls::Error::General("invalid X.509 certificate".into()))?;
+            if !remaining.is_empty() {
+                return Err(rustls::Error::General(
+                    "invalid X.509 certificate trailing data".into(),
+                ));
+            }
+            return Ok(ServerCertVerified::assertion());
+        }
         if let Some(expected) = self.expected_pin {
             let (_, certificate) = X509Certificate::from_der(end_entity.as_ref())
                 .map_err(|_| rustls::Error::General("invalid X.509 certificate".into()))?;
@@ -596,6 +673,66 @@ impl ServerCertVerifier for ConfiguredVerifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_leaf_fingerprint_is_not_an_spki_hash_and_remains_mandatory_when_insecure() {
+        let generated = rcgen::generate_simple_self_signed(vec!["router.invalid".into()]).unwrap();
+        let der = generated.cert.der();
+        let (_, parsed) = X509Certificate::from_der(der.as_ref()).unwrap();
+        let leaf: [u8; 32] = Sha256::digest(der.as_ref()).into();
+        let spki: [u8; 32] = Sha256::digest(parsed.tbs_certificate.subject_pki.raw).into();
+        assert_ne!(leaf, spki);
+        let provider = crypto_provider(&TlsConfig::default()).unwrap();
+        let base = WebPkiServerVerifier::builder_with_provider(webpki_roots_store(), provider)
+            .build()
+            .unwrap();
+        let mut verifier = ConfiguredVerifier {
+            base,
+            insecure: true,
+            expected_pin: None,
+            expected_certificate_pin: Some(leaf),
+        };
+        let name = ServerName::try_from("router.invalid").unwrap();
+        assert!(
+            verifier
+                .verify_server_cert(der, &[], &name, &[], UnixTime::now())
+                .is_ok()
+        );
+        verifier.expected_certificate_pin = Some(spki);
+        assert!(
+            verifier
+                .verify_server_cert(der, &[], &name, &[], UnixTime::now())
+                .is_err()
+        );
+        let mut trailing = der.as_ref().to_vec();
+        trailing.push(0);
+        verifier.expected_certificate_pin = Some(Sha256::digest(&trailing).into());
+        assert!(
+            verifier
+                .verify_server_cert(
+                    &CertificateDer::from(trailing),
+                    &[],
+                    &name,
+                    &[],
+                    UnixTime::now()
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_leaf_pin_has_its_own_cached_client_and_cannot_be_mixed_with_spki() {
+        let leaf =
+            tls(|config| config.pinned_certificate_sha256 = Some(STANDARD.encode([7_u8; 32])));
+        let spki = tls(|config| config.pinned_spki_sha256 = Some(STANDARD.encode([7_u8; 32])));
+        assert!(!Arc::ptr_eq(
+            &rustls_client_config(&leaf).unwrap(),
+            &rustls_client_config(&spki).unwrap()
+        ));
+        let mut ambiguous = leaf;
+        ambiguous.pinned_spki_sha256 = spki.pinned_spki_sha256;
+        assert!(rustls_client_config(&ambiguous).is_err());
+    }
 
     #[test]
     fn one_profile_gets_one_config_so_resumption_has_somewhere_to_live() {
@@ -862,3 +999,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(all(test, feature = "fingerprinting"))]
+#[path = "tls/chrome_tests.rs"]
+mod chrome_tests;

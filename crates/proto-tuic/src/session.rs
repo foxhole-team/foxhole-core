@@ -116,6 +116,7 @@ async fn supervise(
         let reconnect_now = session.reconnect_now.notified();
         let current = session.current().await.map(|(connection, _)| connection);
         let Some(connection) = current else {
+            mark_down(&session).await;
             if !reconnect(&session, &config, &dialer, &cancel).await {
                 return;
             }
@@ -139,7 +140,11 @@ async fn supervise(
 
 async fn mark_down(session: &TuicSession) {
     let mut slot = session.slot.lock().await;
-    slot.connection = None;
+    if let Some(connection) = slot.connection.take() {
+        connection
+            .connection()
+            .close(VarInt::from_u32(0), b"TUIC session invalidated");
+    }
     slot.udp = None;
 }
 

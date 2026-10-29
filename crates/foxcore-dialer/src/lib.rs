@@ -1,9 +1,11 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
+use std::future::Future;
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::os::fd::{AsRawFd, RawFd};
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -13,12 +15,15 @@ use tokio::net::{TcpSocket, TcpStream, UdpSocket};
 type SocketCallback = Arc<dyn Fn(RawFd) -> bool + Send + Sync>;
 type BindCallback = Arc<dyn Fn(RawFd, u64) -> bool + Send + Sync>;
 type ResolveCallback = Arc<dyn Fn(&str, u16, u64) -> io::Result<Vec<SocketAddr>> + Send + Sync>;
+pub type ScopedResolveFuture = Pin<Box<dyn Future<Output = io::Result<Vec<SocketAddr>>> + Send>>;
+pub type ScopedResolver = Arc<dyn Fn(&str, u16, u64) -> Option<ScopedResolveFuture> + Send + Sync>;
 
 #[derive(Clone, Default)]
 pub struct SocketCallbacks {
     protect: Option<SocketCallback>,
     bind: Option<BindCallback>,
     resolve: Option<ResolveCallback>,
+    resolver_requires_network: bool,
 }
 
 impl fmt::Debug for SocketCallbacks {
@@ -44,6 +49,7 @@ impl SocketCallbacks {
             protect: Some(Arc::new(protect)),
             bind: Some(Arc::new(bind)),
             resolve: None,
+            resolver_requires_network: false,
         }
     }
 
@@ -52,6 +58,7 @@ impl SocketCallbacks {
             protect: Some(Arc::new(protect)),
             bind: None,
             resolve: None,
+            resolver_requires_network: false,
         }
     }
 
@@ -60,18 +67,33 @@ impl SocketCallbacks {
         resolve: impl Fn(&str, u16, u64) -> io::Result<Vec<SocketAddr>> + Send + Sync + 'static,
     ) -> Self {
         self.resolve = Some(Arc::new(resolve));
+        self.resolver_requires_network = true;
+        self
+    }
+
+    /// Install a host resolver that owns its socket protection without an Android Network handle.
+    pub fn with_host_resolver(
+        mut self,
+        resolve: impl Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync + 'static,
+    ) -> Self {
+        self.resolve = Some(Arc::new(move |host, port, _| resolve(host, port)));
+        self.resolver_requires_network = false;
         self
     }
 }
 
 const DEFAULT_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const CANDIDATE_STAGGER: Duration = Duration::from_millis(250);
+const MAX_CONCURRENT_CANDIDATES: usize = 2;
 
 #[derive(Clone)]
 pub struct ProtectedDialer {
     callbacks: SocketCallbacks,
     network_handle: Arc<AtomicU64>,
+    network_revision: Arc<AtomicU64>,
     connect_timeout: Duration,
     handshake_timeout: Duration,
+    scoped_resolver: Option<ScopedResolver>,
 }
 
 impl fmt::Debug for ProtectedDialer {
@@ -90,16 +112,14 @@ impl ProtectedDialer {
         Self {
             callbacks,
             network_handle: Arc::new(AtomicU64::new(0)),
+            network_revision: Arc::new(AtomicU64::new(0)),
             connect_timeout,
             handshake_timeout: DEFAULT_HANDSHAKE_TIMEOUT,
+            scoped_resolver: None,
         }
     }
 
-    /// Set the handshake budget the profile asked for.
-    ///
-    /// A builder rather than a constructor argument so every existing caller
-    /// keeps the budget it already had, which is the 15 seconds the QUIC
-    /// protocols used to hardcode.
+    /// Set the profile's handshake budget.
     #[must_use]
     pub fn with_handshake_timeout(mut self, handshake_timeout: Duration) -> Self {
         self.handshake_timeout = handshake_timeout;
@@ -111,45 +131,50 @@ impl ProtectedDialer {
         self.handshake_timeout
     }
 
+    #[must_use]
+    pub fn with_scoped_resolver(mut self, resolver: ScopedResolver) -> Self {
+        self.scoped_resolver = Some(resolver);
+        self
+    }
+
     pub fn host() -> Self {
         Self::new(SocketCallbacks::none(), Duration::from_secs(10))
     }
 
     pub fn set_network_handle(&self, network_handle: u64) {
         self.network_handle.store(network_handle, Ordering::Release);
+        self.network_revision.fetch_add(1, Ordering::AcqRel);
     }
 
     pub fn network_handle(&self) -> u64 {
         self.network_handle.load(Ordering::Acquire)
     }
 
+    pub fn network_revision(&self) -> u64 {
+        self.network_revision.load(Ordering::Acquire)
+    }
+
     pub async fn resolve(&self, server: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
         if let Ok(address) = server.parse::<IpAddr>() {
             return Ok(vec![SocketAddr::new(address, port)]);
         }
+        let network_handle = self.network_handle();
+        if network_handle == 0 && self.callbacks.resolver_requires_network {
+            return Err(io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Android Network handle is required for protected DNS resolution",
+            ));
+        }
+        if let Some(resolver) = &self.scoped_resolver
+            && let Some(resolution) = resolver(server, port, network_handle)
+        {
+            return resolution.await;
+        }
         let addresses = if let Some(resolve) = &self.callbacks.resolve {
-            let network_handle = self.network_handle();
-            if network_handle == 0 {
-                return Err(io::Error::new(
-                    io::ErrorKind::NotConnected,
-                    "Android Network handle is required for protected DNS resolution",
-                ));
-            }
             let resolve = resolve.clone();
             let server = server.to_owned();
-            // The deadline goes *inside* the closure, not only around it.
-            //
-            // This is D13's shape in a new place: `tokio::time::timeout`
-            // cancels the future, and dropping a `spawn_blocking` join handle
-            // neither cancels a running task nor removes a queued one — tokio
-            // still runs it. The blocking pool is two threads, and platform DNS
-            // retries run well past this timeout, so two abandoned lookups took
-            // the whole pool and everything behind them (flow attribution, the
-            // next resolution) queued and timed out in turn.
-            //
-            // A task that has not started yet can still be dropped for free,
-            // which is the case worth catching; one already inside
-            // `android_getaddrinfofornetwork` cannot be, and no API makes it so.
+            // Cancelling spawn_blocking cannot stop a resolver already running;
+            // reject expired queued work before it consumes the shared pool.
             let deadline = Instant::now() + self.connect_timeout;
             tokio::time::timeout(
                 self.connect_timeout,
@@ -167,10 +192,6 @@ impl ProtectedDialer {
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "DNS resolution timed out"))?
             .map_err(|error| io::Error::other(format!("DNS resolver task failed: {error}")))??
         } else {
-            // The platform path above is bounded, so this one is too. It is not
-            // reachable from Android (a resolver is always installed there), but
-            // an unbounded `lookup_host` on the host build is the same stall
-            // with a different stack.
             tokio::time::timeout(
                 self.connect_timeout,
                 tokio::net::lookup_host((server, port)),
@@ -222,6 +243,112 @@ impl ProtectedDialer {
         }
     }
 
+    /// Race authenticated candidates within one DNS and handshake budget.
+    /// Returned values must release their connection on drop, including race losers.
+    pub async fn connect_server_candidates<T, F, Fut>(
+        &self,
+        server: &str,
+        port: u16,
+        server_ip: Option<IpAddr>,
+        connect: F,
+    ) -> io::Result<T>
+    where
+        T: Send + 'static,
+        F: Fn(SocketAddr) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = io::Result<T>> + Send + 'static,
+    {
+        self.connect_server_candidates_with_budget(
+            server,
+            port,
+            server_ip,
+            self.handshake_timeout,
+            connect,
+        )
+        .await
+    }
+
+    async fn connect_server_candidates_with_budget<T, F, Fut>(
+        &self,
+        server: &str,
+        port: u16,
+        server_ip: Option<IpAddr>,
+        total_budget: Duration,
+        connect: F,
+    ) -> io::Result<T>
+    where
+        T: Send + 'static,
+        F: Fn(SocketAddr) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = io::Result<T>> + Send + 'static,
+    {
+        let deadline = tokio::time::Instant::now() + total_budget;
+        let stagger = CANDIDATE_STAGGER.min(total_budget / 2);
+        let addresses = tokio::time::timeout_at(
+            deadline,
+            self.resolve_server_addresses(server, port, server_ip),
+        )
+        .await
+        .map_err(|_| candidate_timeout())??;
+        let mut addresses = interleaved_candidates(addresses);
+        let connect = Arc::new(connect);
+        let mut attempts = tokio::task::JoinSet::new();
+        let mut next_launch = tokio::time::Instant::now();
+        let mut last_error = None;
+
+        loop {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                attempts.shutdown().await;
+                return Err(candidate_timeout());
+            }
+            if !addresses.is_empty()
+                && attempts.len() < MAX_CONCURRENT_CANDIDATES
+                && (attempts.is_empty() || now >= next_launch)
+            {
+                let address = addresses.pop_front().expect("candidate queue is nonempty");
+                // Reserve time for later batches when both active addresses are silent.
+                let batches =
+                    (addresses.len() + attempts.len() + 1).div_ceil(MAX_CONCURRENT_CANDIDATES);
+                let budget = deadline.saturating_duration_since(now)
+                    / u32::try_from(batches).unwrap_or(u32::MAX);
+                let attempt_deadline = now + budget;
+                let connect = connect.clone();
+                attempts.spawn(async move {
+                    tokio::time::timeout_at(attempt_deadline, connect(address))
+                        .await
+                        .map_err(|_| candidate_timeout())?
+                });
+                next_launch = now + stagger;
+            }
+            if attempts.is_empty() {
+                return Err(last_error.unwrap_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "server has no address")
+                }));
+            }
+            tokio::select! {
+                _ = tokio::time::sleep_until(deadline) => {
+                    attempts.shutdown().await;
+                    return Err(candidate_timeout());
+                }
+                _ = tokio::time::sleep_until(next_launch),
+                    if !addresses.is_empty() && attempts.len() < MAX_CONCURRENT_CANDIDATES => {}
+                joined = attempts.join_next() => {
+                    match joined.expect("attempt set is nonempty") {
+                        Ok(Ok(connection)) => {
+                            attempts.shutdown().await;
+                            return Ok(connection);
+                        }
+                        Ok(Err(error)) => last_error = Some(error),
+                        Err(error) => {
+                            last_error = Some(io::Error::other(format!(
+                                "server connection task failed: {error}"
+                            )));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub async fn connect_tcp(&self, address: SocketAddr) -> io::Result<TcpStream> {
         let socket = if address.is_ipv6() {
             TcpSocket::new_v6()?
@@ -247,18 +374,18 @@ impl ProtectedDialer {
         port: u16,
         server_ip: Option<IpAddr>,
     ) -> io::Result<TcpStream> {
-        let addresses = self
-            .resolve_server_addresses(server, port, server_ip)
-            .await?;
-        let mut last_error = None;
-        for address in addresses {
-            match self.connect_tcp(address).await {
-                Ok(stream) => return Ok(stream),
-                Err(error) => last_error = Some(error),
-            }
-        }
-        Err(last_error
-            .unwrap_or_else(|| io::Error::new(io::ErrorKind::NotFound, "server has no address")))
+        let dialer = self.clone();
+        self.connect_server_candidates_with_budget(
+            server,
+            port,
+            server_ip,
+            self.connect_timeout,
+            move |address| {
+                let dialer = dialer.clone();
+                async move { dialer.connect_tcp(address).await }
+            },
+        )
+        .await
     }
 
     pub fn bind_udp_std(&self, ipv6: bool) -> io::Result<std::net::UdpSocket> {
@@ -339,9 +466,167 @@ impl ProtectedDialer {
     }
 }
 
+fn candidate_timeout() -> io::Error {
+    io::Error::new(io::ErrorKind::TimedOut, "server connection budget expired")
+}
+
+fn interleaved_candidates(addresses: Vec<SocketAddr>) -> std::collections::VecDeque<SocketAddr> {
+    use std::collections::{HashSet, VecDeque};
+    let first_is_ipv6 = addresses.first().is_some_and(SocketAddr::is_ipv6);
+    let mut seen = HashSet::new();
+    let (mut first, mut second): (VecDeque<_>, VecDeque<_>) = addresses
+        .into_iter()
+        .filter(|address| seen.insert(*address))
+        .partition(|address| address.is_ipv6() == first_is_ipv6);
+    let mut ordered = VecDeque::with_capacity(first.len() + second.len());
+    while !first.is_empty() || !second.is_empty() {
+        if let Some(address) = first.pop_front() {
+            ordered.push_back(address);
+        }
+        if let Some(address) = second.pop_front() {
+            ordered.push_back(address);
+        }
+    }
+    ordered
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Mutex;
+
+    #[tokio::test]
+    async fn candidate_races_reach_later_addresses_and_release_losers() {
+        use std::sync::atomic::AtomicUsize;
+
+        struct Lease(Arc<AtomicUsize>);
+        impl Drop for Lease {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+
+        let callbacks = SocketCallbacks::none().with_resolver(|_, _, _| {
+            Ok(vec![
+                "127.0.0.1:1".parse().unwrap(),
+                "127.0.0.1:2".parse().unwrap(),
+                "127.0.0.1:3".parse().unwrap(),
+            ])
+        });
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_secs(1))
+            .with_handshake_timeout(Duration::from_secs(1));
+        dialer.set_network_handle(1);
+        let live = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let winner = dialer
+            .connect_server_candidates("synthetic.example", 443, None, {
+                let live = live.clone();
+                let peak = peak.clone();
+                move |address| {
+                    let live = live.clone();
+                    let peak = peak.clone();
+                    async move {
+                        let active = live.fetch_add(1, Ordering::SeqCst) + 1;
+                        peak.fetch_max(active, Ordering::SeqCst);
+                        let lease = Lease(live);
+                        if address.port() != 3 {
+                            std::future::pending::<()>().await;
+                        }
+                        Ok(lease)
+                    }
+                }
+            })
+            .await
+            .expect("silent first addresses must not consume every candidate's budget");
+        assert!(peak.load(Ordering::SeqCst) <= 2);
+        assert_eq!(
+            live.load(Ordering::SeqCst),
+            1,
+            "race losers must already be dropped"
+        );
+        drop(winner);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn scoped_dns_requires_an_android_network_before_callback_or_socket() {
+        use std::sync::atomic::AtomicUsize;
+
+        let peer = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = peer.local_addr().unwrap();
+        let protections = Arc::new(AtomicUsize::new(0));
+        let protected_calls = protections.clone();
+        let callbacks = SocketCallbacks::protect_only(move |_| {
+            protected_calls.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .with_resolver(|_, _, _| panic!("scoped DNS must never use the system resolver"));
+        let base = ProtectedDialer::new(callbacks, Duration::from_secs(1));
+        let scoped_calls = Arc::new(AtomicUsize::new(0));
+        let called = scoped_calls.clone();
+        let underlying = base.clone();
+        let scoped: ScopedResolver = Arc::new(move |host, port, network| {
+            assert_eq!(host, "bootstrap.example");
+            assert_eq!(network, 1);
+            called.fetch_add(1, Ordering::SeqCst);
+            let underlying = underlying.clone();
+            Some(Box::pin(async move {
+                let socket = underlying.connect_udp(address).await?;
+                socket.send(b"owned-bootstrap-fixture").await?;
+                Ok(vec![SocketAddr::from(([192, 0, 2, 7], port))])
+            }))
+        });
+        let dialer = base.with_scoped_resolver(scoped);
+        assert_eq!(
+            dialer
+                .resolve("bootstrap.example", 443)
+                .await
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::NotConnected
+        );
+        assert_eq!(scoped_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(protections.load(Ordering::SeqCst), 0);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(20), peer.recv(&mut [0; 64]))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            dialer.resolve("192.0.2.7", 443).await.unwrap(),
+            vec![SocketAddr::from(([192, 0, 2, 7], 443))]
+        );
+        dialer.set_network_handle(1);
+        assert_eq!(
+            dialer.resolve("bootstrap.example", 443).await.unwrap(),
+            vec![SocketAddr::from(([192, 0, 2, 7], 443))]
+        );
+        let mut packet = [0; 64];
+        let length = tokio::time::timeout(Duration::from_millis(100), peer.recv(&mut packet))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&packet[..length], b"owned-bootstrap-fixture");
+        assert_eq!(scoped_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(protections.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn candidate_races_share_one_deadline_with_dns() {
+        let callbacks = SocketCallbacks::none().with_resolver(|_, _, _| {
+            std::thread::sleep(Duration::from_millis(180));
+            Ok(vec!["127.0.0.1:443".parse().unwrap()])
+        });
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_secs(1))
+            .with_handshake_timeout(Duration::from_millis(300));
+        dialer.set_network_handle(1);
+        let result = dialer
+            .connect_server_candidates("synthetic.example", 443, None, |address| async move {
+                tokio::time::sleep(Duration::from_millis(180)).await;
+                Ok(address)
+            })
+            .await;
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::TimedOut);
+    }
 
     use super::*;
 
@@ -441,6 +726,19 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn host_resolver_owns_bootstrap_without_an_android_network() {
+        let callbacks = SocketCallbacks::none().with_host_resolver(|host, port| {
+            assert_eq!(host, "router.example");
+            Ok(vec![SocketAddr::new("203.0.113.7".parse().unwrap(), port)])
+        });
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_secs(1));
+        assert_eq!(
+            dialer.resolve_one("router.example", 443).await.unwrap(),
+            "203.0.113.7:443".parse().unwrap()
+        );
+    }
+
+    #[tokio::test]
     async fn literal_server_never_invokes_dns_resolver() {
         let callbacks = SocketCallbacks::none()
             .with_resolver(|_, _, _| panic!("literal address must bypass DNS resolver"));
@@ -489,5 +787,32 @@ mod tests {
         let (accepted, _) = listener.accept().await.unwrap();
         assert_eq!(connected.peer_addr().unwrap(), reachable);
         drop(accepted);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn tcp_server_reaches_a_second_address_while_the_first_syn_is_dropped() {
+        let silent = TcpSocket::new_v4().unwrap();
+        silent.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let silent = silent.listen(0).unwrap();
+        let silent_address = silent.local_addr().unwrap();
+        // A full Linux accept queue drops later SYNs without needing a firewall.
+        let _filler = TcpStream::connect(silent_address).await.unwrap();
+        let reachable = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let reachable_address = reachable.local_addr().unwrap();
+        let callbacks = SocketCallbacks::none()
+            .with_resolver(move |_, _, _| Ok(vec![silent_address, reachable_address]));
+        let dialer = ProtectedDialer::new(callbacks, Duration::from_secs(1));
+        dialer.set_network_handle(1);
+
+        let stream = tokio::time::timeout(
+            Duration::from_millis(600),
+            dialer.connect_tcp_server("synthetic.example", reachable_address.port(), None),
+        )
+        .await
+        .expect("one dropped SYN must not hide the reachable address")
+        .unwrap();
+        assert_eq!(stream.peer_addr().unwrap(), reachable_address);
+        reachable.accept().await.unwrap();
     }
 }

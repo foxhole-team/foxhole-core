@@ -10,6 +10,111 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+#[cfg_attr(miri, ignore = "requires protected UDP sockets")]
+#[tokio::test]
+async fn an_unanswered_hostname_peer_rotates_to_the_next_resolved_address() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let working = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let reachable = working.local_addr().unwrap();
+    let black_hole = UdpSocket::bind(("127.0.0.2", reachable.port()))
+        .await
+        .unwrap();
+    let silent = black_hole.local_addr().unwrap();
+    let lookups = Arc::new(AtomicUsize::new(0));
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let protect_calls = calls.clone();
+    let bind_calls = calls.clone();
+    let lookup_count = lookups.clone();
+    let callbacks = foxcore_dialer::SocketCallbacks::new(
+        move |_| {
+            protect_calls.lock().unwrap().push("protect".to_string());
+            true
+        },
+        move |_, network| {
+            bind_calls.lock().unwrap().push(format!("bind:{network}"));
+            true
+        },
+    )
+    .with_resolver(move |host, port, network| {
+        assert_eq!(host, "wg.example");
+        assert_eq!(port, reachable.port());
+        assert_eq!(network, 42);
+        lookup_count.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![silent, reachable])
+    });
+    let dialer = ProtectedDialer::new(callbacks, Duration::from_secs(1));
+    dialer.set_network_handle(42);
+    let mut config = peer_config(reachable);
+    config.server = "wg.example".into();
+    config.server_ip = None;
+    config.amnezia = Some(foxcore_api::AmneziaConfig {
+        timers: foxcore_api::AmneziaTimers {
+            rekey_timeout_s: Some(foxcore_api::AmneziaTimerRange::single(1)),
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+    let outbound = PacketTunnelOutbound::wireguard(config, dialer).unwrap();
+    let metrics = Arc::new(FlowMetrics::default());
+    let relay = PacketTunnelRelay::connect(&outbound, &[IpAddr::V4(TUN_V4)], metrics.clone())
+        .await
+        .unwrap();
+    let (to_relay, from_tun) = mpsc::channel(8);
+    let (to_tun, mut tun_inbox) = mpsc::channel(8);
+    let cancel = CancellationToken::new();
+    let task = tokio::spawn(relay.run(from_tun, to_tun, cancel.clone()));
+    let server = tokio::spawn(async move {
+        let mut buffer = [0_u8; 2048];
+        let (length, client) = recv(&working, &mut buffer).await;
+        let initiation = Initiation::decode(&buffer[..length]).unwrap();
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let (response, send, receive) = responder
+            .respond(&initiation, &SERVER_EPHEMERAL, 0xABCD)
+            .unwrap();
+        working.send_to(&response.encode(), client).await.unwrap();
+        let mut session = TransportSession::new(TransportKeys {
+            send,
+            receive,
+            sender_index: 0xABCD,
+            receiver_index: initiation.sender_index,
+        });
+        loop {
+            let (length, _) = recv(&working, &mut buffer).await;
+            let plain = session.open(&mut buffer[..length]).unwrap();
+            if ip_packet_len(plain).is_some() {
+                assert_eq!(&plain[12..16], &TUNNEL_V4.octets());
+                break;
+            }
+        }
+        let mut reply = Vec::new();
+        session
+            .seal(&ip_packet(REMOTE_V4, TUNNEL_V4), &mut reply)
+            .unwrap();
+        working.send_to(&reply, client).await.unwrap();
+    });
+    to_relay.send(ip_packet(TUN_V4, REMOTE_V4)).await.unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(4), tun_inbox.recv())
+        .await
+        .expect("an unanswered first UDP address must not hide the reachable WireGuard peer")
+        .expect("the relay must stay alive during endpoint rotation");
+    assert_eq!(&reply[12..16], &REMOTE_V4.octets());
+    assert_eq!(&reply[16..20], &TUN_V4.octets());
+    assert_eq!(
+        lookups.load(Ordering::SeqCst),
+        1,
+        "one network epoch must resolve only once"
+    );
+    assert_eq!(
+        *calls.lock().unwrap(),
+        ["protect", "bind:42", "protect", "bind:42"]
+    );
+    assert_eq!(metrics.snapshot().bytes_up, 28);
+    assert_eq!(metrics.snapshot().bytes_down, 28);
+    cancel.cancel();
+    task.await.unwrap().unwrap();
+    server.await.unwrap();
+}
+
 /// The other trigger: a profile with no address of the tun's family at all
 /// can translate nothing, so the engine refuses rather than dropping
 /// everything.

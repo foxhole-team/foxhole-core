@@ -5,9 +5,9 @@
 # decryption and signing. Verifying somebody else's signature with a public key
 # involves no secret and is not affected. A pinned-source audit established
 # that the Arti graph we build never performs a private-key RSA
-# operation on the client path — the only callers are relay and directory-
-# authority code that is either behind features we do not enable, in crates that
-# are not in the lockfile at all, or under `#[cfg(test)]`.
+# operation on the client path. Public certificate-signing helpers are compiled,
+# but the reviewed client and onion-service graph has no call into them. Relay
+# callers are disabled; constructor callers in netdocs are tests or documentation.
 #
 # That audit is a statement about pinned sources. This script re-derives it, so
 # an Arti bump, a feature change or a new dependency that reopens the path turns
@@ -112,8 +112,8 @@ def check(ok, msg):
 AUDITED_RSA = "0.9.10"
 AUDITED_DIRECT_DEPENDENTS = {
     ("ssh-key-fork-arti", "0.6.7"),
-    ("tor-key-forge", "0.44.0"),
-    ("tor-llcrypto", "0.44.0"),
+    ("tor-key-forge", "0.47.0"),
+    ("tor-llcrypto", "0.47.0"),
 }
 # Crates whose *production* code signs with an RSA private key. Neither is a
 # dependency of a Tor client; both arrive only with relay or directory-authority
@@ -186,6 +186,7 @@ PATTERNS = {
     "decrypt_blinded": re.compile(r"\bdecrypt_blinded\b"),
     "sign_with_rng": re.compile(r"\bsign_with_rng\b"),
     "define_rsa_keypair": re.compile(r"\bdefine_rsa_keypair\b"),
+    "rsa-signing-call": re.compile(r"RsaSha1Signature::new_sign_netdoc|AuthCert::new_base|CrossCert::new\(|EncodedRsaCrosscert::encode_and_sign"),
 }
 
 hits = {}

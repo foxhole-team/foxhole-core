@@ -34,6 +34,7 @@ pub(crate) fn shutdown_worker_runtime(runtime: tokio::runtime::Runtime) {
 
 pub(crate) struct RuntimeWorker {
     pub(crate) state: AtomicU8,
+    pub(crate) dns_stop_fence: Arc<AtomicU8>,
     /// Serializes stop calls; `abandon` must never acquire it.
     pub(crate) stop_lock: Mutex<()>,
     /// Ownership token for both the worker and the `Stopped` result.
@@ -45,6 +46,7 @@ impl RuntimeWorker {
     pub(crate) fn new(thread: JoinHandle<()>, done: mpsc::Receiver<()>) -> Self {
         Self {
             state: AtomicU8::new(WORKER_RUNNING),
+            dns_stop_fence: Arc::new(AtomicU8::new(WORKER_RUNNING)),
             stop_lock: Mutex::new(()),
             thread: Mutex::new(Some(thread)),
             done: Mutex::new(done),
@@ -57,6 +59,12 @@ impl RuntimeWorker {
             WORKER_STOPPED => return StopResult::AlreadyStopped,
             WORKER_RUNNING => {
                 self.state.store(WORKER_STOPPING, Ordering::Release);
+                let _ = self.dns_stop_fence.compare_exchange(
+                    WORKER_RUNNING,
+                    WORKER_STOPPING,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
                 request_stop();
             }
             WORKER_STOPPING => {}
@@ -83,6 +91,12 @@ impl RuntimeWorker {
             return StopResult::TimedOut;
         }
         self.state.store(WORKER_STOPPED, Ordering::Release);
+        let _ = self.dns_stop_fence.compare_exchange(
+            WORKER_STOPPING,
+            WORKER_STOPPED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
         StopResult::Stopped
     }
 
@@ -91,6 +105,8 @@ impl RuntimeWorker {
     /// Never acquire `stop_lock`: a force kill must not queue behind `stop`.
     /// Ownership is settled by taking `thread`, which is never held while waiting.
     pub(crate) fn abandon(&self) -> StopResult {
+        self.dns_stop_fence
+            .store(crate::dns_continuation::DNS_REVOKED, Ordering::Release);
         if self.state.load(Ordering::Acquire) == WORKER_STOPPED {
             return StopResult::AlreadyStopped;
         }
@@ -109,6 +125,8 @@ impl RuntimeWorker {
     }
 
     pub(crate) fn quarantine(&self) {
+        self.dns_stop_fence
+            .store(crate::dns_continuation::DNS_REVOKED, Ordering::Release);
         if let Some(thread) = lock(&self.thread).take() {
             quarantine_worker(thread);
         }

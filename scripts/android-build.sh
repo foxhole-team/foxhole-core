@@ -116,10 +116,13 @@ if [ "$actual_cargo_ndk" != "cargo-ndk $CARGO_NDK_VERSION" ]; then
     exit 1
 fi
 
-# Releases ship ARM only; emulator ABIs require FOXCORE_ANDROID_ABIS explicitly.
-abis=(${FOXCORE_ANDROID_ABIS:-arm64-v8a armeabi-v7a})
+abis=(${FOXCORE_ANDROID_ABIS:-arm64-v8a armeabi-v7a x86 x86_64})
 ndk_args=()
 for abi in "${abis[@]}"; do
+    case "$abi" in
+        arm64-v8a | armeabi-v7a | x86 | x86_64) ;;
+        *) echo "Unsupported Android ABI: $abi" >&2; exit 2 ;;
+    esac
     ndk_args+=("-t" "$abi")
 done
 
@@ -133,7 +136,7 @@ echo "protocol features: ${FEATURES:-<none>}"
 mkdir -p "$OUTPUT"
 cd "$ROOT"
 # Bash 3.2 treats an empty array as unset under `set -u`.
-cargo ndk "${ndk_args[@]}" -o "$OUTPUT" \
+cargo ndk "${ndk_args[@]}" --platform 26 -o "$OUTPUT" \
     build --release --locked --offline -p foxcore-android \
     ${feature_args[@]+"${feature_args[@]}"}
 "$ROOT/scripts/android-elf-gate.sh" "$OUTPUT"

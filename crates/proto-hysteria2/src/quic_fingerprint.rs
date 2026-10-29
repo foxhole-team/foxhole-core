@@ -191,17 +191,56 @@ async fn the_first_flight_is_two_1200_byte_datagrams() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_quic_ja4_records_the_tls13_only_hello() {
+async fn the_quic_tls13_profile_records_its_chrome_extension_gap() {
     use foxcore_transport::ja;
     let flight = capture().await;
     let hello = ja::parse(&flight.client_hello);
     let (ja4, _raw) = ja::ja4_over(&hello, ja::Transport::Quic);
     let mut fields = ja4.split('_');
-    assert!(
-        !hello.extensions.contains(&0x0023),
-        "QUIC must not advertise TLS 1.2 session tickets"
-    );
     assert_eq!(fields.next(), Some("q13d0311h3"), "JA4_a");
     assert_eq!(fields.next(), Some("55b375c5d22e"), "JA4_b");
+    assert_eq!(fields.next(), Some("505831688e36"), "JA4_c");
+    let mut extensions = hello.extensions.clone();
+    extensions.sort_unstable();
+    assert_eq!(
+        extensions,
+        vec![
+            0x0000, 0x0005, 0x000a, 0x000b, 0x000d, 0x0010, 0x0017, 0x002b, 0x002d, 0x0033, 0x0039
+        ]
+    );
+    assert!(
+        !hello.extensions.contains(&0x0023),
+        "TLS 1.2 tickets cannot resume QUIC"
+    );
+
+    let chrome_flight: Vec<_> =
+        include_str!("../../../fixtures/quic-initial/chromium-151-first-flight.hex")
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                let bytes: Vec<_> = (0..line.len() / 2)
+                    .map(|index| u8::from_str_radix(&line[index * 2..index * 2 + 2], 16).unwrap())
+                    .collect();
+                foxcore_transport::quic_initial::parse_datagram(&bytes).unwrap()
+            })
+            .collect();
+    let chrome_hello = foxcore_transport::quic_initial::client_hello(&chrome_flight).unwrap();
+    let chrome = ja::parse(&chrome_hello);
+    let chrome_ja4 = ja::ja4_over(&chrome, ja::Transport::Quic).0;
+    assert_eq!(chrome.extensions.len(), 11);
+    assert_eq!(chrome_ja4, "q13d0311h3_55b375c5d22e_653d80c3fe9d");
+    let mut chrome_extensions = chrome.extensions.clone();
+    chrome_extensions.sort_unstable();
+    assert_eq!(
+        chrome_extensions,
+        vec![
+            0x0000, 0x000a, 0x000d, 0x0010, 0x001b, 0x002b, 0x002d, 0x0033, 0x0039, 0x44cd, 0xfe0d
+        ]
+    );
+    assert!(chrome.extensions.contains(&0x44cd));
+    assert!(chrome.extensions.contains(&0xfe0d));
+    assert!(!hello.extensions.contains(&0x44cd));
+    assert!(!hello.extensions.contains(&0xfe0d));
+    assert_ne!(ja4, chrome_ja4);
     assert_ne!(ja::ja4(&hello).0, ja4);
 }

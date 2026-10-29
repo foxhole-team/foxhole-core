@@ -20,7 +20,7 @@ use crate::continuity::ContinuityGate;
 #[cfg(feature = "wireguard")]
 use crate::{is_i2p, is_onion};
 
-/// Keep at most 1 MiB idle, with a floor useful at the largest configured buffer.
+/// Keep a four-session cache capacity floor even when it exceeds the idle byte budget.
 fn idle_relay_buffers(relay_buffer_bytes: usize) -> usize {
     const IDLE_BUDGET: usize = 1024 * 1024;
     (IDLE_BUDGET / relay_buffer_bytes.max(1)).max(8)
@@ -378,8 +378,19 @@ impl FlowEngine {
             destination,
             &policy.dns,
         );
-        if !self
-            .attribute_context(
+        let dns_flow = destination.port() == 53 && policy.dns_proxy.is_some();
+        let attributed = if dns_flow {
+            self.attribute_dns_context(
+                &mut context,
+                source,
+                destination,
+                &policy.routes,
+                &policy.dns_config,
+                IpTransport::Tcp,
+            )
+            .await
+        } else {
+            self.attribute_context(
                 &mut context,
                 source,
                 destination,
@@ -387,19 +398,18 @@ impl FlowEngine {
                 IpTransport::Tcp,
             )
             .await
-        {
+        };
+        if !attributed {
             self.metrics.attribution_error();
             self.metrics.block_flow();
             self.emit_block(BlockReason::Unattributed, context.transport, &context);
             Self::close_towards_app(&mut stream).await;
             return;
         }
-        if context.destination.port == 53 && policy.dns_proxy.is_some() {
-            let metrics = self.metrics.clone();
-            let policy = self.policy.clone();
-            metrics.open_tcp();
-            serve_dns_tcp(&mut stream, policy, context, &metrics, cancel).await;
-            metrics.close_flow();
+        if dns_flow {
+            self.metrics.open_tcp();
+            serve_dns_tcp(&mut stream, self, context, cancel).await;
+            self.metrics.close_flow();
             return;
         }
         // Refuse bypasses in band so Android can fall back to filtered DNS.

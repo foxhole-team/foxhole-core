@@ -20,8 +20,11 @@ PRIMARY_CARGO_HOME="${CARGO_HOME:-$HOME/.cargo}"
 
 # Two cold targets need roughly 6 GiB per ABI.
 available_gib() {
-    df -g "$ROOT" 2>/dev/null | awk 'NR == 2 { print $4 }' ||
-        df -BG "$ROOT" 2>/dev/null | awk 'NR == 2 { gsub(/G/, "", $4); print $4 }'
+    if [ "$(uname -s)" = Darwin ]; then
+        df -g "$ROOT" | awk 'NR == 2 { print $4 }'
+    else
+        df -BG "$ROOT" | awk 'NR == 2 { gsub(/G/, "", $4); print $4 }'
+    fi
 }
 space="$(available_gib)"
 needed=$((6 * $(printf '%s' "$ABIS" | wc -w | tr -d ' ')))
@@ -46,14 +49,8 @@ sha256() {
 path_leak_count() {
     local lib="$1"
     shift
-    {
-        strings -a "$lib" |
-            grep -E '/(Users|home|root|builds)/|^/(private|tmp|var/folders)/' || true
-        for host_root in "$@"; do
-            [ -n "$host_root" ] || continue
-            strings -a "$lib" | grep -F "$host_root" || true
-        done
-    } | sort -u | wc -l | tr -d ' '
+    strings -a "$lib" | python3 "$ROOT/scripts/android-path-leaks.py" "$@" |
+        wc -l | tr -d ' '
 }
 
 run() {
@@ -61,9 +58,14 @@ run() {
     echo
     echo "== $name: building from $source =="
     mkdir -p "$WORK/$name"
+    local target_dir="$WORK/$name-target"
+    rm -rf "$target_dir"
     (
         cd "$source" || exit 1
-        CARGO_HOME="$cargo_home" \
+        CARGO_HOME="$cargo_home" CARGO_TARGET_DIR="$target_dir" \
+            RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$target_dir=/usr/src/foxcore-target" \
+            CFLAGS="${CFLAGS:-} -ffile-prefix-map=$target_dir=/usr/src/foxcore-target -fdebug-prefix-map=$target_dir=/usr/src/foxcore-target" \
+            CXXFLAGS="${CXXFLAGS:-} -ffile-prefix-map=$target_dir=/usr/src/foxcore-target -fdebug-prefix-map=$target_dir=/usr/src/foxcore-target" \
             FOXCORE_ANDROID_ABIS="$ABIS" FOXCORE_JNI_OUTPUT="$WORK/$name" \
             ./scripts/android-build.sh
     ) >"$WORK/$name.log" 2>&1 || {
@@ -74,26 +76,26 @@ run() {
     grep -E 'ELF gate|Finished' "$WORK/$name.log" | tail -3
 }
 
-for abi_target in aarch64-linux-android armv7-linux-androideabi; do
-    rm -rf "$ROOT/target/$abi_target"
-done
 run clean "$ROOT" "$PRIMARY_CARGO_HOME" || exit 1
 
-# Exclude `.git` and `target` so the moved build is source-only and cold.
+# Keep local instructions and build/Git state out of the moved source.
 MOVED_SOURCE="$WORK_REQUESTED/moved-src"
 MOVED_CARGO_HOME="$WORK_REQUESTED/moved-cargo-home"
 rm -rf "$MOVED_SOURCE"
 mkdir -p "$MOVED_SOURCE"
-rsync -a --exclude target --exclude .git "$ROOT/" "$MOVED_SOURCE/" || exit 1
+python3 - "$ROOT" "$MOVED_SOURCE" <<'PYTHON'
+import shutil
+import sys
+shutil.copytree(sys.argv[1], sys.argv[2], dirs_exist_ok=True, symlinks=True,
+                ignore=shutil.ignore_patterns('target', '.git', 'AGENTS.md'))
+PYTHON
+[ "$?" = "0" ] || exit 1
 rm -rf "$MOVED_CARGO_HOME"
 mkdir -p "$MOVED_CARGO_HOME"
 for cache in registry git; do
     if [ -e "$PRIMARY_CARGO_HOME/$cache" ]; then
         cp -al "$PRIMARY_CARGO_HOME/$cache" "$MOVED_CARGO_HOME/" || exit 1
     fi
-done
-for abi_target in aarch64-linux-android armv7-linux-androideabi; do
-    rm -rf "$ROOT/target/$abi_target"
 done
 run moved "$MOVED_SOURCE" "$MOVED_CARGO_HOME" || exit 1
 

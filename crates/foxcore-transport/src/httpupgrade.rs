@@ -61,9 +61,13 @@ where
         let mut chunk = [0u8; 1024];
         let header_end = loop {
             if let Some(position) = find_subsequence(&buffer, b"\r\n\r\n") {
-                break position + 4;
+                let end = position + 4;
+                if end > MAX_RESPONSE_HEADER_BYTES {
+                    return Err(invalid("httpupgrade response headers exceeded 16 KiB"));
+                }
+                break end;
             }
-            if buffer.len() > MAX_RESPONSE_HEADER_BYTES {
+            if buffer.len() >= MAX_RESPONSE_HEADER_BYTES {
                 return Err(invalid("httpupgrade response headers exceeded 16 KiB"));
             }
             let read = stream.read(&mut chunk).await?;
@@ -208,12 +212,161 @@ where
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::io;
     use std::time::Duration;
 
     use foxcore_api::{SecretString, StreamTransportConfig};
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     use crate::wrap_stream_transport;
+
+    #[tokio::test]
+    async fn http_upgrade_tls_forces_http1_even_with_default_or_conflicting_profile_alpn() {
+        tokio::time::timeout(Duration::from_secs(5), async {
+            crate::ensure_process_crypto_provider().unwrap();
+            for alpn in [vec![], vec!["h2", "http/1.1"], vec!["h2"]] {
+                use base64::Engine as _;
+                use foxcore_api::{TlsConfig, TlsFingerprint};
+                use sha2::{Digest, Sha256};
+
+                let generated =
+                    rcgen::generate_simple_self_signed(vec!["tls.example".into()]).unwrap();
+                let certificate = generated.cert.der().clone();
+                let mut config = rustls::ServerConfig::builder()
+                    .with_no_client_auth()
+                    .with_single_cert(
+                        vec![certificate.clone()],
+                        rustls_pki_types::PrivatePkcs8KeyDer::from(
+                            generated.signing_key.serialize_der(),
+                        )
+                        .into(),
+                    )
+                    .unwrap();
+                config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+                let (client_io, server_io) = tokio::io::duplex(128 * 1024);
+                let payload = vec![0x48; 257];
+                let expected = payload.clone();
+                let peer = tokio::spawn(async move {
+                    let mut secured = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(config))
+                        .accept(server_io)
+                        .await
+                        .unwrap();
+                    assert_eq!(secured.get_ref().1.server_name(), Some("tls.example"));
+                    assert_eq!(
+                        secured.get_ref().1.alpn_protocol(),
+                        Some(b"http/1.1".as_slice()),
+                        "HTTP/1 HTTPUpgrade must not negotiate h2"
+                    );
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        request.push(secured.read_u8().await.unwrap());
+                        assert!(request.len() <= 8192);
+                    }
+                    assert!(request.starts_with(b"GET /alpn HTTP/1.1\r\n"));
+                    let request = String::from_utf8(request).unwrap();
+                    assert!(request.contains("\r\nHost: upgrade.example\r\n"));
+                    assert!(!request.to_ascii_lowercase().contains("sec-websocket-key"));
+                    secured
+                        .write_all(b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n\r\n")
+                        .await
+                        .unwrap();
+                    secured.flush().await.unwrap();
+                    let mut observed = vec![0; expected.len()];
+                    secured.read_exact(&mut observed).await.unwrap();
+                    assert_eq!(observed, expected);
+                    secured.write_all(&observed).await.unwrap();
+                    secured.flush().await.unwrap();
+                });
+                let profile_alpn: Vec<String> = alpn.into_iter().map(str::to_owned).collect();
+                let tls = TlsConfig {
+                    enabled: true,
+                    server_name: Some("tls.example".into()),
+                    insecure: false,
+                    pinned_certificate_sha256: Some(
+                        base64::engine::general_purpose::STANDARD
+                            .encode(Sha256::digest(certificate.as_ref())),
+                    ),
+                    fingerprint: Some(TlsFingerprint::Chrome151),
+                    alpn: profile_alpn.clone(),
+                    ..TlsConfig::default()
+                };
+                let transport = StreamTransportConfig::HttpUpgrade {
+                    path: "/alpn".into(),
+                    host: Some("upgrade.example".into()),
+                    headers: BTreeMap::new(),
+                };
+                let mut stream =
+                    crate::establish_stream(client_io, &tls, &transport, "origin.example", 443)
+                        .await
+                        .unwrap();
+                stream.write_all(&payload).await.unwrap();
+                stream.flush().await.unwrap();
+                let mut echoed = vec![0; payload.len()];
+                stream.read_exact(&mut echoed).await.unwrap();
+                assert_eq!(echoed, payload);
+                assert_eq!(tls.alpn, profile_alpn, "the supplied profile is immutable");
+                drop(stream);
+                peer.await.unwrap();
+            }
+        })
+        .await
+        .expect("TLS HTTPUpgrade ALPN fixture did not settle");
+    }
+
+    async fn response_with_header_size(header_bytes: usize) -> io::Result<crate::BoxStream> {
+        let (client_io, mut server_io) = tokio::io::duplex(64 * 1024);
+        let peer = tokio::spawn(async move {
+            let mut request = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let count = server_io.read(&mut chunk).await.unwrap();
+                assert!(count > 0, "client closed before the synthetic handshake");
+                request.extend_from_slice(&chunk[..count]);
+                assert!(request.len() <= 4096, "synthetic request must stay bounded");
+            }
+            let mut response =
+                b"HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nX-Padding: "
+                    .to_vec();
+            assert!(header_bytes >= response.len() + 4);
+            response.resize(header_bytes - 4, b'p');
+            response.extend_from_slice(b"\r\n\r\n");
+            assert_eq!(response.len(), header_bytes);
+            response.extend_from_slice(b"payload-after-headers");
+            server_io.write_all(&response).await.unwrap();
+        });
+        let transport = StreamTransportConfig::HttpUpgrade {
+            path: "/synthetic".into(),
+            host: None,
+            headers: BTreeMap::new(),
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            wrap_stream_transport(client_io, &transport, "synthetic.example", 80, false),
+        )
+        .await
+        .expect("synthetic upgrade handshake must settle");
+        peer.await.unwrap();
+        result
+    }
+
+    #[tokio::test]
+    async fn http_upgrade_rejects_a_terminated_header_above_16_kib() {
+        let result = response_with_header_size(super::MAX_RESPONSE_HEADER_BYTES + 1).await;
+        match result {
+            Ok(_) => panic!("terminated HTTPUpgrade headers above 16 KiB must be rejected"),
+            Err(error) => assert_eq!(error.kind(), io::ErrorKind::InvalidInput),
+        }
+    }
+
+    #[tokio::test]
+    async fn http_upgrade_accepts_the_header_limit_and_preserves_payload() {
+        let mut stream = response_with_header_size(super::MAX_RESPONSE_HEADER_BYTES)
+            .await
+            .expect("a header exactly at the limit must remain accepted");
+        let mut payload = Vec::new();
+        stream.read_to_end(&mut payload).await.unwrap();
+        assert_eq!(payload, b"payload-after-headers");
+    }
 
     #[tokio::test]
     async fn http_upgrade_handshakes_then_streams_raw_bytes() {

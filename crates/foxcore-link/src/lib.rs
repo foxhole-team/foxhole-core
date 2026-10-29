@@ -1,5 +1,10 @@
 #![forbid(unsafe_code)]
 
+mod clash;
+mod structured;
+mod subscription_source;
+pub use subscription_source::outline_access_key_source;
+
 use std::collections::HashMap;
 use std::net::IpAddr;
 
@@ -304,7 +309,6 @@ fn import_vmess(value: &str) -> Result<ImportedProfile, LinkError> {
         }
     };
 
-    require_vmess_noop(object, "type", &["", "none"])?;
     require_vmess_disabled(object, "mux")?;
     // XUDP exists for VMess too, but only the VLESS carrier is implemented here.
     for field in ["packetEncoding", "packet_encoding"] {
@@ -323,11 +327,20 @@ fn import_vmess(value: &str) -> Result<ImportedProfile, LinkError> {
         ));
     }
 
-    let transport = match vmess_string(object, "net")?
+    let network = vmess_string(object, "net")?
         .unwrap_or("tcp")
-        .to_ascii_lowercase()
-        .as_str()
-    {
+        .to_ascii_lowercase();
+    if network != "grpc" {
+        require_vmess_noop(object, "type", &["", "none"])?;
+        for field in GRPC_TUNING_OPTIONS {
+            if object.contains_key(*field) {
+                return Err(LinkError::Unsupported(
+                    "VMess gRPC settings require net=grpc".into(),
+                ));
+            }
+        }
+    }
+    let transport = match network.as_str() {
         "" | "tcp" | "raw" => {
             if vmess_string(object, "path")?.is_some_and(|value| !value.is_empty())
                 || vmess_string(object, "host")?.is_some_and(|value| !value.is_empty())
@@ -348,6 +361,70 @@ fn import_vmess(value: &str) -> Result<ImportedProfile, LinkError> {
                 .map(ToOwned::to_owned),
             headers: Default::default(),
         },
+        "httpupgrade" => StreamTransportConfig::HttpUpgrade {
+            path: vmess_string(object, "path")?
+                .filter(|value| !value.is_empty())
+                .unwrap_or("/")
+                .to_owned(),
+            host: vmess_string(object, "host")?
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+            headers: Default::default(),
+        },
+        "http" | "h2" => StreamTransportConfig::Http2 {
+            host: vmess_string(object, "host")?
+                .map(|value| {
+                    value
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|host| !host.is_empty())
+                        .map(str::to_owned)
+                        .collect()
+                })
+                .unwrap_or_default(),
+            path: vmess_string(object, "path")?
+                .filter(|value| !value.is_empty())
+                .unwrap_or("/")
+                .to_owned(),
+            method: "PUT".into(),
+        },
+        "grpc" => {
+            let mode = match vmess_string(object, "type")?.unwrap_or("none") {
+                "" | "none" | "gun" => "gun",
+                "multi" => "multi",
+                _ => {
+                    return Err(LinkError::Unsupported(
+                        "VMess gRPC mode is not implemented".into(),
+                    ));
+                }
+            };
+            let mut settings = HashMap::new();
+            settings.insert("mode".into(), mode.into());
+            for field in GRPC_TUNING_OPTIONS {
+                if let Some(value) = object.get(*field) {
+                    let text = match value {
+                        serde_json::Value::String(text) => text.clone(),
+                        serde_json::Value::Number(number) => number.to_string(),
+                        serde_json::Value::Bool(value) if *field == "permit_without_stream" => {
+                            value.to_string()
+                        }
+                        _ => {
+                            return Err(LinkError::Invalid(
+                                "VMess gRPC setting has an invalid type".into(),
+                            ));
+                        }
+                    };
+                    settings.insert((*field).into(), text);
+                }
+            }
+            grpc_transport(
+                &settings,
+                vmess_string(object, "path")?.unwrap_or("").to_owned(),
+                vmess_string(object, "host")?
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned),
+            )?
+        }
         _ => {
             return Err(LinkError::Unsupported(
                 "VMess transport is not implemented".into(),
@@ -463,6 +540,14 @@ fn reject_unknown_vmess_fields(
         "tls",
         "type",
         "v",
+        "rpc_path",
+        "user_agent",
+        "idle_timeout_ms",
+        "health_check_timeout_ms",
+        "idle_timeout",
+        "health_check_timeout",
+        "permit_without_stream",
+        "initial_windows_size",
     ];
     let mut unknown = object.keys().filter(|key| !ALLOWED.contains(&key.as_str()));
     if unknown.next().is_some() {
@@ -578,6 +663,19 @@ pub fn import_subscription(value: &str) -> Result<Vec<ImportedProfile>, LinkErro
         ));
     }
 
+    if clash::looks_like(&text) {
+        let result = clash::import_yaml(&text)?;
+        if !result.rejected.is_empty() {
+            return Err(LinkError::Unsupported(
+                "Clash contains unapplied entries or client settings".into(),
+            ));
+        }
+        return Ok(result.profiles);
+    }
+    if text.trim_start().starts_with('{') {
+        return structured::import_json(&text);
+    }
+
     let mut profiles = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -658,6 +756,16 @@ pub fn import_subscription_partial(value: &str) -> Result<SubscriptionImport, Li
         return Err(LinkError::Subscription(
             "decoded body exceeds the subscription size limit".into(),
         ));
+    }
+
+    if clash::looks_like(&text) {
+        return clash::import_yaml(&text);
+    }
+    if text.trim_start().starts_with('{') {
+        return structured::import_json(&text).map(|profiles| SubscriptionImport {
+            profiles,
+            rejected: Vec::new(),
+        });
     }
 
     let mut profiles = Vec::new();
@@ -1016,6 +1124,14 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
             "packetencoding",
             "spx",
             "type",
+            "rpc_path",
+            "user_agent",
+            "idle_timeout_ms",
+            "health_check_timeout_ms",
+            "idle_timeout",
+            "health_check_timeout",
+            "permit_without_stream",
+            "initial_windows_size",
         ],
     )?;
     let mut dropped = Vec::new();
@@ -1089,8 +1205,18 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
         }
         "tls" => {
             reject_options_requiring_security(&query, &["pbk", "sid", "spx"])?;
-            accept_inert_fingerprint(&query, "VLESS", &mut dropped)?;
-            (tls_config(&query, true)?, None)
+            let mut tls = tls_config(&query, true)?;
+            if let Some(fp) = query.get("fp").filter(|v| !v.is_empty()) {
+                tls.fingerprint = Some(match fp.as_str() {
+                    "chrome" | "chrome_151" => foxcore_api::TlsFingerprint::Chrome151,
+                    _ => {
+                        return Err(LinkError::Unsupported(
+                            "ordinary TLS fingerprint is not implemented".into(),
+                        ));
+                    }
+                });
+            }
+            (tls, None)
         }
         "reality" => {
             for option in [
@@ -1309,7 +1435,142 @@ fn vless_packet_encoding(query: &HashMap<String, String>) -> Result<PacketEncodi
     }
 }
 
-const VLESS_GRPC_OPTIONS: &[&str] = &["authority", "mode", "servicename"];
+const GRPC_TUNING_OPTIONS: &[&str] = &[
+    "rpc_path",
+    "user_agent",
+    "idle_timeout_ms",
+    "health_check_timeout_ms",
+    "idle_timeout",
+    "health_check_timeout",
+    "permit_without_stream",
+    "initial_windows_size",
+];
+const VLESS_GRPC_OPTIONS: &[&str] = &[
+    "authority",
+    "mode",
+    "servicename",
+    "rpc_path",
+    "user_agent",
+    "idle_timeout_ms",
+    "health_check_timeout_ms",
+    "idle_timeout",
+    "health_check_timeout",
+    "permit_without_stream",
+    "initial_windows_size",
+];
+
+fn grpc_transport(
+    query: &HashMap<String, String>,
+    service_name: String,
+    authority: Option<String>,
+) -> Result<StreamTransportConfig, LinkError> {
+    let canonical =
+        query.contains_key("idle_timeout_ms") || query.contains_key("health_check_timeout_ms");
+    if canonical
+        && (query.contains_key("idle_timeout") || query.contains_key("health_check_timeout"))
+    {
+        return Err(LinkError::Invalid(
+            "gRPC seconds and milliseconds settings cannot be combined".into(),
+        ));
+    }
+    let millis = |key: &str, default: u64| -> Result<u64, LinkError> {
+        query
+            .get(key)
+            .map(|value| {
+                value.parse::<u64>().map_err(|_| {
+                    LinkError::Invalid(format!("gRPC {key} must be integer milliseconds"))
+                })
+            })
+            .unwrap_or(Ok(default))
+    };
+    let seconds = |key: &str| -> Result<u64, LinkError> {
+        let value = query
+            .get(key)
+            .map(|value| {
+                value
+                    .parse::<i32>()
+                    .map_err(|_| LinkError::Invalid(format!("gRPC {key} must be integer seconds")))
+            })
+            .unwrap_or(Ok(0))?;
+        Ok(u64::try_from(value.max(0)).unwrap_or(0) * 1000)
+    };
+    let permit_without_stream = match query.get("permit_without_stream").map(String::as_str) {
+        None | Some("false" | "0") => false,
+        Some("true" | "1") => true,
+        _ => {
+            return Err(LinkError::Invalid(
+                "gRPC permit_without_stream must be a boolean".into(),
+            ));
+        }
+    };
+    let (idle_timeout_ms, health_check_timeout_ms) = if canonical {
+        (
+            millis("idle_timeout_ms", 0)?,
+            millis("health_check_timeout_ms", 20_000)?,
+        )
+    } else {
+        let idle = seconds("idle_timeout")?;
+        let health = seconds("health_check_timeout")?;
+        let active = idle > 0 || health > 0 || permit_without_stream;
+        (
+            if active { idle.max(10_000) } else { 0 },
+            if health == 0 { 20_000 } else { health },
+        )
+    };
+    let initial_windows_size = query
+        .get("initial_windows_size")
+        .map(|value| {
+            value.parse::<i32>().map_err(|_| {
+                LinkError::Invalid("gRPC initial_windows_size must be a 31-bit integer".into())
+            })
+        })
+        .unwrap_or(Ok(0))?
+        .max(0) as u32;
+    if service_name.len() > 2048
+        || service_name.chars().any(char::is_control)
+        || query.get("rpc_path").is_some_and(|path| {
+            path.is_empty()
+                || path.len() > 8192
+                || !path.starts_with('/')
+                || path.chars().any(char::is_control)
+                || path.bytes().any(|byte| matches!(byte, b' ' | b'?' | b'#'))
+        })
+        || query.get("user_agent").is_some_and(|agent| {
+            agent.len() > 1024 || agent.bytes().any(|byte| byte < 0x20 || byte == 0x7f)
+        })
+        || idle_timeout_ms > 86_400_000
+        || health_check_timeout_ms > 86_400_000
+    {
+        return Err(LinkError::Invalid(
+            "gRPC path, header or timeout exceeds its supported bounds".into(),
+        ));
+    }
+    let multi_mode = match query.get("mode").map(String::as_str).unwrap_or("gun") {
+        "" | "none" | "gun" => false,
+        "multi" => true,
+        "stream" => {
+            return Err(LinkError::Unsupported(
+                "gRPC mode=stream is not implemented".into(),
+            ));
+        }
+        _ => {
+            return Err(LinkError::Unsupported(
+                "gRPC mode is not implemented".into(),
+            ));
+        }
+    };
+    Ok(StreamTransportConfig::Grpc {
+        service_name,
+        rpc_path: query.get("rpc_path").cloned(),
+        multi_mode,
+        authority,
+        user_agent: query.get("user_agent").cloned(),
+        idle_timeout_ms,
+        health_check_timeout_ms,
+        permit_without_stream,
+        initial_windows_size,
+    })
+}
 
 fn reject_grpc_options(query: &HashMap<String, String>, transport: &str) -> Result<(), LinkError> {
     match VLESS_GRPC_OPTIONS
@@ -1353,28 +1614,62 @@ fn vless_transport(query: &HashMap<String, String>) -> Result<StreamTransportCon
                 headers: Default::default(),
             })
         }
-        "grpc" | "gun" => Ok(StreamTransportConfig::Grpc {
-            service_name: query
-                .get("servicename")
-                .cloned()
-                .filter(|name| !name.is_empty())
-                .ok_or_else(|| {
-                    LinkError::Unsupported("gRPC transport without serviceName".into())
-                })?,
-            multi_mode: match query.get("mode").map(String::as_str).unwrap_or("gun") {
-                "" | "gun" => false,
-                "multi" => true,
-                other => {
+        "xhttp" | "splithttp" => {
+            require_noop(query, "headertype", &["", "none"])?;
+            for option in VLESS_GRPC_OPTIONS
+                .iter()
+                .filter(|option| **option != "mode")
+            {
+                if query.contains_key(*option) {
+                    return Err(LinkError::Unsupported(
+                        "gRPC options do not apply to XHTTP".into(),
+                    ));
+                }
+            }
+            let requested = query.get("mode").map(String::as_str).unwrap_or("auto");
+            let mode = match requested {
+                "stream-one" => "stream-one",
+                "" | "auto"
+                    if query
+                        .get("security")
+                        .is_some_and(|value| value == "reality") =>
+                {
+                    "stream-one"
+                }
+                _ => {
+                    return Err(LinkError::Unsupported(
+                        "XHTTP implements stream-one H2; auto requires REALITY".into(),
+                    ));
+                }
+            };
+            Ok(StreamTransportConfig::Xhttp {
+                path: query
+                    .get("path")
+                    .cloned()
+                    .filter(|path| !path.is_empty())
+                    .unwrap_or_else(|| "/".into()),
+                host: query.get("host").cloned().filter(|host| !host.is_empty()),
+                mode: mode.into(),
+            })
+        }
+        "grpc" | "gun" => {
+            require_noop(query, "headertype", &["", "none"])?;
+            for field in ["host", "path", "method"] {
+                if query.contains_key(field) {
                     return Err(LinkError::Unsupported(format!(
-                        "VLESS gRPC mode={other} is not implemented"
+                        "gRPC {field} is not a serviceName or authority option"
                     )));
                 }
-            },
-            authority: query
-                .get("authority")
-                .cloned()
-                .filter(|authority| !authority.is_empty()),
-        }),
+            }
+            grpc_transport(
+                query,
+                query.get("servicename").cloned().unwrap_or_default(),
+                query
+                    .get("authority")
+                    .cloned()
+                    .filter(|value| !value.is_empty()),
+            )
+        }
         "http" | "h2" => {
             reject_grpc_options(query, requested)?;
             Ok(StreamTransportConfig::Http2 {
@@ -1425,6 +1720,8 @@ fn import_hysteria2(value: &str) -> Result<ImportedProfile, LinkError> {
             "skip-cert-verify",
             "sni",
             "upmbps",
+            "pinsha256",
+            "pinned_certificate_sha256",
         ],
     )?;
     require_noop(&query, "security", &["", "tls"])?;
@@ -1543,6 +1840,14 @@ fn import_trojan(value: &str) -> Result<ImportedProfile, LinkError> {
             "skip-cert-verify",
             "sni",
             "type",
+            "rpc_path",
+            "user_agent",
+            "idle_timeout_ms",
+            "health_check_timeout_ms",
+            "idle_timeout",
+            "health_check_timeout",
+            "permit_without_stream",
+            "initial_windows_size",
         ],
     )?;
     require_noop(&query, "security", &["", "tls"])?;
@@ -1696,6 +2001,13 @@ fn import_wireguard(value: &str) -> Result<ImportedProfile, LinkError> {
             .ok_or_else(|| LinkError::Invalid("WireGuard mtu must be 576..=65535".into()))?,
         None => 1420,
     };
+    if let Some(config) = &amnezia
+        && config.header_protection_key.is_some()
+    {
+        config
+            .validate(mtu)
+            .map_err(|error| LinkError::Invalid(error.to_string()))?;
+    }
     let persistent_keepalive_s =
         match first(&["keepalive", "persistentkeepalive", "persistent_keepalive"]) {
             Some(value) => {
@@ -1844,6 +2156,16 @@ pub fn import_wireguard_conf(value: &str) -> Result<ImportedProfile, LinkError> 
             )));
         }
     }
+    if find(&peer, "contentpaddingaddition").is_some() {
+        return Err(LinkError::Invalid(
+            "AmneziaWG ContentPaddingAddition must be declared in Interface".into(),
+        ));
+    }
+    if find(&peer, "headerprotectionkey").is_some() {
+        return Err(LinkError::Invalid(
+            "AmneziaWG HeaderProtectionKey must be declared in Interface".into(),
+        ));
+    }
     // Same rule as the link form: reported, not fatal.
     let mut dropped = wireguard_dns_note(find(&interface, "dns").is_some());
     if let Some(value) = find(&peer, "advancedsecurity") {
@@ -1903,6 +2225,13 @@ pub fn import_wireguard_conf(value: &str) -> Result<ImportedProfile, LinkError> 
     };
 
     let amnezia = amnezia_from_conf(&interface, &mut dropped)?;
+    if let Some(config) = &amnezia
+        && config.header_protection_key.is_some()
+    {
+        config
+            .validate(mtu)
+            .map_err(|error| LinkError::Invalid(error.to_string()))?;
+    }
     Ok(ImportedProfile {
         // The file format has no name field; the caller labels the profile.
         name: None,
@@ -1973,15 +2302,14 @@ const WIREGUARD_CONF_KEYS: &[&str] = &[
     "s4",
 ];
 
-/// Parse a complete AmneziaWG block. Partial 1.5 blocks and unsupported
-/// wire-changing keys are refused; harmless 3.0 extras are reported.
+/// Legacy partial blocks are refused; HPK blocks use independent upstream defaults.
 fn amnezia_from_conf(
     interface: &[(String, String)],
     dropped: &mut Vec<DroppedOption>,
 ) -> Result<Option<foxcore_api::AmneziaConfig>, LinkError> {
     const OBFUSCATION_KEYS: [&str; 9] = ["jc", "jmin", "jmax", "s1", "s2", "h1", "h2", "h3", "h4"];
     // 2.0/3.0 fields are independent; upstream supplies their wire defaults.
-    const EXTENSION_KEYS: [&str; 15] = [
+    const EXTENSION_KEYS: [&str; 16] = [
         "s3",
         "s4",
         "i1",
@@ -1997,15 +2325,9 @@ fn amnezia_from_conf(
         "contentpaddingaddition",
         "randomtrailers",
         "disablecookies",
+        "headerprotectionkey",
     ];
     let has = |key: &str| interface.iter().any(|(name, _)| name == key);
-    if has("headerprotectionkey") {
-        return Err(LinkError::Unsupported(
-            "AmneziaWG HeaderProtectionKey (3.0 header encryption) is not implemented; \
-             this core cannot decode a profile that uses it"
-                .into(),
-        ));
-    }
     let present: Vec<&str> = OBFUSCATION_KEYS
         .into_iter()
         .filter(|key| has(key))
@@ -2014,7 +2336,8 @@ fn amnezia_from_conf(
     if present.is_empty() && !has_extensions {
         return Ok(None);
     }
-    if !present.is_empty() && present.len() != OBFUSCATION_KEYS.len() {
+    if !has("headerprotectionkey") && !present.is_empty() && present.len() != OBFUSCATION_KEYS.len()
+    {
         let missing: Vec<&str> = OBFUSCATION_KEYS
             .into_iter()
             .filter(|key| !present.contains(key))
@@ -2026,12 +2349,64 @@ fn amnezia_from_conf(
     }
     amnezia_reported_extras(interface, dropped);
     let base = foxcore_api::AmneziaConfig {
+        header_protection_key: interface
+            .iter()
+            .find(|(key, _)| key == "headerprotectionkey")
+            .map(|(_, value)| foxcore_api::parse_amnezia_header_protection_key(value))
+            .transpose()
+            .map_err(LinkError::Invalid)?,
         cookie_junk_size: optional_small(interface, "s3")?,
         transport_junk_size: optional_small(interface, "s4")?,
+        content_padding_addition: interface
+            .iter()
+            .find(|(key, _)| key == "contentpaddingaddition")
+            .map(|(_, value)| foxcore_api::parse_amnezia_content_padding_range(value))
+            .transpose()
+            .map_err(|reason| {
+                LinkError::Invalid(format!("AmneziaWG ContentPaddingAddition: {reason}"))
+            })?,
+        random_trailers: match interface.iter().find(|(key, _)| key == "randomtrailers") {
+            None => false,
+            Some((_, value)) => match value.to_ascii_lowercase().as_str() {
+                "true" | "1" => true,
+                "false" | "0" => false,
+                _ => {
+                    return Err(LinkError::Invalid(
+                        "AmneziaWG RandomTrailers must be a boolean".into(),
+                    ));
+                }
+            },
+        },
         init_packets: amnezia_init_packets(interface)?,
         timers: amnezia_timers(interface)?,
         ..foxcore_api::AmneziaConfig::default()
     };
+    if has("headerprotectionkey") {
+        let defaults = foxcore_api::AmneziaConfig::default();
+        let header = |name: &str, fallback| {
+            if has(name) {
+                amnezia_header(interface, name)
+            } else {
+                Ok(fallback)
+            }
+        };
+        let config = foxcore_api::AmneziaConfig {
+            junk_packet_count: optional_small(interface, "jc")?,
+            junk_min_size: optional_small(interface, "jmin")?,
+            junk_max_size: optional_small(interface, "jmax")?,
+            init_junk_size: optional_small(interface, "s1")?,
+            response_junk_size: optional_small(interface, "s2")?,
+            header_initiation: header("h1", defaults.header_initiation)?,
+            header_response: header("h2", defaults.header_response)?,
+            header_cookie: header("h3", defaults.header_cookie)?,
+            header_transport: header("h4", defaults.header_transport)?,
+            ..base
+        };
+        config
+            .validate_header_protection_key()
+            .map_err(|error| LinkError::Invalid(error.to_string()))?;
+        return Ok(Some(config));
+    }
     if present.is_empty() {
         return Ok(Some(base));
     }
@@ -2090,23 +2465,11 @@ fn amnezia_timers(interface: &[(String, String)]) -> Result<foxcore_api::Amnezia
 }
 
 fn amnezia_reported_extras(interface: &[(String, String)], dropped: &mut Vec<DroppedOption>) {
-    for (key, reason) in [
-        (
-            "contentpaddingaddition",
-            "outbound data packets keep WireGuard's 16-byte padding; \
-             a peer's own extra padding is still read correctly",
-        ),
-        (
-            "randomtrailers",
-            "outbound data packets keep WireGuard's 16-byte padding; \
-             a peer's own random trailer is still read correctly",
-        ),
-        (
-            "disablecookies",
-            "this side initiates handshakes and never issues cookie replies, \
+    for (key, reason) in [(
+        "disablecookies",
+        "this side initiates handshakes and never issues cookie replies, \
              so there is nothing here to disable",
-        ),
-    ] {
+    )] {
         if interface.iter().any(|(name, _)| name == key) {
             dropped.push(DroppedOption {
                 option: key.to_owned(),
@@ -2567,7 +2930,7 @@ impl ShadowsocksPlugin {
 ///
 /// Two plugins are carriers rather than protocols and are therefore expressed
 /// natively instead of by launching a subprocess: `v2ray-plugin` in WebSocket
-/// mode is the same WebSocket carrier VLESS and VMess already use, and
+/// mode with explicit `mux=0` is the carrier VLESS and VMess already use, and
 /// `simple-obfs` is one HTTP request or one fake ClientHello in front of the
 /// same Shadowsocks stream. Every other plugin stays refused: this core does
 /// not spawn helper binaries, and a plugin silently dropped would put plain
@@ -2576,58 +2939,134 @@ fn shadowsocks_plugin(query: &HashMap<String, String>) -> Result<ShadowsocksPlug
     let Some(spec) = query.get("plugin").filter(|value| !value.is_empty()) else {
         return Ok(ShadowsocksPlugin::none());
     };
-    let mut parts = spec.split(';');
-    let name = parts.next().unwrap_or_default().trim();
+    if spec.len() > 8192 || spec.chars().any(char::is_control) {
+        return Err(LinkError::Invalid(
+            "SIP003 plugin parameter exceeds its bounds".into(),
+        ));
+    }
+    let (name, options) = spec.split_once(';').unwrap_or((spec, ""));
+    let name = name.trim();
     match name {
-        "v2ray-plugin" => shadowsocks_v2ray_plugin(parts),
+        "v2ray-plugin" => shadowsocks_v2ray_plugin(options),
         // `obfs-local` is the binary the reference ships; `simple-obfs` is the
         // name the same plugin is written under in most subscriptions.
-        "obfs-local" | "simple-obfs" => shadowsocks_simple_obfs(parts),
-        other => Err(LinkError::Unsupported(format!(
-            "Shadowsocks SIP003 plugin {other}"
-        ))),
+        "obfs-local" | "simple-obfs" => shadowsocks_simple_obfs(options.split(';')),
+        _ => Err(LinkError::Unsupported(
+            "Shadowsocks SIP003 plugin is not implemented".into(),
+        )),
     }
 }
 
-fn shadowsocks_v2ray_plugin<'a>(
-    parts: impl Iterator<Item = &'a str>,
-) -> Result<ShadowsocksPlugin, LinkError> {
+/// Decode SIP003 delimiters before interpreting the closed option vocabulary.
+/// Escaped `=` belongs to a key/value, not to the key/value separator.
+fn sip003_options(options: &str) -> Result<HashMap<String, Option<String>>, LinkError> {
+    if options.len() > 8192 || options.chars().any(char::is_control) {
+        return Err(LinkError::Invalid(
+            "SIP003 options exceed their bounds".into(),
+        ));
+    }
+    let mut parsed = HashMap::new();
+    let mut key = String::new();
+    let mut value: Option<String> = None;
+    let mut escaped = false;
+    for character in options.chars().chain(std::iter::once(';')) {
+        if escaped {
+            if !matches!(character, ';' | '=' | '\\') {
+                return Err(LinkError::Invalid("invalid SIP003 option escape".into()));
+            }
+            value.as_mut().unwrap_or(&mut key).push(character);
+            escaped = false;
+        } else {
+            match character {
+                '\\' => escaped = true,
+                '=' if value.is_none() => value = Some(String::new()),
+                '=' => {
+                    return Err(LinkError::Invalid(
+                        "unescaped SIP003 option delimiter".into(),
+                    ));
+                }
+                ';' => {
+                    if key.is_empty() && value.is_none() {
+                        continue;
+                    }
+                    if key.is_empty() || parsed.len() >= 32 || parsed.contains_key(&key) {
+                        return Err(LinkError::Invalid(
+                            "invalid or duplicate SIP003 option".into(),
+                        ));
+                    }
+                    parsed.insert(std::mem::take(&mut key), value.take());
+                }
+                other => value.as_mut().unwrap_or(&mut key).push(other),
+            }
+        }
+    }
+    if escaped || !key.is_empty() || value.is_some() {
+        return Err(LinkError::Invalid("incomplete SIP003 option escape".into()));
+    }
+    Ok(parsed)
+}
+
+fn shadowsocks_v2ray_plugin(options: &str) -> Result<ShadowsocksPlugin, LinkError> {
     let mut mode = "websocket".to_owned();
     let mut tls = false;
     let mut path = "/".to_owned();
-    let mut host: Option<String> = None;
-    for option in parts {
-        let option = option.trim();
-        if option.is_empty() {
-            continue;
-        }
-        let (key, value) = match option.split_once('=') {
-            Some((key, value)) => (key.trim(), value.trim().to_owned()),
-            None => (option, String::new()),
-        };
-        match key {
+    let mut host = Some("cloudfront.com".to_owned());
+    let parsed = sip003_options(options)?;
+    if parsed
+        .get("mux")
+        .and_then(|value| value.as_deref())
+        .and_then(|value| value.parse::<i32>().ok())
+        != Some(0)
+    {
+        return Err(LinkError::Unsupported(
+            "v2ray-plugin requires explicit mux=0; multiplexing is not implemented".into(),
+        ));
+    }
+    for (key, value) in parsed {
+        let value = value.unwrap_or_default();
+        match key.as_str() {
             "mode" => mode = value,
             "tls" => tls = true,
             "path" => path = value,
             "host" => host = Some(value),
             // Present and harmless only when off; a live mux changes the framing.
-            "mux" if value == "0" => {}
-            // Client-side noise that never reaches the wire.
-            "loglevel" => {}
-            other => {
-                return Err(LinkError::Unsupported(format!(
-                    "v2ray-plugin option {other} is not implemented"
-                )));
+            "mux" => {}
+            _ => {
+                return Err(LinkError::Unsupported(
+                    "v2ray-plugin option is not implemented".into(),
+                ));
             }
         }
     }
     if mode != "websocket" {
-        return Err(LinkError::Unsupported(format!(
-            "v2ray-plugin mode {mode} is not implemented"
-        )));
+        return Err(LinkError::Unsupported(
+            "v2ray-plugin mode is not implemented".into(),
+        ));
     }
-    if !path.starts_with('/') {
-        path.insert(0, '/');
+    if !path.starts_with('/')
+        || path.len() > 2048
+        || !path.is_ascii()
+        || path
+            .bytes()
+            .any(|byte| byte.is_ascii_control() || byte == b' ' || byte == b'#')
+    {
+        return Err(LinkError::Invalid(
+            "v2ray-plugin path must be bounded and absolute".into(),
+        ));
+    }
+    if host.as_ref().is_some_and(|value| {
+        value.is_empty()
+            || value.len() > 255
+            || !value.is_ascii()
+            || value.bytes().any(|byte| {
+                byte.is_ascii_control()
+                    || byte.is_ascii_whitespace()
+                    || matches!(byte, b'/' | b'?' | b'#' | b'@')
+            })
+    }) {
+        return Err(LinkError::Invalid(
+            "v2ray-plugin host must be a bounded authority".into(),
+        ));
     }
     let tls = if tls {
         TlsConfig {
@@ -2852,6 +3291,20 @@ fn require_disabled(query: &HashMap<String, String>, option: &str) -> Result<(),
 }
 
 fn tls_config(query: &HashMap<String, String>, enabled: bool) -> Result<TlsConfig, LinkError> {
+    if query.contains_key("pinsha256") && query.contains_key("pinned_certificate_sha256") {
+        return Err(LinkError::Invalid(
+            "duplicate certificate pin sources".into(),
+        ));
+    }
+    let leaf_pin =
+        query.contains_key("pinsha256") || query.contains_key("pinned_certificate_sha256");
+    if leaf_pin
+        && (!enabled || query.contains_key("pin") || query.contains_key("pinned_spki_sha256"))
+    {
+        return Err(LinkError::Invalid(
+            "ambiguous or disabled TLS certificate pin".into(),
+        ));
+    }
     Ok(TlsConfig {
         enabled,
         server_name: query.get("sni").or_else(|| query.get("peer")).cloned(),
@@ -2861,6 +3314,11 @@ fn tls_config(query: &HashMap<String, String>, enabled: bool) -> Result<TlsConfi
             .get("pin")
             .or_else(|| query.get("pinned_spki_sha256"))
             .cloned(),
+        pinned_certificate_sha256: query
+            .get("pinsha256")
+            .map(|value| certificate_fingerprint(value))
+            .transpose()?
+            .or_else(|| query.get("pinned_certificate_sha256").cloned()),
         alpn: query
             .get("alpn")
             .map(|value| {
@@ -2875,6 +3333,22 @@ fn tls_config(query: &HashMap<String, String>, enabled: bool) -> Result<TlsConfi
         // link: no link format carries them.
         ..TlsConfig::default()
     })
+}
+
+fn certificate_fingerprint(value: &str) -> Result<String, LinkError> {
+    let compact = value.replace(':', "");
+    if compact.len() != 64 || !compact.bytes().all(|value| value.is_ascii_hexdigit()) {
+        return Err(LinkError::Invalid(
+            "invalid certificate SHA-256 fingerprint".into(),
+        ));
+    }
+    let bytes = (0..32)
+        .map(|index| {
+            u8::from_str_radix(&compact[index * 2..index * 2 + 2], 16)
+                .map_err(|_| LinkError::Invalid("invalid certificate SHA-256 fingerprint".into()))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(STANDARD.encode(bytes))
 }
 
 fn aliased_bool(
@@ -2959,7 +3433,7 @@ fn decode_base64_bytes(value: &str) -> Option<Vec<u8>> {
 
 fn decode_subscription_body(value: &str) -> Result<String, LinkError> {
     let value = value.trim_start_matches('\u{feff}').trim();
-    if value.contains("://") {
+    if value.contains("://") || value.starts_with('{') || clash::looks_like(value) {
         return Ok(value.to_owned());
     }
     let compact: String = value
@@ -2983,6 +3457,236 @@ fn decode_subscription_body(value: &str) -> Result<String, LinkError> {
 mod tests {
     use super::*;
 
+    fn native_server_vmess_document(network: &str) -> serde_json::Value {
+        serde_json::json!({
+            "v": "2", "ps": "Synthetic carrier", "add": "peer.example", "port": "443",
+            "id": "d0cf0001-0000-4000-8000-000000000000", "aid": "0", "scy": "auto",
+            "net": network, "type": "none", "host": "front.example",
+            "path": "/carrier?synthetic=1", "tls": "tls", "sni": "tls.example",
+        })
+    }
+
+    fn native_server_vmess_config(network: &str) -> VmessConfig {
+        let document = native_server_vmess_document(network);
+        let imported = import_link(&format!(
+            "vmess://{}",
+            STANDARD.encode(document.to_string())
+        ))
+        .expect("standard VMess carrier share document must import");
+        let OutboundConfig::Vmess(config) = imported.outbound else {
+            panic!("VMess share document must stay VMess");
+        };
+        assert_eq!(config.server, "peer.example");
+        assert_eq!(config.port, 443);
+        assert_eq!(config.tls.server_name.as_deref(), Some("tls.example"));
+        assert!(config.tls.enabled);
+        config
+    }
+
+    #[test]
+    fn xhttp_reality_auto_imports_as_stream_one_without_dropping_options() {
+        let text = "vless://11111111-1111-4111-8111-111111111111@example.net:443?encryption=none&security=reality&sni=reality.example.net&fp=qq&pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb&type=xhttp&mode=auto";
+        let imported = import_link(text).expect("REALITY auto selects XHTTP stream-one");
+        assert!(imported.dropped.is_empty());
+        let value = serde_json::to_value(imported.outbound).unwrap();
+        assert_eq!(value["transport"]["type"], "xhttp");
+        assert_eq!(value["transport"]["mode"], "stream-one");
+        for suffix in ["&mode=packet-up", "&mode=stream-up", "&extra=%7B%7D"] {
+            let text = text.replace("&mode=auto", suffix);
+            assert!(import_link(&text).is_err());
+        }
+        let plain_auto = text.replace("security=reality", "security=tls");
+        assert!(import_link(&plain_auto).is_err());
+    }
+
+    #[test]
+    fn native_server_vmess_httpupgrade_preserves_host_path_and_tls() {
+        let config = native_server_vmess_config("httpupgrade");
+        assert_eq!(
+            config.transport,
+            StreamTransportConfig::HttpUpgrade {
+                path: "/carrier?synthetic=1".into(),
+                host: Some("front.example".into()),
+                headers: Default::default(),
+            }
+        );
+    }
+
+    fn native_server_http2_carrier(network: &str) {
+        let config = native_server_vmess_config(network);
+        assert_eq!(
+            config.transport,
+            StreamTransportConfig::Http2 {
+                host: vec!["front.example".into()],
+                path: "/carrier?synthetic=1".into(),
+                method: "PUT".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn native_server_vmess_http_maps_the_existing_http2_carrier() {
+        native_server_http2_carrier("http");
+    }
+
+    #[test]
+    fn native_server_vmess_h2_maps_the_existing_http2_carrier() {
+        native_server_http2_carrier("h2");
+    }
+
+    #[test]
+    fn native_server_vmess_new_carriers_still_refuse_effectful_options() {
+        for network in ["httpupgrade", "http", "h2"] {
+            for (field, value) in [
+                ("type", serde_json::json!("http")),
+                ("mux", serde_json::json!(true)),
+                ("method", serde_json::json!("POST")),
+                ("unknownCarrierOption", serde_json::json!("synthetic")),
+            ] {
+                let mut document = native_server_vmess_document(network);
+                document[field] = value;
+                let link = format!("vmess://{}", STANDARD.encode(document.to_string()));
+                assert!(
+                    matches!(import_link(&link), Err(LinkError::Unsupported(_))),
+                    "unsupported carrier option must not be silently discarded"
+                );
+            }
+        }
+    }
+
+    fn native_server_plugin_link(options: &str) -> String {
+        let credentials = URL_SAFE_NO_PAD.encode("chacha20-ietf-poly1305:synthetic-password");
+        let encoded: String = url::form_urlencoded::byte_serialize(options.as_bytes()).collect();
+        format!("ss://{credentials}@peer.example:443/?plugin={encoded}#Synthetic")
+    }
+
+    #[test]
+    fn native_server_sip003_omitted_or_default_mux_cannot_become_plain_websocket() {
+        for options in [
+            "v2ray-plugin",
+            "v2ray-plugin;mode=websocket;host=front.example;path=/carrier",
+            "v2ray-plugin;mux=1",
+        ] {
+            assert!(
+                matches!(
+                    import_link(&native_server_plugin_link(options)),
+                    Err(LinkError::Unsupported(_))
+                ),
+                "default v2ray-plugin mux must not silently become plain WebSocket"
+            );
+        }
+    }
+
+    #[test]
+    fn native_server_sip003_explicit_zero_mux_keeps_the_supported_carrier() {
+        let options = "v2ray-plugin;mode=websocket;mux=0;tls;host=front.example;path=/carrier";
+        let imported = import_link(&native_server_plugin_link(options)).unwrap();
+        let OutboundConfig::Shadowsocks(config) = imported.outbound else {
+            panic!("SIP003 share link must stay Shadowsocks");
+        };
+        assert_eq!(
+            config.transport,
+            StreamTransportConfig::Websocket {
+                host: Some("front.example".into()),
+                path: "/carrier".into(),
+                headers: Default::default(),
+            }
+        );
+        assert!(config.tls.enabled);
+        assert_eq!(config.tls.server_name.as_deref(), Some("front.example"));
+        assert!(!config.udp);
+    }
+
+    #[test]
+    fn native_server_sip003_escaped_delimiters_are_kept_in_the_option_value() {
+        let options = r"v2ray-plugin;mux=0;host=front.example;path=/semi\;equal\=tail";
+        let imported = import_link(&native_server_plugin_link(options))
+            .expect("SIP003 escaped delimiters must import without becoming new options");
+        let OutboundConfig::Shadowsocks(config) = imported.outbound else {
+            panic!("SIP003 share link must stay Shadowsocks");
+        };
+        assert_eq!(
+            config.transport,
+            StreamTransportConfig::Websocket {
+                host: Some("front.example".into()),
+                path: "/semi;equal=tail".into(),
+                headers: Default::default(),
+            }
+        );
+    }
+
+    #[test]
+    fn native_server_sip003_default_host_and_tls_presence_match_the_plugin() {
+        let imported =
+            import_link(&native_server_plugin_link("v2ray-plugin;mux=0;tls=false")).unwrap();
+        let OutboundConfig::Shadowsocks(config) = imported.outbound else {
+            panic!("SIP003 share link must stay Shadowsocks");
+        };
+        assert_eq!(
+            config.transport,
+            StreamTransportConfig::Websocket {
+                host: Some("cloudfront.com".into()),
+                path: "/".into(),
+                headers: Default::default(),
+            }
+        );
+        assert!(
+            config.tls.enabled,
+            "tls is a presence flag, even with a false value"
+        );
+        assert_eq!(config.tls.server_name.as_deref(), Some("cloudfront.com"));
+    }
+
+    #[test]
+    fn sip003_escape_and_option_bounds_fail_closed() {
+        for options in [
+            r"v2ray-plugin;mux=0;path=/bad\x",
+            "v2ray-plugin;mux=0;path=/trailing\\",
+            "v2ray-plugin;mux=0;mux=1",
+            "v2ray-plugin;mux=0;path=/bad=delimiter",
+            "v2ray-plugin;mux=0;path=relative",
+            "v2ray-plugin;mux=0;path=/with space",
+            "v2ray-plugin;mux=0;path=/fragment#tail",
+            "v2ray-plugin;mux=0;host=wrong/user",
+            "v2ray-plugin;mux=0;server",
+        ] {
+            assert!(import_link(&native_server_plugin_link(options)).is_err());
+        }
+        let oversized_host = format!("v2ray-plugin;mux=0;host={}", "h".repeat(256));
+        assert!(import_link(&native_server_plugin_link(&oversized_host)).is_err());
+        let decoded = sip003_options(r"mux=00;path=/slash\\tail").unwrap();
+        assert_eq!(decoded["path"].as_deref(), Some(r"/slash\tail"));
+        assert!(import_link(&native_server_plugin_link("v2ray-plugin;mux=00")).is_ok());
+    }
+
+    fn sip003_error_without_reflection(options: &str, marker: &str) {
+        let error = import_link(&native_server_plugin_link(options))
+            .expect_err("unsupported synthetic plugin input must be refused");
+        assert!(matches!(error, LinkError::Unsupported(_)));
+        assert!(
+            !error.to_string().contains(marker),
+            "SIP003 errors must not reflect the supplied synthetic marker"
+        );
+    }
+
+    #[test]
+    fn sip003_error_unknown_plugin_does_not_reflect_input() {
+        let marker = "synthetic-marker-native-reflection";
+        sip003_error_without_reflection(marker, marker);
+    }
+
+    #[test]
+    fn sip003_error_unknown_option_does_not_reflect_input() {
+        let marker = "synthetic-marker-native-reflection";
+        sip003_error_without_reflection(&format!("v2ray-plugin;mux=0;{marker}=1"), marker);
+    }
+
+    #[test]
+    fn sip003_error_unsupported_mode_does_not_reflect_input() {
+        let marker = "synthetic-marker-native-reflection";
+        sip003_error_without_reflection(&format!("v2ray-plugin;mux=0;mode={marker}"), marker);
+    }
+
     const SANITIZED_SERVER_SUBSCRIPTION: &str = concat!(
         "vless://d0cf0001-0000-4000-8000-000000000000@edge.example:8443",
         "?type=tcp&security=none&encryption=none&fp=chrome",
@@ -3002,6 +3706,30 @@ mod tests {
         for link in links {
             assert!(import_link(link).is_ok(), "{link}");
         }
+    }
+
+    #[test]
+    fn hysteria_certificate_fingerprints_keep_their_leaf_semantics() {
+        let link = format!(
+            "hysteria2://synthetic@1.1.1.1:443?pinSHA256={}",
+            "07".repeat(32)
+        );
+        let OutboundConfig::Hysteria2(profile) = import_link(&link).unwrap().outbound else {
+            panic!("wrong protocol");
+        };
+        assert_eq!(
+            profile.tls.pinned_certificate_sha256.as_deref(),
+            Some(STANDARD.encode([7_u8; 32]).as_str())
+        );
+        assert!(profile.tls.pinned_spki_sha256.is_none());
+        assert!(import_link(&format!("{link}&pinned_certificate_sha256=ambiguous")).is_err());
+        assert!(
+            import_link(&format!(
+                "{link}&pinned_spki_sha256={}",
+                STANDARD.encode([7_u8; 32])
+            ))
+            .is_err()
+        );
     }
 
     #[test]
@@ -3238,6 +3966,146 @@ mod tests {
     }
 
     #[test]
+    fn imports_vmess_grpc_preserving_service_authority_and_tls_name() {
+        let document = r#"{"v":"2","add":"edge.example","port":443,"id":"d0cf0001-0000-4000-8000-000000000000","aid":0,"scy":"auto","net":"grpc","type":"none","host":"front.example","path":"GunService","tls":"tls","sni":"tls.example","alpn":"h2"}"#;
+        let profile = import_link(&format!("vmess://{}", STANDARD.encode(document)))
+            .expect("a VMess AEAD gRPC share document must import");
+        let OutboundConfig::Vmess(config) = profile.outbound else {
+            panic!("profile must stay VMess");
+        };
+        assert!(matches!(
+            config.transport,
+            StreamTransportConfig::Grpc {
+                ref service_name,
+                multi_mode: false,
+                authority: Some(ref authority),
+                ..
+            } if service_name == "GunService" && authority == "front.example"
+        ));
+        assert!(config.tls.enabled);
+        assert_eq!(config.tls.server_name.as_deref(), Some("tls.example"));
+        assert_eq!(config.tls.alpn, ["h2"]);
+        assert!(profile.dropped.is_empty());
+    }
+
+    #[test]
+    fn imports_vmess_grpc_multi_and_precise_tuning_without_changing_tls_identity() {
+        let document = serde_json::json!({
+            "v":"2", "add":"edge.example", "port":443,
+            "id":"d0cf0001-0000-4000-8000-000000000000", "aid":0,
+            "net":"grpc", "type":"multi", "host":"front.example", "path":"名字",
+            "tls":"tls", "sni":"tls.example", "rpc_path":"/名字%literal/TunMulti",
+            "user_agent":"FoxHole exact/1", "idle_timeout_ms":1500, "health_check_timeout_ms":750,
+            "permit_without_stream":true, "initial_windows_size":131072,
+        });
+        let imported = import_link(&format!(
+            "vmess://{}",
+            STANDARD.encode(document.to_string())
+        ))
+        .unwrap();
+        let OutboundConfig::Vmess(config) = imported.outbound else {
+            panic!("must remain VMess");
+        };
+        let transport = serde_json::to_value(config.transport).unwrap();
+        assert_eq!(transport["service_name"], "名字");
+        assert_eq!(transport["rpc_path"], document["rpc_path"]);
+        assert_eq!(transport["multi_mode"], true);
+        assert_eq!(transport["authority"], "front.example");
+        for key in [
+            "user_agent",
+            "idle_timeout_ms",
+            "health_check_timeout_ms",
+            "permit_without_stream",
+            "initial_windows_size",
+        ] {
+            assert_eq!(transport[key], document[key], "lost {key}");
+        }
+        assert_eq!(config.tls.server_name.as_deref(), Some("tls.example"));
+    }
+
+    #[test]
+    fn grpc_custom_share_user_agent_alias_words_are_raw_header_values() {
+        let base = "vless://d0cf0001-0000-4000-8000-000000000000@edge.example:443?encryption=none&type=grpc";
+        for source in ["chrome", "edge", "firefox", "golang", "", "FoxHole exact/1"] {
+            let encoded: String = url::form_urlencoded::byte_serialize(source.as_bytes()).collect();
+            let imported = import_link(&format!("{base}&user_agent={encoded}")).unwrap();
+            let OutboundConfig::Vless(config) = imported.outbound else {
+                panic!("must remain VLESS");
+            };
+            let transport = serde_json::to_value(config.transport).unwrap();
+            assert_eq!(transport["user_agent"], source);
+            let document = serde_json::json!({
+                "v":"2", "add":"edge.example", "port":443,
+                "id":"d0cf0001-0000-4000-8000-000000000000", "aid":0,
+                "net":"grpc", "type":"none", "user_agent":source,
+            });
+            let imported = import_link(&format!(
+                "vmess://{}",
+                STANDARD.encode(document.to_string())
+            ))
+            .unwrap();
+            let OutboundConfig::Vmess(config) = imported.outbound else {
+                panic!("must remain VMess");
+            };
+            assert_eq!(
+                serde_json::to_value(config.transport).unwrap()["user_agent"],
+                source
+            );
+        }
+    }
+
+    #[test]
+    fn grpc_native_share_tuning_keeps_units_and_rejects_conflicts_and_unknown_modes() {
+        let base = "vless://d0cf0001-0000-4000-8000-000000000000@edge.example:443?encryption=none&type=grpc";
+        for (settings, idle, health) in [
+            (
+                "&idle_timeout_ms=1500&health_check_timeout_ms=750",
+                1500u64,
+                750u64,
+            ),
+            ("&idle_timeout=23&health_check_timeout=7", 23000, 7000),
+            ("&health_check_timeout=7", 10000, 7000),
+            ("&idle_timeout_ms=0&permit_without_stream=true", 0, 20000),
+        ] {
+            let imported = import_link(&format!("{base}{settings}")).unwrap();
+            let OutboundConfig::Vless(config) = imported.outbound else {
+                panic!("must remain VLESS");
+            };
+            let transport = serde_json::to_value(config.transport).unwrap();
+            assert_eq!(transport["idle_timeout_ms"], idle);
+            assert_eq!(transport["health_check_timeout_ms"], health);
+        }
+        for settings in [
+            "&idle_timeout_ms=1500&idle_timeout=2",
+            "&health_check_timeout_ms=750&health_check_timeout=1",
+            "&idle_timeout_ms=1.5",
+            "&mode=unsupported",
+            "&unknown_grpc_option=1",
+            "&host=front.example",
+            "&path=%2Fsilently-lost",
+        ] {
+            assert!(
+                import_link(&format!("{base}{settings}")).is_err(),
+                "must refuse {settings}"
+            );
+        }
+    }
+
+    #[test]
+    fn imports_vmess_grpc_with_the_default_empty_service_name() {
+        let document = r#"{"v":"2","add":"edge.example","port":443,"id":"d0cf0001-0000-4000-8000-000000000000","aid":0,"net":"grpc","type":"none","tls":""}"#;
+        let profile = import_link(&format!("vmess://{}", STANDARD.encode(document)))
+            .expect("an empty gRPC service name is a real provider default");
+        assert!(matches!(
+            profile.outbound,
+            OutboundConfig::Vmess(VmessConfig {
+                transport: StreamTransportConfig::Grpc { ref service_name, .. },
+                ..
+            }) if service_name.is_empty()
+        ));
+    }
+
+    #[test]
     fn imports_vless_reality_without_exposing_client_identifiers() {
         let link = concat!(
             "vless://d0cf0001-0000-4000-8000-000000000000@edge.example:443",
@@ -3292,7 +4160,7 @@ mod tests {
         let private_uuid = "c1b2498a-e5b7-4bd6-8f58-f312a49f6ecb";
         for extra in [
             r#""aid":"64","scy":"auto","net":"tcp","type":"none","tls":"""#,
-            r#""aid":"0","scy":"auto","net":"grpc","type":"none","tls":"tls""#,
+            r#""aid":"0","scy":"auto","net":"kcp","type":"none","tls":"tls""#,
             r#""aid":"0","scy":"auto","net":"tcp","type":"none","tls":"","mux":true"#,
         ] {
             let document = format!(
@@ -3351,7 +4219,7 @@ mod tests {
 
         // v2ray-plugin in WebSocket mode is the carrier this core already has.
         let plugin = format!(
-            "ss://{credentials}@127.0.0.1:8388?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Btls%3Bhost%3Dcdn.example%3Bpath%3D%2Fws"
+            "ss://{credentials}@127.0.0.1:8388?plugin=v2ray-plugin%3Bmode%3Dwebsocket%3Bmux%3D0%3Btls%3Bhost%3Dcdn.example%3Bpath%3D%2Fws"
         );
         let OutboundConfig::Shadowsocks(tunnelled) = import_link(&plugin).unwrap().outbound else {
             panic!("profile must be Shadowsocks");
@@ -3569,6 +4437,7 @@ mod tests {
                 ref service_name,
                 multi_mode: false,
                 authority: Some(ref authority),
+                ..
             } if service_name == "foxtunnel" && authority == "front.example.net"
         ));
         assert!(config.tls.enabled);
@@ -3619,7 +4488,17 @@ mod tests {
         let vless = "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.9:443\
             ?encryption=none&security=tls&sni=tls.example.net&type=tcp";
         let hysteria2 = "hysteria2://import-secret@198.51.100.10:443?sni=hy.example.net";
-        for base in [vless, hysteria2] {
+        for fingerprint in ["chrome", "chrome_151"] {
+            let imported = import_link(&format!("{vless}&fp={fingerprint}")).unwrap();
+            assert!(imported.dropped.is_empty());
+        }
+        for fingerprint in ["firefox", "qq", "safari", "ios", "random"] {
+            assert!(matches!(
+                import_link(&format!("{vless}&fp={fingerprint}")),
+                Err(LinkError::Unsupported(_))
+            ));
+        }
+        for base in [hysteria2] {
             for name in ["chrome", "firefox", "qq", "safari", "ios", "random"] {
                 let imported = import_link(&format!("{base}&fp={name}")).unwrap();
                 assert_eq!(
@@ -3743,8 +4622,14 @@ mod tests {
                 "&type=grpc&serviceName=fox&mode=gun",
                 StreamTransportConfig::Grpc {
                     service_name: "fox".into(),
+                    rpc_path: None,
                     multi_mode: false,
                     authority: None,
+                    user_agent: None,
+                    idle_timeout_ms: 0,
+                    health_check_timeout_ms: 20_000,
+                    permit_without_stream: false,
+                    initial_windows_size: 0,
                 },
             ),
             (
@@ -4167,15 +5052,16 @@ PersistentKeepalive = 25
             .iter()
             .map(|option| option.option.as_str())
             .collect();
-        for key in ["contentpaddingaddition", "randomtrailers", "disablecookies"] {
-            assert!(
-                reported.contains(&key),
-                "{key} must be reported by name, not silently ignored: {reported:?}"
-            );
-        }
         assert!(
-            matches!(imported.outbound, OutboundConfig::Wireguard(_)),
-            "and the profile still imports"
+            reported.contains(&"disablecookies"),
+            "disablecookies must be reported by name, not silently ignored: {reported:?}"
+        );
+        let OutboundConfig::Wireguard(config) = imported.outbound else {
+            panic!("the profile must stay WireGuard");
+        };
+        assert_eq!(
+            serde_json::to_value(config.amnezia.unwrap()).unwrap()["content_padding_addition"],
+            "1-16"
         );
 
         let protected = WG_CONF.replace(
@@ -4186,6 +5072,26 @@ PersistentKeepalive = 25
         assert!(
             error.contains("HeaderProtectionKey"),
             "the refusal has to name the key it is refusing: {error}"
+        );
+    }
+
+    #[test]
+    fn amnezia_random_trailers_survive_import_as_a_runtime_parameter() {
+        let text = WG_CONF.replace("MTU = 1280", "MTU = 1280\nRandomTrailers = true");
+        let imported = import_wireguard_conf(&text).unwrap();
+        let OutboundConfig::Wireguard(config) = imported.outbound else {
+            panic!("the WireGuard importer must keep the packet-tunnel outbound");
+        };
+        let encoded = serde_json::to_value(config.amnezia.unwrap()).unwrap();
+        assert_eq!(
+            encoded.get("random_trailers"),
+            Some(&serde_json::Value::Bool(true))
+        );
+        assert!(
+            !imported
+                .dropped
+                .iter()
+                .any(|item| item.option == "randomtrailers")
         );
     }
 
@@ -4459,13 +5365,13 @@ PersistentKeepalive = 25
             "?type=tcp&security=tls&fp=chrome"
         );
         let imported = import_link(fingerprint).unwrap();
+        assert!(imported.dropped.is_empty());
+        let OutboundConfig::Vless(vless) = imported.outbound else {
+            panic!("ordinary TLS Chrome must import as VLESS");
+        };
         assert_eq!(
-            imported
-                .dropped
-                .iter()
-                .map(|dropped| dropped.option.as_str())
-                .collect::<Vec<_>>(),
-            ["fp"]
+            vless.tls.fingerprint,
+            Some(foxcore_api::TlsFingerprint::Chrome151)
         );
 
         let unknown = concat!(

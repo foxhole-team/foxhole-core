@@ -138,24 +138,35 @@ impl TransportSession {
 
     /// Seal one IP packet into `out`. An empty packet is a keepalive.
     pub fn seal(&mut self, packet: &[u8], out: &mut Vec<u8>) -> Result<(), WireguardError> {
+        self.seal_padded(packet, packet.len().next_multiple_of(PAD_TO), out)
+    }
+
+    pub(crate) fn seal_with_padding(
+        &mut self,
+        packet: &[u8],
+        padding: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), WireguardError> {
+        let padded_len = packet
+            .len()
+            .checked_add(padding)
+            .ok_or(WireguardError::InvalidParameters)?;
+        self.seal_padded(packet, padded_len, out)
+    }
+
+    fn seal_padded(
+        &mut self,
+        packet: &[u8],
+        padded_len: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), WireguardError> {
         if self.send_counter >= REJECT_AFTER_MESSAGES {
             return Err(WireguardError::SessionExpired);
         }
         let counter = self.send_counter;
         self.send_counter += 1;
 
-        // The whole datagram is built in `out`, and the packet is copied exactly
-        // once. The previous shape allocated three more buffers on every packet
-        // — pad into a copy, encrypt into a second copy, grow that to append the
-        // tag — then walked the plaintext once more to wipe the copy it made.
-        // Six passes over 1.4 KiB, a thousand times a second, to produce the
-        // bytes one pass produces.
-        //
-        // The wipe went with them: it cleared one of three copies of the same
-        // plaintext (the caller's packet and the tunnel's pending queue hold the
-        // others and are dropped without zeroing), so it bought no secrecy and
-        // cost a full-length volatile write per packet.
-        let padded_len = packet.len().next_multiple_of(PAD_TO);
+        // Seal in the caller's buffer to avoid another plaintext allocation.
         out.clear();
         out.reserve(TRANSPORT_HEADER_LEN + padded_len + TAG_LEN);
         out.resize(TRANSPORT_HEADER_LEN, 0);
@@ -175,8 +186,7 @@ impl TransportSession {
 
     /// Open one transport datagram in place, returning the plaintext.
     ///
-    /// The plaintext still carries WireGuard's 16-byte padding; the caller reads
-    /// the IP header to find the real length. An empty result is a keepalive.
+    /// The caller trims authenticated padding using the IP header's length.
     pub fn open<'a>(&mut self, datagram: &'a mut [u8]) -> Result<&'a [u8], WireguardError> {
         let (receiver_index, counter, _) = parse_transport(datagram)?;
         if receiver_index != self.local_index {

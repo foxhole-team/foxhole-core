@@ -2,6 +2,7 @@
 
 pub mod backoff;
 mod datagram;
+pub mod dns_quic;
 mod grpc;
 mod h2io;
 mod http2;
@@ -15,6 +16,7 @@ mod serverfirst;
 pub mod splice;
 mod tls;
 mod websocket;
+mod xhttp;
 
 use foxcore_api::{StreamTransportConfig, TlsConfig};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -61,8 +63,8 @@ pub fn ensure_process_crypto_provider() -> std::io::Result<()> {
     }
 }
 
-/// Compose the TLS layer (with ALPN forced to `h2` for gRPC/HTTP2 transports)
-/// and the stream transport into one client byte stream. REALITY owns its
+/// Compose TLS and the stream transport, forcing the carrier's HTTP protocol:
+/// `http/1.1` for WebSocket/HTTPUpgrade and `h2` for gRPC/HTTP2/XHTTP. REALITY owns its
 /// ClientHello and reuses only [`wrap_stream_transport`].
 pub async fn establish_stream<S>(
     tcp: S,
@@ -75,7 +77,12 @@ where
     S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
 {
     let stream: BoxStream = if tls.enabled {
-        let alpn: Option<&[&str]> = if transport_needs_h2(transport) {
+        let alpn: Option<&[&str]> = if matches!(
+            transport,
+            StreamTransportConfig::Websocket { .. } | StreamTransportConfig::HttpUpgrade { .. }
+        ) {
+            Some(&["http/1.1"])
+        } else if transport_needs_h2(transport) {
             Some(&["h2"])
         } else {
             None
@@ -84,13 +91,59 @@ where
     } else {
         Box::new(tcp)
     };
-    wrap_stream_transport(stream, transport, server, port, tls.enabled).await
+    let grpc_transport = if tls.enabled
+        && matches!(
+            transport,
+            StreamTransportConfig::Grpc {
+                authority: None,
+                ..
+            }
+        )
+        && let Some(name) = tls.server_name.as_ref().filter(|name| !name.is_empty())
+    {
+        let mut configured = transport.clone();
+        // gRPC authority follows its own explicit override, then TLS SNI. It
+        // must not overwrite the TLS verifier's name or other carrier headers.
+        if let StreamTransportConfig::Grpc { authority, .. } = &mut configured {
+            *authority = Some(name.clone());
+        }
+        Some(configured)
+    } else {
+        None
+    };
+    let xhttp_transport = if let StreamTransportConfig::Xhttp { host: None, .. } = transport {
+        tls.server_name
+            .as_ref()
+            .filter(|name| tls.enabled && !name.is_empty())
+            .map(|name| {
+                let mut configured = transport.clone();
+                if let StreamTransportConfig::Xhttp { host, .. } = &mut configured {
+                    *host = Some(name.clone());
+                }
+                configured
+            })
+    } else {
+        None
+    };
+    wrap_stream_transport(
+        stream,
+        xhttp_transport
+            .as_ref()
+            .or(grpc_transport.as_ref())
+            .unwrap_or(transport),
+        server,
+        port,
+        tls.enabled,
+    )
+    .await
 }
 
 fn transport_needs_h2(transport: &StreamTransportConfig) -> bool {
     matches!(
         transport,
-        StreamTransportConfig::Grpc { .. } | StreamTransportConfig::Http2 { .. }
+        StreamTransportConfig::Grpc { .. }
+            | StreamTransportConfig::Http2 { .. }
+            | StreamTransportConfig::Xhttp { .. }
     )
 }
 

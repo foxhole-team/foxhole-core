@@ -5,6 +5,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ipnet::IpNet;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroizing;
 
 use crate::SecretString;
 
@@ -50,9 +51,8 @@ pub struct WireguardConfig {
 
 /// AmneziaWG `Jc/Jmin/Jmax/S1/S2/H1..H4` in typed form.
 ///
-/// Every default reproduces standard WireGuard byte-for-byte, so an incomplete
-/// block degrades to vanilla rather than to some half-obfuscated shape the peer
-/// cannot decode.
+/// Defaults preserve standard WireGuard. A nonzero header protection key
+/// requires explicit nonce-capable S1..S4 prefixes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AmneziaConfig {
@@ -76,6 +76,21 @@ pub struct AmneziaConfig {
     pub cookie_junk_size: u16,
     #[serde(default)]
     pub transport_junk_size: u16,
+    /// `RandomTrailers`: randomized handshake trailers and encrypted data padding.
+    #[serde(default)]
+    pub random_trailers: bool,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_content_padding_range"
+    )]
+    pub content_padding_addition: Option<AmneziaContentPaddingRange>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_header_protection_key"
+    )]
+    pub header_protection_key: Option<SecretString>,
     /// `I1..I5` (AmneziaWG 2.0): whole datagrams sent ahead of every handshake
     /// attempt, built from a tag template.
     ///
@@ -116,6 +131,126 @@ pub struct AmneziaTimers {
 impl AmneziaTimers {
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "AmneziaContentPaddingRangeRepr",
+    into = "AmneziaContentPaddingRangeRepr"
+)]
+pub struct AmneziaContentPaddingRange {
+    start: u32,
+    end: u32,
+}
+
+impl AmneziaContentPaddingRange {
+    pub const fn single(value: u32) -> Self {
+        Self {
+            start: value,
+            end: value,
+        }
+    }
+
+    pub const fn new(start: u32, end: u32) -> Option<Self> {
+        if end < start {
+            return None;
+        }
+        Some(Self { start, end })
+    }
+
+    pub const fn start(&self) -> u32 {
+        self.start
+    }
+    pub const fn end(&self) -> u32 {
+        self.end
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AmneziaContentPaddingRangeRepr {
+    Single(u32),
+    Range(String),
+}
+
+impl From<AmneziaContentPaddingRange> for AmneziaContentPaddingRangeRepr {
+    fn from(value: AmneziaContentPaddingRange) -> Self {
+        if value.start == value.end {
+            Self::Single(value.start)
+        } else {
+            Self::Range(format!("{}-{}", value.start, value.end))
+        }
+    }
+}
+
+impl TryFrom<AmneziaContentPaddingRangeRepr> for AmneziaContentPaddingRange {
+    type Error = String;
+    fn try_from(value: AmneziaContentPaddingRangeRepr) -> Result<Self, Self::Error> {
+        match value {
+            AmneziaContentPaddingRangeRepr::Single(value) => Ok(Self::single(value)),
+            AmneziaContentPaddingRangeRepr::Range(text)
+                if text.contains('-') && text.trim() == text =>
+            {
+                parse_amnezia_content_padding_range(&text)
+            }
+            _ => Err("AmneziaWG content padding must be a uint32 number or N-M range".into()),
+        }
+    }
+}
+
+fn deserialize_content_padding_range<'de, D>(
+    deserializer: D,
+) -> Result<Option<AmneziaContentPaddingRange>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    AmneziaContentPaddingRange::deserialize(deserializer).map(Some)
+}
+
+fn deserialize_header_protection_key<'de, D>(
+    deserializer: D,
+) -> Result<Option<SecretString>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let key = SecretString::deserialize(deserializer)?;
+    header_protection_enabled(&key).map_err(serde::de::Error::custom)?;
+    Ok(Some(key))
+}
+
+pub fn parse_amnezia_header_protection_key(text: &str) -> Result<SecretString, String> {
+    let key = SecretString::new(text);
+    header_protection_enabled(&key)?;
+    Ok(key)
+}
+
+fn header_protection_enabled(key: &SecretString) -> Result<bool, String> {
+    let mut bytes = Zeroizing::new([0_u8; 32]);
+    if key.expose().len() != 44 || STANDARD.decode_slice(key.expose(), &mut *bytes).ok() != Some(32)
+    {
+        return Err(
+            "AmneziaWG HeaderProtectionKey must be 32 canonical base64-encoded bytes".into(),
+        );
+    }
+    Ok(bytes.iter().any(|byte| *byte != 0))
+}
+
+pub fn parse_amnezia_content_padding_range(
+    text: &str,
+) -> Result<AmneziaContentPaddingRange, String> {
+    fn number(text: &str) -> Result<u32, String> {
+        if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Err("AmneziaWG content padding bounds must be uint32 decimal numbers".into());
+        }
+        text.parse()
+            .map_err(|_| "AmneziaWG content padding bounds must fit uint32".into())
+    }
+    let text = text.trim();
+    match text.split_once('-') {
+        None => number(text).map(AmneziaContentPaddingRange::single),
+        Some((low, high)) => AmneziaContentPaddingRange::new(number(low)?, number(high)?)
+            .ok_or_else(|| "AmneziaWG content padding range ends before it starts".into()),
     }
 }
 
@@ -308,6 +443,9 @@ impl Default for AmneziaConfig {
             response_junk_size: 0,
             cookie_junk_size: 0,
             transport_junk_size: 0,
+            random_trailers: false,
+            content_padding_addition: None,
+            header_protection_key: None,
             init_packets: Vec::new(),
             timers: AmneziaTimers::default(),
             header_initiation: default_header_initiation(),
@@ -343,11 +481,33 @@ const MAX_AMNEZIA_JUNK_PACKET_COUNT: u16 = 128;
 const MAX_AMNEZIA_INIT_PACKETS: usize = 5;
 
 impl AmneziaConfig {
+    pub fn validate_header_protection_key(&self) -> Result<(), ConfigError> {
+        let Some(key) = &self.header_protection_key else {
+            return Ok(());
+        };
+        if header_protection_enabled(key).map_err(ConfigError::Invalid)?
+            && [
+                self.init_junk_size,
+                self.response_junk_size,
+                self.cookie_junk_size,
+                self.transport_junk_size,
+            ]
+            .into_iter()
+            .any(|prefix| prefix < 12)
+        {
+            return Err(ConfigError::Invalid(
+                "AmneziaWG nonzero HeaderProtectionKey requires S1..S4 of at least 12 bytes".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn junk_fragments_at_mtu(&self, mtu: u16) -> bool {
         self.junk_packet_count > 0 && self.junk_max_size >= mtu
     }
 
-    pub(super) fn validate(&self, mtu: u16) -> Result<(), ConfigError> {
+    pub fn validate(&self, mtu: u16) -> Result<(), ConfigError> {
+        self.validate_header_protection_key()?;
         if self.junk_max_size > MAX_AMNEZIA_JUNK_SIZE
             || self.init_junk_size > MAX_AMNEZIA_JUNK_SIZE
             || self.response_junk_size > MAX_AMNEZIA_JUNK_SIZE

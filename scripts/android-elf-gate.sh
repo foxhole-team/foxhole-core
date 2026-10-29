@@ -136,14 +136,8 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
     symbols="$("$READELF" -Ws "$lib")"
 
     leaked_host_paths="$(
-        {
-            # These roots are distinctive enough to find even when a panic or
-            # linker string prefixes the path. `/private/` and `/tmp/` stay
-            # anchored because dependency paths such as `src/private/de.rs`
-            # are valid virtual paths after remapping.
-            strings -a "$lib" |
-                grep -E '/(Users|home|root|builds)/|^/(private|tmp|var/folders)/' || true
-            for host_root in \
+        strings -a "$lib" |
+            python3 "$ROOT/scripts/android-path-leaks.py" \
                 "$ROOT_LOGICAL" \
                 "$ROOT" \
                 "$LIB_ROOT_RAW" \
@@ -158,11 +152,7 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
                 "$HOME/" \
                 "$NDK" \
                 "$NDK_LOGICAL" \
-                "$NDK_PHYSICAL"; do
-                [ -n "$host_root" ] || continue
-                strings -a "$lib" | grep -F "$host_root" || true
-            done
-        } | sort -u | sed -n '1,5p'
+                "$NDK_PHYSICAL" | sed -n '1,5p'
     )"
 
     case "$abi" in
@@ -174,24 +164,6 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
             echo "$abi: unknown ABI directory" >&2
             status=1
             continue
-            ;;
-    esac
-
-    case "$abi" in
-        arm64-v8a | armeabi-v7a) ;;
-        *)
-            case " ${FOXCORE_ANDROID_ABIS:-} " in
-                *" $abi "*)
-                    echo "$abi: not a shipped ABI; checked because FOXCORE_ANDROID_ABIS asked for it"
-                    ;;
-                *)
-                    echo "$abi: not a shipped ABI (only arm64-v8a and armeabi-v7a ship)." >&2
-                    echo "   Build it deliberately with FOXCORE_ANDROID_ABIS=$abi, or delete it" >&2
-                    echo "   from $LIB_ROOT before packaging." >&2
-                    status=1
-                    continue
-                    ;;
-            esac
             ;;
     esac
 
@@ -213,6 +185,9 @@ for lib in "$LIB_ROOT"/*/libfoxhole_native.so; do
     fi
     if ! grep -Eq '^  GNU_RELRO' <<<"$programs"; then
         echo "$abi: GNU_RELRO is missing" >&2
+        lib_status=1
+    fi
+    if ! python3 "$ROOT/scripts/android-native-pages.py" "$abi" "$lib"; then
         lib_status=1
     fi
     if ! grep -Eq '^  GNU_STACK.* RW ' <<<"$programs" || grep -Eq '^  GNU_STACK.*RWE' <<<"$programs"; then

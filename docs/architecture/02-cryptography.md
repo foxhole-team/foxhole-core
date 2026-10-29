@@ -19,22 +19,11 @@ flowchart TD
     subgraph dep["Delegated to libraries"]
         RU["rustls + aws-lc-rs<br/>generic TLS, QUIC"]
         SS["shadowsocks crate<br/>AEAD / AEAD-2022"]
-        AR["arti-client 0.44<br/>all Tor crypto"]
+        AR["arti-client 0.47<br/>all Tor crypto"]
     end
     own --> LC["aws-lc-rs primitives"]
     RU --> LC
 ```
-
-Core 0.0.6 requires rustls 0.23.45 (`Cargo.toml:75`, resolved in `Cargo.lock`). This closes
-[RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285.html): TLS 1.3 handshake
-messages must not cross encryption-level changes within one record. The provider and
-application TLS-consent policy are unchanged. The updated provider also advertises ML-DSA
-signature schemes; the generic TLS JA4 regression fixture was re-measured against the live
-detector (`crates/foxcore-transport/tests/ja_fingerprint.rs:101`).
-For QUIC, rustls now omits the TLS 1.2 session-ticket extension, changing the JA4 prefix to
-`q13d0311h3`; the Hysteria2 and TUIC capture tests assert this TLS-1.3-only hello
-(`crates/proto-hysteria2/src/quic_fingerprint.rs:194`,
-`crates/proto-tuic/src/quic_fingerprint.rs:154`). REALITY's compiled browser profiles are unchanged.
 
 Fox-owned generic TLS explicitly builds rustls configurations with the `aws-lc-rs` provider because
 `ring` has no ML-KEM (`crates/foxcore-transport/src/tls.rs:454-505`). The dependency graph still
@@ -63,12 +52,12 @@ The BoringSSL-derived primitives needed here already arrive through `aws-lc-rs`.
 | **AnyTLS v2** | **SHA-256(password)** ‖ `u16be(pad_len)` ‖ random padding; padding scheme id advertised as `padding-md5=<MD5 hex>` | TLS below | TLS below |
 | **ShadowTLS v3** | **HMAC-SHA1** truncated to 4 bytes, written into the ClientHello session id at offset +28; server proof = chained `HMAC-SHA1(password, ServerRandom)`, constant-time compared | TLS 1.3 below | inner Shadowsocks; stage-2 unmask XORs with `SHA-256(password ‖ ServerRandom)` |
 | **WireGuard** | Noise **IKpsk2**, `"Noise_IKpsk2_25519_ChaChaPoly_BLAKE2s"` | X25519; BLAKE2s-256, HMAC-BLAKE2s kdf1/2/3 | ChaCha20-Poly1305; XChaCha20-Poly1305 for cookie reply; `mac1 = BLAKE2s-128` |
-| **AmneziaWG** | identical to WireGuard | identical | **obfuscation only — no crypto change** |
+| **AmneziaWG** | identical to WireGuard | identical | unchanged transport AEAD; optional IETF ChaCha20 outer obfuscation |
 | **Naive** | `Proxy-Authorization: Basic` inside TLS | TLS below | TLS below; Variant1 zero padding on first 8 reads/writes |
 | **SOCKS5** | RFC 1929 username/password **in the clear** | none | none |
 | **HTTP proxy** | Basic auth | optional TLS | optional TLS |
 | **REALITY** | see [2.4](#24-reality) | X25519 to the server REALITY key | AES-256-GCM for the auth blob; TLS 1.3 schedule for the session |
-| **Tor** | delegated to `arti-client` 0.44.0 | delegated | delegated |
+| **Tor** | delegated to `arti-client` 0.47.0 | delegated | delegated |
 | **I2P** | none in-crate; optional RFC 1929 to the local i2pd | none | none |
 
 Note that `SocksConfig` has no TLS field at all — a SOCKS5 outbound carries its credentials in
@@ -78,7 +67,7 @@ plaintext. It exists for loopback and LAN use.
 
 ## 2.3 Post-quantum
 
-Two independent PQ surfaces, both **ML-KEM-768**. ML-DSA is *offered and never implemented*.
+The handwritten REALITY and VLESS Encryption paths use **ML-KEM-768**. REALITY only advertises ML-DSA; the rustls provider has ML-DSA signature implementations (`vendor/rustls/src/crypto/aws_lc_rs/mod.rs:180-182`).
 
 ```mermaid
 flowchart TD
@@ -183,10 +172,10 @@ certificate.
 
 ```mermaid
 flowchart TD
-    subgraph A["Generic TLS path — stock rustls"]
+    subgraph A["Generic TLS path — pinned FoxHole rustls fork"]
         A1["VLESS/VMess/Trojan/SS/AnyTLS/Naive/HTTP over TLS<br/>+ QUIC for Hysteria2 and TUIC"]
-        A1 --> A2["only 3 knobs:<br/>curve_preferences, ALPN, version range"]
-        A2 --> A3["NOT browser-shaped:<br/>no GREASE API, no extension-order API,<br/>rustls has none of Chrome's RSA/CBC suites"]
+        A1 --> A2["TLS settings plus optional<br/>chrome_151 ClientHello"]
+        A2 --> A3["Explicit h2/http/1.1 profile;<br/>incompatible ECH, groups or versions refused"]
     end
     subgraph B["REALITY path — hand-written bytes"]
         B1["proto-reality writes the hello itself,<br/>rustls is not involved"]
@@ -195,14 +184,20 @@ flowchart TD
     end
 ```
 
-The two must not be conflated. The generic builder can select protocol versions, ALPN and
-key-exchange groups, but it exposes no browser-profile selector and does not control GREASE or
-extension ordering (`crates/foxcore-transport/src/tls.rs:447-505`). The capabilities document
-therefore reports `chromium_tls_fingerprint` as unsupported on the generic Naive/rustls path
-(`crates/foxcore-android/src/capabilities.rs:991-1007`). REALITY does not use that builder: it writes
-the selected profile's ClientHello bytes itself.
+Generic TLS can select `tls.fingerprint: "chrome_151"` through the pinned rustls fork
+(`crates/foxcore-api/src/config/tls.rs:42-46`; `crates/foxcore-transport/src/tls.rs:382-387`).
+The profile requires DNS SNI, explicit h2/http/1.1 ALPN, its TLS1.2..TLS1.3 offer and hybrid-first
+curve order; incompatible settings are refused (`vendor/rustls/src/client/chrome_hello.rs:50-79`).
+ClientHello shaping does not imply a complete Chromium network stack or remove protocol-specific
+capability limits. REALITY writes its own ClientHello and does not use this rustls builder.
 
-**Profiles implemented** (`capabilities.rs:1102-1117`): `chrome_151`, `chrome_133`, `chrome_131`,
+In secure mode, certificate paths still pass the configured verifier and any mandatory pin
+(`crates/foxcore-transport/src/tls.rs:315-347`). The lock selects rustls-webpki 0.103.16 and
+webpki-roots 1.0.10 for the emSign distrust fixes (`Cargo.lock`, rustls-webpki/webpki-roots entries).
+Explicit insecure consent and configured pins remain separate; fingerprint selection does not
+weaken certificate verification.
+
+**REALITY profiles implemented** (`capabilities.rs:1102-1117`): `chrome_151`, `chrome_133`, `chrome_131`,
 `edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`, `firefox_153`, `firefox_148`, plus `random` (one
 modern table chosen per process) and `randomized` (a fresh generated hello per connection). Seven
 tables are transcribed from uTLS; `chrome_151` and `firefox_153` come from first-party captures.
@@ -211,7 +206,7 @@ tables are transcribed from uTLS; `chrome_151` and `firefox_153` come from first
 `key_share`, and REALITY derives its auth key from the client's X25519 share, so no REALITY
 handshake is possible with that hello (`capabilities.rs:1117`).
 
-**Offered ≠ implemented.** The hello advertises TLS 1.2, secp256r1/384r1 without shares,
+**REALITY offers do not imply implementation.** Its hello advertises TLS 1.2, secp256r1/384r1 without shares,
 HelloRetryRequest, brotli certificate compression, PSK/0-RTT and (on `chrome_151`) ML-DSA. A server
 that takes any of them up is refused, not downgraded to.
 
@@ -224,6 +219,29 @@ over canonical ASCII JSON (`:154-169`). Any failure refuses the whole document. 
 [03 — Updates and data delivery](03-updates-and-data-delivery.md).
 
 ---
+
+### Portable Android backups
+
+The export checkbox defaults off: the resulting bounded JSON document requires no password.
+Enabling encryption selects the version1 envelope, Argon2id13 (64 MiB, three operations,
+parallelism1) and AES-256-GCM. Import detects the document bytes before asking for a password;
+an unsupported KDF profile is refused before derivation. This choice does not change encrypted
+local settings, profile secrets, keybox storage or APK signing
+(Guard `app/src/main/kotlin/com/foxhole/guard/core/backup/BackupExportRequest.kt:12,33`;
+`app/src/main/kotlin/com/foxhole/guard/core/backup/PortableBackupFormat.kt:41,73`;
+`app/src/main/kotlin/com/foxhole/guard/core/backup/BackupEncryption.kt:24,26,47,143,146`).
+
+Export captures one coherent settings/profile/secret snapshot. Restore stages parsing and identity
+checks before taking the shared domain, secret and settings owners; database savepoints allow
+ordinary per-profile refusal, while cancellation/fatal failure rolls back the whole admitted
+restore. Independent NonCancellable cleanup attempts preserve the primary failure. Effects run
+after owner release. This proves tested in-process rollback, not cross-store power-loss atomicity,
+complete password String erasure or transactional SAF writes. Restore keeps a destination release
+credential bound to its original source URL; an imported URL remains transferable when no current
+credential exists. Copying a token onto an imported or empty source previously caused its later
+normalization to discard it (`Guard app/src/main/kotlin/com/foxhole/guard/core/backup/BackupDocumentSupport.kt:148`)
+(Guard `app/src/main/kotlin/com/foxhole/guard/core/backup/ProfileBackupCheckpointAccess.kt:30`;
+`app/src/main/kotlin/com/foxhole/guard/core/backup/ProfileBackupSupport.kt:52,115,216`).
 
 ## 2.6 What is pinned, and where
 
@@ -254,7 +272,8 @@ flowchart TD
 | FoxHole DB manifest key | ECDSA P-256 SPKI, PEM literal | `app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeDb.kt:47-53` |
 | …its DER SHA-256 | `3acd123f…98d69` | `FoxholeDb.kt:55-56` |
 | …base64 for the Rust core | derived from the PEM | `FoxholeDb.kt:58-64`; consumed at `DnsFilterAssetInstaller.kt:255` |
-| TLS server SPKI pin | base64 SHA-256 of `subjectPublicKeyInfo`, must decode to 32 B; **replaces** WebPKI verification when set | field `config/tls.rs:19`; check `foxcore-transport/src/tls.rs:543-568` |
+| TLS server SPKI pin | base64 SHA-256 of `subjectPublicKeyInfo`, must decode to 32 B; replaces WebPKI verification when set | field `config/tls.rs:18`; check `foxcore-transport/src/tls.rs:586` |
+| TLS certificate fingerprint | `tls.pinned_certificate_sha256`: base64 SHA-256 of the exact leaf DER certificate; replaces WebPKI verification when set, with handshake signatures still checked | field `config/tls.rs:20`; verifier `foxcore-transport/src/tls.rs:575` |
 | DNS rule-set signing key | per-source, from config; base64 SPKI or raw P-256 point, 1..4096 B; `ECDSA_P256_SHA256_ASN1` | `config/dns.rs:102-134`; `foxcore-route/src/ruleset.rs:13`, `:248-295` |
 | Per-fingerprint-table digest | `fingerprint_sha256`, re-derived in the core before install | `runtime_tables.rs:137`, `:154-169` |
 | Threat-intel source digest | `sourceSha256: 6052636f…4864e` | `app/src/main/assets/sentinel/threat-intel.source.json:7` |
@@ -286,7 +305,98 @@ The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 
 ---
 
+### TLS dependency validation
+
+The workspace requires rustls 0.23.46; its exact version and required aws-lc-rs, aws-lc-sys and
+rustls-webpki versions are recorded in the lockfile (`Cargo.toml:75`; `Cargo.lock:350,361,4052,4078`). The update
+addresses TLS 1.3 handshake messages accepted across encryption-level boundaries in earlier
+versions. The TLS transcript remains authenticated; the upstream advisory does not claim that
+this defect lets an attacker complete a modified handshake. See the
+[rustls advisory](https://github.com/rustls/rustls/security/advisories/GHSA-2mjx-qc3c-rqvc).
+The generic TLS signature list now has thirteen entries, including ML-DSA from the updated
+provider. Its measured JA4 is recorded in `crates/foxcore-transport/tests/ja_fingerprint.rs:1`.
+QUIC remains TLS 1.3 only and no longer advertises the TLS 1.2 SessionTicket extension. Hysteria2
+and TUIC capture eleven extensions: their JA4 prefix and cipher hash match the immutable Chromium
+151 capture, while the extension/signature hash differs. This is a partial shape match, not a full
+Chrome fingerprint (`crates/proto-hysteria2/src/quic_fingerprint.rs:1`;
+`crates/proto-tuic/src/quic_fingerprint.rs:1`). Browser/REALITY tables are unchanged.
+Both supply-chain graphs include all four shipping Android architectures (`deny.toml:270`;
+`deny-all-features.toml:35`). The SBOMs retain the resolved provider graph.
+
+### Amnezia authenticated headers and padding
+
+MAC1 covers the actual sampled custom handshake header; MAC2 includes the corrected MAC1.
+Incoming custom headers remain intact through MAC verification and are normalized only for Noise
+parsing. Cookie AAD uses the MAC1 of the initiation actually sent. The existing vanilla/WARP
+post-MAC reserved-byte compatibility remains separate
+(`crates/proto-wireguard/src/tunnel.rs:891,1107,1119`).
+
+Handshake candidates authenticate before transport fallback and operate on copies, preserving the
+original AEAD payload when differently positioned padding/header ranges overlap. Failed candidates
+cannot consume the current handshake/cookie or enlarge the authenticated peer packet window
+(`crates/proto-wireguard/src/tunnel.rs:594,631,774,838`). Random data padding is authenticated as plaintext
+padding under the existing ChaCha20-Poly1305 transport algorithm
+(`crates/proto-wireguard/src/session.rs:141,157`).
+
+Content-padding addition also appends zero plaintext before transport AEAD, including keepalives.
+It replaces alignment/RandomTrailers only when its configured range is nonzero; it does not change
+Noise, keys, nonces, MACs or the AEAD algorithm. Receive-window growth occurs after authentication
+and replay validation (`crates/proto-wireguard/src/tunnel.rs:516,838`).
+
+HPK adds an IETF ChaCha20 stream transform with counter zero and the first 12 prefix bytes as
+nonce. It transforms the fixed initiation/response/cookie bodies (148/92/64 bytes) after MACs,
+and only the 16-byte transport header after session AEAD. Prefixes, random handshake trailers,
+encrypted transport payload and tags retain their existing form. It adds no authentication or
+new Noise cipher (`crates/proto-wireguard/src/header_protection.rs:42`;
+`crates/proto-wireguard/src/tunnel.rs:741,1125`).
+
+Rust config uses redacted `SecretString`; decoded keys, the non-Copy runtime key and cipher state
+clear owned secret buffers on drop. Receive derives one zeroizing 16-byte stream mask, keeps
+failed handshake candidates on copies, then decrypts the selected transport header and AEAD in
+the caller's mutable buffer. Failed authentication cannot consume a valid replay counter; final
+transport selection does not promise ciphertext preservation
+(`crates/foxcore-api/src/secret.rs:8`; `crates/proto-wireguard/src/header_protection.rs:10,47`;
+`crates/proto-wireguard/src/tunnel.rs:631,704`).
+
+### Read-only manual diagnostics key lookup
+
+The About archive reads retained encrypted journal sessions with the existing Android Keystore
+entry only. Missing or non-secret entries produce an ordinary unavailable journal read; this
+manual path never generates, rotates or deletes a key. The AES-GCM envelope, alias and normal
+background read/write contract are unchanged
+(Guard `app/src/main/kotlin/com/foxhole/guard/core/sentinel/AndroidKeystoreFileCipher.kt:20,32,35,107`).
+
+The manual session reader enumerates retained files without expired-file deletion, plaintext
+migration or encrypted writes. It uses the known existing-key reader, or an explicitly supplied
+read-only reader; an unknown cipher implementation cannot fall back to its potentially creating
+read method. Cancellation and fatal errors escape without opening an archive; ordinary corrupt
+entries keep the previous skip/failure-row fallback. Background journal append, migration and
+cleanup remain separate
+(Guard `app/src/main/kotlin/com/foxhole/guard/core/diagnostics/DiagnosticsSessionStore.kt:33,46,76`;
+`app/src/main/kotlin/com/foxhole/guard/core/diagnostics/DiagnosticsLogger.kt:263,292`).
+
 ## 2.7 Inconsistencies found
+
+- The detached fuzz lockfiles still resolved the older Rustls/aws-lc providers. They now
+  use Rustls 0.23.46, webpki 0.103.15, aws-lc-rs 1.18.1 and aws-lc-sys 0.45.0; the
+  harness stays separate from the product graph (`fuzz/Cargo.lock`;
+  `fuzz/harness/Cargo.lock`). Both fuzz manifests declare MSRV 1.92
+  (`fuzz/Cargo.toml:5`; `fuzz/harness/Cargo.toml:5`).
+
+- Arti now resolves coherently to 0.47.0. Flow/congestion control is always compiled; the
+  removed `flowctl-cc` feature is no longer requested. The workspace MSRV is 1.92; the
+  Docker compiler remains 1.97.1 (`Cargo.toml:39`; `crates/proto-tor/Cargo.toml:41,48-54`).
+  Public RSA certificate-signing APIs remain compiled but have no observed client/onion
+  callers in the reviewed graph. Constructor callers are test/documentation or disabled
+  relay code; the source scanner watches their aliases and keeps the existing advisory
+  exception bounded to the reviewed graph (`fixtures/tor-rsa/arti-0.47.0-review.json:1`;
+  `scripts/tor-rsa-gate.sh:113,180`). This is a source/feature audit, not a compiler call graph.
+
+- The RSA reachability fixture still named aws-lc-rs 1.17.3 after the locked provider update.
+  Three matched files are unchanged; the fourth only re-exports `KeyPairComponents`.
+  The versioned fixture and pinned-source review now track 1.18.1 without changing the
+  RSA advisory exception or scanner (`fixtures/tor-rsa/aws-lc-1.18.1-review.json:1`;
+  `scripts/tor-rsa-gate.sh:113,180`).
 
 - The maintenance inventory omitted transitive `bincode` 2.0.1 while it was
   present in the lockfile and Android SBOM. Both deny policies now list it
@@ -300,3 +410,12 @@ The pinned PEM in `FoxholeDb.kt:47-53` was verified byte-for-byte against
 - The previous text called `aws-lc-rs` the only primitive provider, while the actual dependency
   graph still contains `ring`. Fox-owned TLS selects aws-lc-rs; removing every transitive `ring`
   consumer is a separate supply-chain task and is not a reason to add BoringSSL.
+
+- The former Amnezia transformation changed the header after computing MAC1/MAC2, and normalized
+  a response before its MAC check. Symmetric local fixtures hid that difference from upstream.
+  Independent MAC regressions and a pinned upstream packet exchange now verify the custom-header
+  contract; the Noise key agreement and AEAD primitives are unchanged.
+
+- Manual About export previously used the journal reader that could clean or migrate files and
+  create a missing encryption key. It now uses an explicit read-only existing-key path; tests
+  use synthetic keys and do not establish device AndroidKeyStore provider behavior.

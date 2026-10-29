@@ -304,9 +304,43 @@ impl VlessOutbound {
                 reality.handshake_timeout,
             )
             .await?;
+            let grpc_transport = if matches!(
+                &self.config.transport,
+                StreamTransportConfig::Grpc {
+                    authority: None,
+                    ..
+                }
+            ) {
+                let mut configured = self.config.transport.clone();
+                // Xray deliberately does not use REALITY's camouflage SNI as
+                // gRPC authority. Its resolver defaults to the target endpoint.
+                let endpoint = match self.config.server.parse::<std::net::IpAddr>() {
+                    Ok(address) => std::net::SocketAddr::new(address, self.config.port).to_string(),
+                    Err(_) => format!("{}:{}", self.config.server, self.config.port),
+                };
+                if let StreamTransportConfig::Grpc { authority, .. } = &mut configured {
+                    *authority = Some(endpoint);
+                }
+                Some(configured)
+            } else {
+                None
+            };
+            let xhttp_transport =
+                if let StreamTransportConfig::Xhttp { host: None, .. } = &self.config.transport {
+                    let mut configured = self.config.transport.clone();
+                    if let StreamTransportConfig::Xhttp { host, .. } = &mut configured {
+                        *host = Some(reality.server_name.clone());
+                    }
+                    Some(configured)
+                } else {
+                    None
+                };
             wrap_stream_transport(
                 secured,
-                &self.config.transport,
+                xhttp_transport
+                    .as_ref()
+                    .or(grpc_transport.as_ref())
+                    .unwrap_or(&self.config.transport),
                 &self.config.server,
                 self.config.port,
                 true,
@@ -473,6 +507,7 @@ async fn relay_datagrams(
             frame.clear();
             if codec::encode_udp(&outgoing.payload, &mut frame).is_err()
                 || writer.write_all(&frame).await.is_err()
+                || writer.flush().await.is_err()
             {
                 break;
             }
@@ -631,12 +666,10 @@ async fn relay_xudp(
                     break;
                 }
                 pending.extend_from_slice(&chunk[..length]);
-                if pending.len() > MAX_XUDP_FRAME_LEN {
-                    // A frame that cannot exist on the wire means the stream is
-                    // desynchronised; keeping the bytes would grow unbounded.
-                    break;
-                }
-                if !drain_xudp(&mut pending, &mut peer, &downlink).await {
+                // The read may complete one frame and begin another; bound only the residue.
+                if !drain_xudp(&mut pending, &mut peer, &downlink).await
+                    || pending.len() > MAX_XUDP_FRAME_LEN
+                {
                     break;
                 }
             }
@@ -721,6 +754,56 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn xudp_accepts_a_large_frame_coalesced_with_the_next_frame() {
+        let destination = Destination::new("1.2.3.4", 53);
+        let mut wire = Vec::new();
+        xudp::encode_packet(
+            1,
+            xudp::STATUS_KEEP,
+            &destination,
+            None,
+            &vec![0xa1; 65_535],
+            &mut wire,
+        )
+        .unwrap();
+        xudp::encode_packet(
+            1,
+            xudp::STATUS_KEEP,
+            &destination,
+            None,
+            &vec![0xb2; 2048],
+            &mut wire,
+        )
+        .unwrap();
+        let chunks = wire.chunks(16 * 1024).map(<[u8]>::to_vec).collect();
+        let (_uplink, mut outgoing) = tokio::sync::mpsc::channel(1);
+        let (downlink, mut incoming) = tokio::sync::mpsc::channel(2);
+        relay_xudp(
+            Box::new(ScriptedReads::new(chunks)),
+            destination.clone(),
+            [0; xudp::GLOBAL_ID_LEN],
+            &mut outgoing,
+            downlink,
+            CancellationToken::new(),
+        )
+        .await;
+
+        let first = incoming
+            .recv()
+            .await
+            .expect("the complete large frame must be delivered");
+        assert_eq!(first.destination, destination);
+        assert_eq!(first.payload, Bytes::from(vec![0xa1; 65_535]));
+        let second = incoming
+            .recv()
+            .await
+            .expect("the coalesced next frame must be delivered");
+        assert_eq!(second.destination, Destination::new("1.2.3.4", 53));
+        assert_eq!(second.payload, Bytes::from(vec![0xb2; 2048]));
+        assert!(incoming.recv().await.is_none());
+    }
 
     #[test]
     fn parses_uuid_with_or_without_hyphens() {

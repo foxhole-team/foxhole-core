@@ -78,6 +78,8 @@ fn tuned_params() -> AmneziaParams {
         response_junk_size: 15,
         cookie_junk_size: 0,
         transport_junk_size: 0,
+        random_trailers: false,
+        content_padding_addition: None,
         header_initiation: HeaderRange::single(0x1000_0001),
         header_response: HeaderRange::single(0x2000_0002),
         header_cookie: HeaderRange::single(0x3000_0003),

@@ -23,7 +23,7 @@
 # deny.toml.
 #
 # 1. RUSTSEC-2023-0071 — rsa 0.9.10, Marvin Attack (VULNERABILITY; the vector is
-#    established to be unreachable). Ships. Decided here and in deny.toml.
+#    reviewed client/onion-service path has no private-key operation). Ships.
 # 2. RUSTSEC-2024-0436 — paste 1.0.15, unmaintained proc-macro. Ships.
 # 3. notify 8.2.0 under CC0-1.0, via an unconditional tor-config dependency.
 #    Ships.
@@ -37,6 +37,8 @@ all-features = true
 targets = [
     "aarch64-linux-android",
     "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
     "x86_64-unknown-linux-gnu",
     "aarch64-apple-darwin",
 ]
@@ -72,10 +74,9 @@ id = "RUSTSEC-2023-0071"
 #
 #   * no RSA decryption exists anywhere in the graph — TAP, the only handshake
 #     that would need it, is not implemented in Arti;
-#   * RSA signing is compiled (tor_llcrypto::pk::rsa::KeyPair::sign is behind no
-#     feature at all) but has no caller: all five call sites are relay or
-#     directory-authority code, under #[cfg(test)] or in crates that are not in
-#     Cargo.lock (tor-relay-crypto, tor-cert-x509);
+#   * RSA signing and certificate-construction APIs are compiled, but the
+#     reviewed client/onion-service graph does not call them. AuthCert
+#     constructors are used by tests/documentation; relay callers are disabled.
 #   * what the client does with RSA is verify other people's signatures with a
 #     public key, which has no secret to leak.
 #

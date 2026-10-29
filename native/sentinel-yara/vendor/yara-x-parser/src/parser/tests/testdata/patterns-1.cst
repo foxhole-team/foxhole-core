@@ -1,0 +1,58 @@
+SOURCE_FILE@0..95
+  RULE_DECL@0..95
+    RULE_KW@0..4 "rule"
+    WHITESPACE@4..5 " "
+    IDENT@5..9 "test"
+    WHITESPACE@9..10 " "
+    L_BRACE@10..11 "{"
+    NEWLINE@11..12 "\n"
+    WHITESPACE@12..13 "\t"
+    PATTERNS_BLK@13..72
+      STRINGS_KW@13..20 "strings"
+      COLON@20..21 ":"
+      NEWLINE@21..22 "\n"
+      WHITESPACE@22..25 "\t  "
+      PATTERN_DEF@25..35
+        PATTERN_IDENT@25..27 "$a"
+        WHITESPACE@27..28 " "
+        EQUAL@28..29 "="
+        WHITESPACE@29..30 " "
+        STRING_LIT@30..35 "\"foo\""
+      NEWLINE@35..36 "\n"
+      WHITESPACE@36..39 "\t  "
+      PATTERN_DEF@39..57
+        PATTERN_IDENT@39..41 "$b"
+        WHITESPACE@41..42 " "
+        EQUAL@42..43 "="
+        WHITESPACE@43..44 " "
+        REGEXP@44..49 "/foo/"
+        WHITESPACE@49..50 " "
+        PATTERN_MODS@50..57
+          PATTERN_MOD@50..57
+            PRIVATE_KW@50..57 "private"
+      NEWLINE@57..58 "\n"
+      WHITESPACE@58..61 "\t  "
+      PATTERN_DEF@61..72
+        PATTERN_IDENT@61..63 "$c"
+        WHITESPACE@63..64 " "
+        EQUAL@64..65 "="
+        WHITESPACE@65..66 " "
+        HEX_PATTERN@66..72
+          L_BRACE@66..67 "{"
+          WHITESPACE@67..68 " "
+          HEX_SUB_PATTERN@68..70
+            HEX_BYTE@68..70 "ab"
+          WHITESPACE@70..71 " "
+          R_BRACE@71..72 "}"
+    NEWLINE@72..73 "\n"
+    WHITESPACE@73..75 "  "
+    CONDITION_BLK@75..93
+      CONDITION_KW@75..84 "condition"
+      COLON@84..85 ":"
+      NEWLINE@85..86 "\n"
+      WHITESPACE@86..89 "\t  "
+      BOOLEAN_EXPR@89..93
+        BOOLEAN_TERM@89..93
+          TRUE_KW@89..93 "true"
+    NEWLINE@93..94 "\n"
+    R_BRACE@94..95 "}"

@@ -43,6 +43,7 @@ anytls = ["dep:proto-anytls"]
 shadowtls = ["dep:proto-shadowtls"]
 
 [dependencies]
+zeroize.workspace = true
 arc-swap.workspace = true
 bytes.workspace = true
 foxcore-api = { path = "../foxcore-api" }
@@ -65,3 +66,6 @@ proto-wireguard = { path = "../proto-wireguard", optional = true }
 base64.workspace = true
 ipnet.workspace = true
 tokio.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

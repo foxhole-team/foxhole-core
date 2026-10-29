@@ -1,5 +1,6 @@
 mod anon;
 mod base;
+mod bootstrap_dns;
 mod dns;
 mod engine;
 mod outbound;
@@ -20,6 +21,7 @@ mod tests;
 
 pub use anon::*;
 pub use base::*;
+pub use bootstrap_dns::*;
 pub use dns::*;
 pub use engine::*;
 pub use outbound::*;

@@ -23,6 +23,7 @@ jobs:
   watch:
     if: github.repository_owner == 'foxhole-team'
     runs-on: ubuntu-24.04
+    timeout-minutes: 10
     permissions:
       contents: read
       issues: write
@@ -94,12 +95,16 @@ jobs:
             printf '%s\n' "$ISSUE_MARKER"
             printf '<!-- fingerprint-watch:digest=%s -->\n\n' "$digest"
             cat <<'PROSE'
-          The committed tables in `fingerprints/` no longer match the uTLS Chrome parrot tables.
+          The watcher found a table difference or a capture-provenance claim that needs review.
 
           This is a report, not a build failure. Decide deliberately: either uTLS tracked a
           Chrome change and the committed table should follow, or the divergence is intentional
           and belongs in the table's notes. Re-hash with the fingerprint digest convention
           after any edit; `cargo test -p proto-reality` enforces it.
+
+          A moving `Hello*_Auto` alias is a review trigger. It does not prove that a named
+          captured profile has changed, or authorize replacing its captured wire table with
+          another browser version. The report names the immutable uTLS snapshot checked.
 
           Field-level diff, from `scripts/fingerprint-from-utls.py`:
 

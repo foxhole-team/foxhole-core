@@ -1,4 +1,5 @@
 /target
+AGENTS.md
 **/target
 .DS_Store
 
@@ -75,3 +76,5 @@ fuzz/corpus/*/*
 .project
 .classpath
 .settings/
+
+__pycache__/

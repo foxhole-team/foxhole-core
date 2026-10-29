@@ -15,13 +15,15 @@ use foxcore_api::{SecretString, WireguardConfig};
 use foxcore_dialer::ProtectedDialer;
 use ipnet::IpNet;
 use proto_wireguard::amnezia::{AmneziaParams, HeaderRange};
+use proto_wireguard::header_protection::HeaderProtectionKey;
 use proto_wireguard::initpacket::{InitPacket, InitTag};
 use proto_wireguard::noise::Key;
-use proto_wireguard::tunnel::{PeerSettings, PeerTimers};
+use proto_wireguard::tunnel::{PeerConfig, PeerSettings, PeerTimers};
+use zeroize::Zeroizing;
 
 /// Where the tunnel's datagrams go and what the tun side must look like.
 pub struct PacketTunnelOutbound {
-    settings: PeerSettings,
+    settings: Box<PeerConfig>,
     endpoint: Endpoint,
     /// Addresses the peer assigned to this client. Packets leaving the tun are
     /// rewritten to the first one of the matching family.
@@ -71,12 +73,19 @@ impl PacketTunnelOutbound {
                 .map(|amnezia| peer_timers(&amnezia.timers))
                 .unwrap_or_default(),
         };
-        settings
+        let key = config
             .amnezia
+            .as_ref()
+            .and_then(|amnezia| amnezia.header_protection_key.as_ref())
+            .map(decode_header_protection_key)
+            .transpose()?
+            .flatten();
+        let settings = settings.with_header_protection_key(key);
+        settings
             .validate()
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
         Ok(Self {
-            settings,
+            settings: Box::new(settings),
             endpoint: Endpoint {
                 host: config.server,
                 port: config.port,
@@ -89,7 +98,7 @@ impl PacketTunnelOutbound {
         })
     }
 
-    pub fn settings(&self) -> &PeerSettings {
+    pub fn settings(&self) -> &PeerConfig {
         &self.settings
     }
 
@@ -130,6 +139,16 @@ fn invalid_key(field: &str) -> io::Error {
     )
 }
 
+fn decode_header_protection_key(value: &SecretString) -> io::Result<Option<HeaderProtectionKey>> {
+    let mut bytes = Zeroizing::new([0_u8; 32]);
+    if value.expose().len() != 44
+        || STANDARD.decode_slice(value.expose(), &mut *bytes).ok() != Some(32)
+    {
+        return Err(invalid_key("HeaderProtectionKey"));
+    }
+    Ok(HeaderProtectionKey::from_bytes(bytes))
+}
+
 fn amnezia_params(config: &foxcore_api::AmneziaConfig) -> AmneziaParams {
     AmneziaParams {
         junk_packet_count: config.junk_packet_count,
@@ -139,6 +158,11 @@ fn amnezia_params(config: &foxcore_api::AmneziaConfig) -> AmneziaParams {
         response_junk_size: config.response_junk_size,
         cookie_junk_size: config.cookie_junk_size,
         transport_junk_size: config.transport_junk_size,
+        random_trailers: config.random_trailers,
+        content_padding_addition: config.content_padding_addition.map(|range| {
+            HeaderRange::new(range.start(), range.end())
+                .expect("API validates content padding ranges")
+        }),
         header_initiation: header_range(config.header_initiation),
         header_response: header_range(config.header_response),
         header_cookie: header_range(config.header_cookie),
@@ -246,6 +270,9 @@ mod tests {
             response_junk_size: 18,
             cookie_junk_size: 12,
             transport_junk_size: 9,
+            random_trailers: false,
+            content_padding_addition: None,
+            header_protection_key: None,
             init_packets: vec![AmneziaInitPacket {
                 tags: vec![
                     AmneziaInitTag::Bytes {
@@ -363,5 +390,48 @@ mod tests {
         let params = AmneziaParams::default();
         assert!(params.is_vanilla());
         assert_eq!(amnezia_params(&AmneziaConfig::default()), params);
+    }
+    #[test]
+    fn content_padding_reaches_the_packet_tunnel_without_uint16_truncation() {
+        let config = AmneziaConfig {
+            content_padding_addition: Some(
+                foxcore_api::AmneziaContentPaddingRange::new(65536, u32::MAX).unwrap(),
+            ),
+            ..Default::default()
+        };
+        assert_eq!(
+            amnezia_params(&config).content_padding_addition,
+            Some(HeaderRange::new(65536, u32::MAX).unwrap())
+        );
+    }
+    #[test]
+    fn header_protection_reaches_the_real_outbound_peer_configuration() {
+        let config: WireguardConfig = serde_json::from_value(serde_json::json!({
+            "server":"edge.example", "port":51820,
+            "private_key":"BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+            "peer_public_key":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+            "address":["10.8.0.2/32"],"allowed_ips":["0.0.0.0/0"],
+            "amnezia":{"header_protection_key":"AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA=",
+             "init_junk_size":12,"response_junk_size":12,"cookie_junk_size":12,"transport_junk_size":12}
+        })).unwrap();
+        let dialer = ProtectedDialer::new(
+            foxcore_dialer::SocketCallbacks::none(),
+            std::time::Duration::from_secs(1),
+        );
+        let outbound = PacketTunnelOutbound::wireguard(config, dialer).unwrap();
+        let mut peer = PeerTunnel::new(outbound.settings().clone(), Box::new(Counting(0))).unwrap();
+        peer.send_packet(&[0x45; 40], 0).unwrap();
+        let mut wire = Vec::new();
+        peer.poll_transmit(&mut wire).unwrap();
+        assert_ne!(&wire[12..16], &[1, 0, 0, 0]);
+        assert_eq!(wire.len(), 12 + 148);
+        assert!(decode_header_protection_key(&SecretString::new("not-a-key")).is_err());
+        assert!(
+            decode_header_protection_key(&SecretString::new(
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+            ))
+            .unwrap()
+            .is_none()
+        );
     }
 }

@@ -8,17 +8,20 @@
 use std::collections::VecDeque;
 
 use crate::WireguardError;
-use crate::amnezia::AmneziaParams;
+use crate::amnezia::{AmneziaParams, HeaderRange, INITIAL_UDP_WINDOW};
+use crate::header_protection::HeaderProtectionKey;
 use crate::initpacket::InitPacket;
 use crate::message::{
-    CookieReply, INITIATION_MAC2_OFFSET, RESPONSE_MAC1_OFFSET, Response, TYPE_COOKIE_REPLY,
-    TYPE_RESPONSE, message_type, parse_transport,
+    COOKIE_REPLY_LEN, CookieReply, INITIATION_LEN, INITIATION_MAC1_OFFSET, INITIATION_MAC2_OFFSET,
+    RESPONSE_LEN, RESPONSE_MAC1_OFFSET, Response, TAG_LEN, TRANSPORT_HEADER_LEN, TYPE_COOKIE_REPLY,
+    TYPE_INITIATION, TYPE_RESPONSE, TYPE_TRANSPORT, parse_transport,
 };
 use crate::noise::{
-    Handshake, Key, MAC_LEN, StaticIdentity, compute_mac2, open_cookie, tai64n, verify_mac1,
+    Handshake, Key, MAC_LEN, StaticIdentity, compute_mac1, compute_mac2, open_cookie, tai64n,
+    verify_mac1,
 };
 use crate::session::{TransportSession, ip_packet_len};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 /// Where [`PeerTunnel::receive_datagram`] leaves the packet it decrypted.
 ///
@@ -84,6 +87,44 @@ pub struct PeerSettings {
     /// looks at them, so they are not part of what both peers must agree on.
     pub init_packets: Vec<InitPacket>,
     pub timers: PeerTimers,
+}
+
+#[derive(Clone)]
+pub struct PeerConfig {
+    settings: PeerSettings,
+    header_protection_key: Option<HeaderProtectionKey>,
+}
+
+impl From<PeerSettings> for PeerConfig {
+    fn from(settings: PeerSettings) -> Self {
+        Self {
+            settings,
+            header_protection_key: None,
+        }
+    }
+}
+
+impl PeerSettings {
+    pub fn with_header_protection_key(self, key: Option<HeaderProtectionKey>) -> PeerConfig {
+        PeerConfig {
+            settings: self,
+            header_protection_key: key,
+        }
+    }
+}
+
+impl PeerConfig {
+    pub fn settings(&self) -> &PeerSettings {
+        &self.settings
+    }
+
+    pub fn validate(&self) -> Result<(), WireguardError> {
+        self.settings.amnezia.validate()?;
+        if let Some(key) = &self.header_protection_key {
+            key.validate_prefixes(&self.settings.amnezia)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -213,6 +254,7 @@ struct InFlight {
     /// may provoke: without it a cookie cannot be opened, and a reply copied
     /// from someone else's exchange cannot be mistaken for an answer to ours.
     mac1: [u8; MAC_LEN],
+    answered: bool,
 }
 
 /// The responder's proof-of-address challenge, and when it arrived.
@@ -261,8 +303,10 @@ struct Outgoing {
 pub struct PeerTunnel {
     identity: StaticIdentity,
     amnezia: AmneziaParams,
+    header_protection_key: Option<HeaderProtectionKey>,
     persistent_keepalive_s: Option<u16>,
     reserved: [u8; 3],
+    udp_window: usize,
     init_packets: Vec<InitPacket>,
     entropy: Box<dyn Entropy>,
     /// The session carrying traffic. It keeps working while a rekey handshake is
@@ -326,10 +370,12 @@ const MAX_SPARE_CAPACITY: usize = 2048;
 
 impl PeerTunnel {
     pub fn new(
-        settings: PeerSettings,
+        config: impl Into<PeerConfig>,
         mut entropy: Box<dyn Entropy>,
     ) -> Result<Self, WireguardError> {
-        settings.amnezia.validate()?;
+        let config = config.into();
+        config.validate()?;
+        let settings = config.settings;
         let identity = StaticIdentity::new(
             &settings.private_key,
             settings.peer_public_key,
@@ -339,11 +385,13 @@ impl PeerTunnel {
         Ok(Self {
             identity,
             amnezia: settings.amnezia,
+            header_protection_key: config.header_protection_key,
             timers,
             handshake_attempts: 0,
             data_received_ms: None,
             persistent_keepalive_s: settings.persistent_keepalive_s,
             reserved: settings.reserved,
+            udp_window: INITIAL_UDP_WINDOW,
             entropy,
             live: None,
             previous: None,
@@ -466,20 +514,45 @@ impl PeerTunnel {
     /// when [`Self::can_seal`] holds, which is what keeps `seal` from ever being
     /// asked for a counter past `REJECT_AFTER_MESSAGES`.
     fn seal_now(&mut self, packet: &[u8]) -> Result<Queued, WireguardError> {
-        // `seal` reserves the exact datagram size on this buffer, so the whole
-        // send path allocates nothing once the tunnel is warm: the buffer comes
-        // back from the relay through `poll_transmit`, is filled here, kept by
-        // `obfuscate_owned` on vanilla profiles, and handed to the socket.
         let mut sealed = self.take_buffer();
+        let minimum = usize::from(self.amnezia.transport_junk_size)
+            .checked_add(TRANSPORT_HEADER_LEN + TAG_LEN)
+            .and_then(|base| base.checked_add(packet.len()))
+            .ok_or(WireguardError::InvalidParameters)?;
+        self.udp_window = self.udp_window.max(minimum);
+        let available = self.udp_window - minimum;
+        let addition = self
+            .amnezia
+            .content_padding_addition
+            .filter(|range| range.start() != 0 || range.end() != 0);
+        let padding = if let Some(range) = addition {
+            let selected = if range.is_single() {
+                range.start()
+            } else {
+                range.sample_padding(self.entropy.next_u32()?)
+            };
+            Some(u64::from(selected).min(available as u64) as usize)
+        } else if self.amnezia.random_trailers {
+            Some(if available == 0 {
+                0
+            } else {
+                self.entropy.next_u32()? as usize % available
+            })
+        } else {
+            None
+        };
         let Some(live) = &mut self.live else {
-            // Handed back rather than dropped: this branch is unreachable while
-            // `can_seal` guards the call, and a buffer lost on an unreachable
-            // path is the kind of leak that only shows up as slow growth.
             self.recycle(sealed);
             return Err(WireguardError::UnexpectedMessage);
         };
-        live.session.seal(packet, &mut sealed)?;
-        let datagram = self.obfuscate_owned(sealed)?;
+        match padding {
+            Some(padding) => live
+                .session
+                .seal_with_padding(packet, padding, &mut sealed)?,
+            None => live.session.seal(packet, &mut sealed)?,
+        }
+        let mut datagram = self.obfuscate_owned(sealed)?;
+        self.protect_message(TYPE_TRANSPORT, &mut datagram)?;
         self.transmit.push_back(Outgoing {
             datagram,
             payload: packet.len(),
@@ -514,7 +587,7 @@ impl PeerTunnel {
         self.flush_pending()
     }
 
-    /// Feed one datagram received from the peer's endpoint.
+    /// Feed one datagram received from the peer's endpoint; selected transport decrypts in place.
     ///
     /// `out` is only written for [`Received::Packet`]; see [`PacketOut`] for
     /// why it is not a `&mut Vec<u8>`.
@@ -526,8 +599,24 @@ impl PeerTunnel {
     ) -> Result<Received, WireguardError> {
         self.now_ms = now_ms;
         self.expire_sessions();
-        // Transport frames carry the custom header at offset 0; handshakes may
-        // sit behind a junk prefix, so they are matched by length and header.
+        if self.header_protection_key.is_some() {
+            return self.receive_protected(datagram, out);
+        }
+        let mut handshake_error = None;
+        if let Ok((kind, body)) = self.amnezia.handshake_body(datagram) {
+            let mut standard = body.to_vec();
+            standard[..4].copy_from_slice(&[kind, 0, 0, 0]);
+            // Different prefix offsets can alias another type's header range.
+            let result = match kind {
+                TYPE_RESPONSE => self.accept_response(&standard, body),
+                TYPE_COOKIE_REPLY => self.accept_cookie_reply(&standard),
+                _ => Err(WireguardError::UnexpectedMessage),
+            };
+            match result {
+                Ok(received) => return Ok(received),
+                Err(error) => handshake_error = Some(error),
+            }
+        }
         if self.amnezia.is_transport(datagram) {
             if self.amnezia.is_vanilla() {
                 return self.accept_transport(datagram, out);
@@ -536,12 +625,136 @@ impl PeerTunnel {
             let standard = amnezia.deobfuscate_transport(datagram)?;
             return self.accept_transport(standard, out);
         }
-        let standard = self.amnezia.deobfuscate(datagram)?;
-        match message_type(&standard) {
-            Some(TYPE_RESPONSE) => self.accept_response(&standard),
-            Some(TYPE_COOKIE_REPLY) => self.accept_cookie_reply(&standard),
-            _ => Err(WireguardError::UnexpectedMessage),
+        Err(handshake_error.unwrap_or(WireguardError::UnexpectedMessage))
+    }
+
+    fn receive_protected<O: PacketOut + ?Sized>(
+        &mut self,
+        datagram: &mut [u8],
+        out: &mut O,
+    ) -> Result<Received, WireguardError> {
+        // Validated S1..S4 all share the datagram's first twelve nonce bytes.
+        let mut header_mask = Zeroizing::new([0_u8; TRANSPORT_HEADER_LEN]);
+        self.header_protection_key
+            .as_ref()
+            .ok_or(WireguardError::InvalidParameters)?
+            .transform(datagram, &mut *header_mask)?;
+        let mut handshake_error = None;
+        for (kind, length, prefix, header) in [
+            (
+                TYPE_INITIATION,
+                INITIATION_LEN,
+                self.amnezia.init_junk_size,
+                self.amnezia.header_initiation,
+            ),
+            (
+                TYPE_RESPONSE,
+                RESPONSE_LEN,
+                self.amnezia.response_junk_size,
+                self.amnezia.header_response,
+            ),
+            (
+                TYPE_COOKIE_REPLY,
+                COOKIE_REPLY_LEN,
+                self.amnezia.cookie_junk_size,
+                self.amnezia.header_cookie,
+            ),
+        ] {
+            let Some(body) = self.protected_handshake_body(
+                datagram,
+                usize::from(prefix),
+                length,
+                header,
+                self.amnezia.random_trailers,
+                &header_mask,
+            )?
+            else {
+                continue;
+            };
+            let mut standard = body.clone();
+            standard[..4].copy_from_slice(&[kind, 0, 0, 0]);
+            let result = match kind {
+                TYPE_RESPONSE => self.accept_response(&standard, &body),
+                TYPE_COOKIE_REPLY => self.accept_cookie_reply(&standard),
+                _ => Err(WireguardError::UnexpectedMessage),
+            };
+            match result {
+                Ok(received) => return Ok(received),
+                Err(error) => handshake_error = Some(error),
+            }
         }
+        let prefix = usize::from(self.amnezia.transport_junk_size);
+        let minimum = prefix
+            .checked_add(TRANSPORT_HEADER_LEN + TAG_LEN)
+            .ok_or(WireguardError::MalformedMessage)?;
+        if datagram.len() >= minimum {
+            let (_, body) = datagram.split_at_mut(prefix);
+            let kind = u32::from_le_bytes(std::array::from_fn(|index| {
+                body[index] ^ header_mask[index]
+            }));
+            if self.amnezia.header_transport.contains(kind) {
+                for (byte, mask) in body[..TRANSPORT_HEADER_LEN]
+                    .iter_mut()
+                    .zip(header_mask.iter())
+                {
+                    *byte ^= *mask;
+                }
+                body[..4].copy_from_slice(&[TYPE_TRANSPORT, 0, 0, 0]);
+                return self.accept_transport(body, out);
+            }
+        }
+        Err(handshake_error.unwrap_or(WireguardError::UnexpectedMessage))
+    }
+
+    fn protected_handshake_body(
+        &self,
+        datagram: &[u8],
+        prefix: usize,
+        length: usize,
+        header: HeaderRange,
+        trailing: bool,
+        header_mask: &[u8; TRANSPORT_HEADER_LEN],
+    ) -> Result<Option<Vec<u8>>, WireguardError> {
+        let expected = prefix
+            .checked_add(length)
+            .ok_or(WireguardError::MalformedMessage)?;
+        if datagram.len() < expected || (!trailing && datagram.len() != expected) {
+            return Ok(None);
+        }
+        let key = self
+            .header_protection_key
+            .as_ref()
+            .ok_or(WireguardError::InvalidParameters)?;
+        let nonce_prefix = &datagram[..prefix];
+        let kind = u32::from_le_bytes(std::array::from_fn(|index| {
+            datagram[prefix + index] ^ header_mask[index]
+        }));
+        if !header.contains(kind) {
+            return Ok(None);
+        }
+        // A failed authenticated candidate must leave every other prefix candidate intact.
+        let mut body = datagram[prefix..expected].to_vec();
+        key.transform(nonce_prefix, &mut body)?;
+        Ok(Some(body))
+    }
+
+    fn protect_message(&self, kind: u8, datagram: &mut [u8]) -> Result<(), WireguardError> {
+        let Some(key) = &self.header_protection_key else {
+            return Ok(());
+        };
+        let (prefix, length) = match kind {
+            TYPE_INITIATION => (self.amnezia.init_junk_size, INITIATION_LEN),
+            TYPE_RESPONSE => (self.amnezia.response_junk_size, RESPONSE_LEN),
+            TYPE_COOKIE_REPLY => (self.amnezia.cookie_junk_size, COOKIE_REPLY_LEN),
+            TYPE_TRANSPORT => (self.amnezia.transport_junk_size, TRANSPORT_HEADER_LEN),
+            _ => return Err(WireguardError::UnexpectedMessage),
+        };
+        let prefix = usize::from(prefix);
+        let (nonce_prefix, body) = datagram.split_at_mut(prefix.min(datagram.len()));
+        let body = body
+            .get_mut(..length)
+            .ok_or(WireguardError::MalformedMessage)?;
+        key.transform(nonce_prefix, body)
     }
 
     /// Take the responder's load-shedding challenge (WireGuard §5.3).
@@ -580,6 +793,9 @@ impl PeerTunnel {
             value,
             received_ms: self.now_ms,
         });
+        if let Some(handshake) = self.handshake.as_mut() {
+            handshake.answered = true;
+        }
         Ok(Received::None)
     }
 
@@ -620,8 +836,12 @@ impl PeerTunnel {
             return Err(WireguardError::UnexpectedMessage);
         };
         let plaintext = live.session.open(datagram)?;
-        // WireGuard pads to a 16-byte boundary; the IP header is the only
-        // authority on how much of that is a real packet.
+        let observed = usize::from(self.amnezia.transport_junk_size)
+            .checked_add(TRANSPORT_HEADER_LEN)
+            .and_then(|header| header.checked_add(plaintext.len()))
+            .ok_or(WireguardError::MalformedMessage)?;
+        self.udp_window = self.udp_window.max(observed);
+        // Both standard and randomized padding are outside the IP header's length.
         let Some(length) = ip_packet_len(plaintext) else {
             return Ok(Received::None);
         };
@@ -653,32 +873,27 @@ impl PeerTunnel {
 
     /// Take the responder's answer, if it really is one.
     ///
-    /// Nothing here may disturb the handshake unless the response opens. It used
-    /// to be taken out of `self` before it had been checked at all, so any
-    /// 92-byte datagram with a `2` in its first byte — from anyone who could
-    /// reach this socket — threw away the initiation the client was waiting on.
-    /// The peer's real answer then had nothing to complete, and the tunnel sat
-    /// in the five-second retry loop for as long as the flood lasted, reporting
-    /// nothing worse than an unreachable peer.
-    fn accept_response(&mut self, datagram: &[u8]) -> Result<Received, WireguardError> {
+    /// Keep the in-flight handshake intact until the response authenticates.
+    fn accept_response(
+        &mut self,
+        datagram: &[u8],
+        authenticated: &[u8],
+    ) -> Result<Received, WireguardError> {
         let Some(in_flight) = self.handshake.as_ref() else {
-            // No handshake is in flight, so this response belongs to nothing we
-            // started. Dropping it keeps a stale or injected message from
-            // installing a session.
             return Err(WireguardError::UnexpectedMessage);
         };
         let response = Response::decode(datagram)?;
-        // Cheapest first: an index comparison, then one keyed BLAKE2s, and only
-        // then the two Diffie-Hellman operations and the AEAD open inside
-        // `consume_response`. `mac1` is keyed with *our* static public key, so
-        // it is the last thing an off-path sender can forge and the first thing
-        // worth checking.
+        // Authenticate cheaply before running the key agreement.
         if response.receiver_index != in_flight.handshake.sender_index {
             return Err(WireguardError::UnexpectedMessage);
         }
         if !verify_mac1(
             &self.identity.public,
-            &response.encode(),
+            if self.amnezia.is_vanilla() {
+                datagram
+            } else {
+                authenticated
+            },
             RESPONSE_MAC1_OFFSET,
             &response.mac1,
         ) {
@@ -791,6 +1006,30 @@ impl PeerTunnel {
             && self.handshake_attempts >= self.timers.max_handshake_attempts
     }
 
+    pub fn unanswered_retry_due(&self, now_ms: u64) -> bool {
+        !self
+            .live
+            .as_ref()
+            .is_some_and(|live| live.can_send(now_ms, self.timers.reject_after_time_ms))
+            && self.handshake.as_ref().is_some_and(|handshake| {
+                !handshake.answered
+                    && now_ms >= handshake.retry_at_ms
+                    && self.handshake_attempts < self.timers.max_handshake_attempts
+            })
+    }
+
+    /// Retry on a replacement endpoint without racing another Noise session.
+    pub fn retry_on_new_endpoint(&mut self, now_ms: u64) -> Result<(), WireguardError> {
+        if !self.unanswered_retry_due(now_ms) {
+            return Err(WireguardError::UnexpectedMessage);
+        }
+        self.now_ms = now_ms;
+        self.expire_sessions();
+        // A responder's cookie is bound to its own secret and our source address.
+        self.cookie = None;
+        self.start_handshake()
+    }
+
     /// Start a new handshake before the current session ages out. The live
     /// session stays installed until the response arrives.
     fn rekey_if_due(&mut self) -> Result<(), WireguardError> {
@@ -860,20 +1099,30 @@ impl PeerTunnel {
             &ephemeral_seed,
             tai64n(std::time::SystemTime::now()),
         );
-        // The seed *is* the ephemeral private key; `Handshake` keeps its own
-        // copy inside a `PrivateKey`, and this one has no reason to survive the
-        // call — including the call that failed.
+        // Handshake retains its own private key; erase the temporary seed even on error.
         ephemeral_seed.zeroize();
-        let (handshake, mut initiation) = initiated?;
-        // Attached last, because it is taken over the encoded message with
-        // `mac1` already in place.
-        if let Some(cookie) = self.active_cookie() {
-            initiation.mac2 = compute_mac2(cookie, &initiation.encode(), INITIATION_MAC2_OFFSET);
-        }
-        let mac1 = initiation.mac1;
+        let (handshake, initiation) = initiated?;
         let jitter_ms =
             u64::from(self.entropy.next_u32()?) % (REKEY_TIMEOUT_JITTER_MAX_MS.saturating_add(1));
-        let datagram = self.obfuscate(&initiation.encode())?;
+        let mut datagram = self.obfuscate(&initiation.encode())?;
+        let prefix = usize::from(self.amnezia.init_junk_size);
+        let body = &mut datagram[prefix..prefix + INITIATION_LEN];
+        // AWG authenticates its sampled header; vanilla reserved metadata is stamped after MAC.
+        let mac1 = if self.amnezia.is_vanilla() {
+            initiation.mac1
+        } else {
+            compute_mac1(&self.identity.peer_public, body, INITIATION_MAC1_OFFSET)
+        };
+        body[INITIATION_MAC1_OFFSET..INITIATION_MAC2_OFFSET].copy_from_slice(&mac1);
+        if let Some(cookie) = self.active_cookie() {
+            let mac2 = if self.amnezia.is_vanilla() {
+                compute_mac2(cookie, &initiation.encode(), INITIATION_MAC2_OFFSET)
+            } else {
+                compute_mac2(cookie, body, INITIATION_MAC2_OFFSET)
+            };
+            body[INITIATION_MAC2_OFFSET..].copy_from_slice(&mac2);
+        }
+        self.protect_message(TYPE_INITIATION, &mut datagram)?;
         self.transmit.extend(init_packets);
         self.transmit.extend(junk_packets);
         self.transmit.push_back(Outgoing {
@@ -887,6 +1136,7 @@ impl PeerTunnel {
                 .saturating_add(self.timers.rekey_timeout_ms)
                 .saturating_add(jitter_ms),
             mac1,
+            answered: false,
         });
         self.handshake_attempts = self.handshake_attempts.saturating_add(1);
         Ok(())
@@ -982,17 +1232,13 @@ impl PeerTunnel {
         let mut datagram = self.take_buffer();
         let entropy = &mut self.entropy;
         let mut fill_result = Ok(());
-        amnezia.obfuscate_into(message, &mut datagram, |bytes| {
+        amnezia.obfuscate_into_with_window(message, &mut datagram, self.udp_window, |bytes| {
             if fill_result.is_ok() {
                 fill_result = entropy.fill(bytes);
             }
         })?;
         fill_result?;
-        // Stamped after the transform, never before: the transform classifies
-        // the message with `message_type`, which treats a non-zero reserved
-        // field as "not a vanilla header" — stamping first would make our own
-        // message unclassifiable. With Amnezia parameters the header is replaced
-        // wholesale, so there is nothing to stamp and no peer that would read it.
+        // Classify the vanilla type before stamping WARP's reserved metadata.
         if amnezia.is_vanilla()
             && self.reserved != [0, 0, 0]
             && let Some(header) = datagram.get_mut(1..4)
@@ -1132,6 +1378,50 @@ mod tests {
             responder.expected_mac2(&cookie, &retried),
             "the responder recomputes mac2 from the cookie it issued, so a value \
              it does not recognise is dropped exactly as the zero one was"
+        );
+    }
+
+    #[test]
+    fn endpoint_rotation_gives_an_authenticated_cookie_answer_its_retry() {
+        let mut tunnel = tunnel(AmneziaParams::default());
+        let initiation = first_initiation(&mut tunnel);
+        let due = tunnel.handshake.as_ref().unwrap().retry_at_ms;
+        assert!(tunnel.unanswered_retry_due(due));
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let mut cookie = responder
+            .issue_cookie(&initiation, [0x5a; 16], [0x11; 24])
+            .unwrap()
+            .encode();
+        tunnel
+            .receive_datagram(&mut cookie, 1, &mut Vec::new())
+            .unwrap();
+        assert!(!tunnel.unanswered_retry_due(due));
+        tunnel.tick(due).unwrap();
+        let next_due = tunnel.handshake.as_ref().unwrap().retry_at_ms;
+        assert!(tunnel.unanswered_retry_due(next_due));
+        assert!(tunnel.cookie.is_some());
+        let held = tunnel.pending.len();
+        tunnel.retry_on_new_endpoint(next_due).unwrap();
+        assert!(
+            tunnel.cookie.is_none(),
+            "a different responder must not inherit the old cookie"
+        );
+        assert_eq!(tunnel.pending.len(), held);
+    }
+
+    #[test]
+    fn a_live_session_keeps_its_endpoint_during_an_unanswered_rekey() {
+        let (mut tunnel, _peer) = established(0);
+        tunnel.tick(REKEY_AFTER_TIME_MS + 1).unwrap();
+        let due = tunnel.handshake.as_ref().unwrap().retry_at_ms;
+        assert!(!tunnel.unanswered_retry_due(due));
+        assert_eq!(
+            tunnel.retry_on_new_endpoint(due),
+            Err(WireguardError::UnexpectedMessage)
+        );
+        assert_eq!(
+            tunnel.send_packet(&ipv4_packet(), due).unwrap(),
+            Queued::Sealed
         );
     }
 
@@ -1695,11 +1985,291 @@ mod tests {
             response_junk_size: 16,
             cookie_junk_size: 0,
             transport_junk_size: 0,
+            random_trailers: false,
+            content_padding_addition: None,
             header_initiation: HeaderRange::single(0x1111_1111),
             header_response: HeaderRange::single(0x2222_2222),
             header_cookie: HeaderRange::single(0x3333_3333),
             header_transport: HeaderRange::single(0x4444_4444),
         }
+    }
+
+    fn upstream_mac1(peer_public: &Key, body: &[u8]) -> [u8; 16] {
+        use blake2::digest::{Digest, KeyInit, Mac};
+        let mut key = blake2::Blake2s256::new();
+        Digest::update(&mut key, b"mac1----");
+        Digest::update(&mut key, peer_public);
+        let mut mac = <blake2::Blake2sMac<blake2::digest::consts::U16> as KeyInit>::new_from_slice(
+            &key.finalize(),
+        )
+        .unwrap();
+        Mac::update(&mut mac, body);
+        mac.finalize().into_bytes().into()
+    }
+
+    #[test]
+    fn amnezia_initiation_mac_covers_the_actual_ranged_header() {
+        let mut params = obfuscated_params();
+        params.header_initiation = HeaderRange::new(0x1111_1100, 0x1111_11ff).unwrap();
+        let mut tunnel = tunnel(params);
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut packet = Vec::new();
+        for _ in 0..=params.junk_packet_count {
+            tunnel.poll_transmit(&mut packet).unwrap();
+        }
+        let body = &packet[usize::from(params.init_junk_size)..];
+        let peer_public = crate::noise::public_key(&SERVER_STATIC).unwrap();
+        assert_eq!(
+            &body[116..132],
+            &upstream_mac1(&peer_public, &body[..116]),
+            "the upstream MAC checker sees the custom header before type normalization"
+        );
+    }
+
+    #[test]
+    fn vanilla_reserved_metadata_remains_outside_the_handshake_mac() {
+        let mut config = settings(AmneziaParams::default());
+        config.reserved = [0x11, 0x22, 0x33];
+        let mut tunnel = PeerTunnel::new(config, Box::new(CountingEntropy(0))).unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut packet = Vec::new();
+        tunnel.poll_transmit(&mut packet).unwrap();
+        assert_eq!(&packet[1..4], &[0x11, 0x22, 0x33]);
+        let mut authenticated = packet.clone();
+        authenticated[1..4].fill(0);
+        let peer_public = crate::noise::public_key(&SERVER_STATIC).unwrap();
+        assert_eq!(
+            &packet[116..132],
+            &upstream_mac1(&peer_public, &authenticated[..116])
+        );
+    }
+
+    #[test]
+    fn random_trailers_vary_data_padding_without_changing_the_ip_packet() {
+        use std::collections::HashSet;
+
+        let params = AmneziaParams {
+            random_trailers: true,
+            ..Default::default()
+        };
+        let mut tunnel = tunnel(params);
+        let packet = ipv4_packet();
+        tunnel.send_packet(&packet, 0).unwrap();
+        let mut datagram = Vec::new();
+        tunnel.poll_transmit(&mut datagram).unwrap();
+        let initiation = Initiation::decode(&params.deobfuscate(&datagram).unwrap()).unwrap();
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let (response, send, receive) = responder
+            .respond(&initiation, &SERVER_EPHEMERAL, 0xABCD)
+            .unwrap();
+        let mut response = params
+            .obfuscate(&response.encode(), |junk| junk.fill(0xee))
+            .unwrap();
+        tunnel
+            .receive_datagram(&mut response, 1, &mut Vec::new())
+            .unwrap();
+        let mut peer = TransportSession::new(TransportKeys {
+            send,
+            receive,
+            sender_index: 0xABCD,
+            receiver_index: initiation.sender_index,
+        });
+        while tunnel.poll_transmit(&mut datagram).is_some() {
+            peer.open(&mut datagram).unwrap();
+        }
+        let mut lengths = HashSet::new();
+        for index in 0..16 {
+            tunnel.send_packet(&packet, 2 + index).unwrap();
+            tunnel.poll_transmit(&mut datagram).unwrap();
+            lengths.insert(datagram.len());
+            assert!(
+                datagram.len() <= 500,
+                "padding must fit the peer's observed UDP window"
+            );
+            let plaintext = peer.open(&mut datagram).unwrap();
+            assert_eq!(&plaintext[..ip_packet_len(plaintext).unwrap()], &packet);
+            assert!(plaintext[packet.len()..].iter().all(|byte| *byte == 0));
+        }
+        assert!(
+            lengths.len() > 1,
+            "RandomTrailers must randomize data sizes as well as handshakes"
+        );
+    }
+
+    #[test]
+    fn amnezia_response_mac_is_verified_before_header_normalization() {
+        let params = obfuscated_params();
+        let mut tunnel = tunnel(params);
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut packet = Vec::new();
+        for _ in 0..=params.junk_packet_count {
+            tunnel.poll_transmit(&mut packet).unwrap();
+        }
+        let initiation = Initiation::decode(&params.deobfuscate(&packet).unwrap()).unwrap();
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let (response, _, _) = responder
+            .respond(&initiation, &SERVER_EPHEMERAL, 0xABCD)
+            .unwrap();
+        let mut body = response.encode();
+        body[..4].copy_from_slice(&0x2222_2222_u32.to_le_bytes());
+        let client_public = crate::noise::public_key(&CLIENT_STATIC).unwrap();
+        let mac = upstream_mac1(&client_public, &body[..60]);
+        body[60..76].copy_from_slice(&mac);
+        let mut packet = vec![0xee; 16];
+        packet.extend_from_slice(&body);
+
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut packet, 1, &mut Vec::new())
+                .unwrap(),
+            Received::None,
+            "the upstream response authenticates its original H2 bytes"
+        );
+        assert_eq!(
+            tunnel.send_packet(&ipv4_packet(), 2).unwrap(),
+            Queued::Sealed
+        );
+    }
+
+    #[test]
+    fn amnezia_handshake_prefix_colliding_with_transport_range_still_authenticates() {
+        let mut params = obfuscated_params();
+        params.header_transport = HeaderRange::new(0x8000_0000, u32::MAX).unwrap();
+        let mut tunnel = tunnel(params);
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut packet = Vec::new();
+        for _ in 0..=params.junk_packet_count {
+            tunnel.poll_transmit(&mut packet).unwrap();
+        }
+        let initiation = Initiation::decode(&params.deobfuscate(&packet).unwrap()).unwrap();
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let (response, _, _) = responder
+            .respond(&initiation, &SERVER_EPHEMERAL, 0xABCD)
+            .unwrap();
+        let mut body = response.encode();
+        body[..4].copy_from_slice(&0x2222_2222_u32.to_le_bytes());
+        let mac = upstream_mac1(
+            &crate::noise::public_key(&CLIENT_STATIC).unwrap(),
+            &body[..60],
+        );
+        body[60..76].copy_from_slice(&mac);
+        let mut wire = vec![0xee; 16];
+        wire.extend_from_slice(&body);
+        assert!(
+            params.is_transport(&wire),
+            "the random prefix deliberately aliases H4"
+        );
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut wire, 1, &mut Vec::new())
+                .unwrap(),
+            Received::None
+        );
+        assert_eq!(
+            tunnel.send_packet(&ipv4_packet(), 2).unwrap(),
+            Queued::Sealed
+        );
+    }
+
+    #[test]
+    fn amnezia_transport_colliding_with_response_shape_falls_through_failed_mac() {
+        let (mut tunnel, mut peer) = established(0);
+        tunnel.tick(REKEY_AFTER_TIME_MS + 1).unwrap();
+        let outstanding = tunnel.handshake.as_ref().unwrap().handshake.sender_index;
+        peer.set_send_counter(u64::from(outstanding) << 32);
+        let packet = tcp_segment(0);
+        let mut wire = Vec::new();
+        peer.seal(&packet, &mut wire).unwrap();
+        let header = u32::from_le_bytes(wire[4..8].try_into().unwrap());
+        let params = AmneziaParams {
+            response_junk_size: 4,
+            header_response: HeaderRange::single(header),
+            ..Default::default()
+        };
+        params.validate().unwrap();
+        let (kind, body) = params.handshake_body(&wire).unwrap();
+        assert_eq!(kind, TYPE_RESPONSE);
+        assert_eq!(
+            u32::from_le_bytes(body[8..12].try_into().unwrap()),
+            outstanding
+        );
+        tunnel.amnezia = params;
+        let mut output = Vec::new();
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut wire, REKEY_AFTER_TIME_MS + 2, &mut output)
+                .unwrap(),
+            Received::Packet
+        );
+        assert_eq!(output, packet);
+        assert_eq!(
+            tunnel.handshake.as_ref().unwrap().handshake.sender_index,
+            outstanding
+        );
+    }
+
+    #[test]
+    fn amnezia_failed_header_candidates_preserve_handshake_cookie_and_udp_window() {
+        let (mut tunnel, _peer) = established(0);
+        tunnel.tick(REKEY_AFTER_TIME_MS + 1).unwrap();
+        let outstanding = tunnel.handshake.as_ref().unwrap().handshake.sender_index;
+        let receiver = tunnel.live.as_ref().unwrap().session.local_index;
+        tunnel.amnezia = AmneziaParams {
+            response_junk_size: 4,
+            header_response: HeaderRange::single(receiver),
+            random_trailers: true,
+            ..Default::default()
+        };
+        let mut forged = vec![0_u8; 1280];
+        forged[0] = TYPE_TRANSPORT;
+        forged[4..8].copy_from_slice(&receiver.to_le_bytes());
+        forged[12..16].copy_from_slice(&outstanding.to_le_bytes());
+        assert!(
+            tunnel
+                .receive_datagram(&mut forged, REKEY_AFTER_TIME_MS + 2, &mut Vec::new())
+                .is_err()
+        );
+        assert_eq!(
+            tunnel.handshake.as_ref().unwrap().handshake.sender_index,
+            outstanding
+        );
+        assert!(tunnel.cookie.is_none());
+        assert_eq!(tunnel.udp_window, 500);
+    }
+
+    #[test]
+    fn amnezia_cookie_retry_mac2_covers_the_custom_header_and_updated_mac1() {
+        use blake2::digest::{KeyInit, Mac};
+        let params = obfuscated_params();
+        let mut tunnel = tunnel(params);
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut packet = Vec::new();
+        for _ in 0..=params.junk_packet_count {
+            tunnel.poll_transmit(&mut packet).unwrap();
+        }
+        let initiation = Initiation::decode(&params.deobfuscate(&packet).unwrap()).unwrap();
+        let cookie = [0x5a; 16];
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let reply = responder
+            .issue_cookie(&initiation, cookie, [0x11; 24])
+            .unwrap();
+        let mut challenge = params
+            .obfuscate(&reply.encode(), |junk| junk.fill(0xee))
+            .unwrap();
+        tunnel
+            .receive_datagram(&mut challenge, 1, &mut Vec::new())
+            .unwrap();
+        tunnel.tick(RETRY_DUE_MS + 1).unwrap();
+        for _ in 0..=params.junk_packet_count {
+            tunnel.poll_transmit(&mut packet).unwrap();
+        }
+        let body = &packet[usize::from(params.init_junk_size)..];
+        let mut mac =
+            <blake2::Blake2sMac<blake2::digest::consts::U16> as KeyInit>::new_from_slice(&cookie)
+                .unwrap();
+        Mac::update(&mut mac, &body[..132]);
+        let expected: [u8; 16] = mac.finalize().into_bytes().into();
+        assert_eq!(&body[132..148], &expected);
     }
 
     #[test]
@@ -1843,6 +2413,10 @@ mod tests {
         let mut obfuscated = params
             .obfuscate(&response.encode(), |junk| junk.fill(0xEE))
             .unwrap();
+        let prefix = usize::from(params.response_junk_size);
+        let client_public = crate::noise::public_key(&CLIENT_STATIC).unwrap();
+        let mac = upstream_mac1(&client_public, &obfuscated[prefix..prefix + 60]);
+        obfuscated[prefix + 60..prefix + 76].copy_from_slice(&mac);
 
         let mut out = Vec::new();
         assert_eq!(
@@ -2509,6 +3083,479 @@ mod tests {
             tunnel.spare_buffers(),
             MAX_SPARE_BUFFERS,
             "the free list is a cache, not a queue that grows"
+        );
+    }
+    fn content_padding_tunnel(
+        range: HeaderRange,
+        random_trailers: bool,
+    ) -> (PeerTunnel, TransportSession) {
+        let params = AmneziaParams {
+            content_padding_addition: Some(range),
+            random_trailers,
+            ..Default::default()
+        };
+        let mut tunnel = tunnel(params);
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        let initiation = Initiation::decode(&params.deobfuscate(&wire).unwrap()).unwrap();
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let (response, send, receive) = responder
+            .respond(&initiation, &SERVER_EPHEMERAL, 0xABCD)
+            .unwrap();
+        let mut wire = params
+            .obfuscate(&response.encode(), |bytes| bytes.fill(0x37))
+            .unwrap();
+        tunnel
+            .receive_datagram(&mut wire, 1, &mut Vec::new())
+            .unwrap();
+        let mut peer = TransportSession::new(TransportKeys {
+            send,
+            receive,
+            sender_index: 0xABCD,
+            receiver_index: initiation.sender_index,
+        });
+        while tunnel.poll_transmit(&mut wire).is_some() {
+            peer.open(&mut wire).unwrap();
+        }
+        (tunnel, peer)
+    }
+
+    #[test]
+    fn content_padding_replaces_block_alignment_before_transport_aead() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(13), false);
+        let packet = ipv4_packet();
+        tunnel.send_packet(&packet, 2).unwrap();
+        let mut wire = Vec::new();
+        assert_eq!(tunnel.poll_transmit(&mut wire), Some(packet.len()));
+        assert_eq!(
+            wire.len(),
+            TRANSPORT_HEADER_LEN + TAG_LEN + packet.len() + 13
+        );
+        let plain = peer.open(&mut wire).unwrap();
+        assert_eq!(&plain[..packet.len()], &packet);
+        assert_eq!(&plain[packet.len()..], &[0; 13]);
+    }
+
+    struct ContentPaddingDraw(u32);
+    impl Entropy for ContentPaddingDraw {
+        fn fill(&mut self, bytes: &mut [u8]) -> Result<(), WireguardError> {
+            for (index, byte) in bytes.iter_mut().enumerate() {
+                *byte = self.0.to_le_bytes()[index % 4];
+            }
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn content_padding_zero_draw_has_precedence_over_random_trailers() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::new(0, 1).unwrap(), true);
+        tunnel.entropy = Box::new(ContentPaddingDraw(1));
+        let packet = ipv4_packet();
+        tunnel.send_packet(&packet, 2).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        assert_eq!(wire.len(), TRANSPORT_HEADER_LEN + TAG_LEN + packet.len());
+        assert_eq!(peer.open(&mut wire).unwrap(), &packet);
+    }
+
+    #[test]
+    fn content_padding_keepalive_is_zero_payload_even_with_encrypted_padding() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(13), false);
+        tunnel.send_packet(&[], 2).unwrap();
+        let mut wire = Vec::new();
+        assert_eq!(tunnel.poll_transmit(&mut wire), Some(0));
+        assert_eq!(wire.len(), TRANSPORT_HEADER_LEN + TAG_LEN + 13);
+        assert_eq!(peer.open(&mut wire).unwrap(), &[0; 13]);
+        peer.seal_with_padding(&[], 13, &mut wire).unwrap();
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut wire, 3, &mut Vec::new())
+                .unwrap(),
+            Received::None
+        );
+        assert!(tunnel.data_received_ms.is_none());
+    }
+
+    #[test]
+    fn content_padding_large_values_are_clamped_before_allocating() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(u32::MAX), false);
+        tunnel.send_packet(&ipv4_packet(), 2).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        assert_eq!(wire.len(), INITIAL_UDP_WINDOW);
+        let plain = peer.open(&mut wire).unwrap();
+        assert_eq!(ip_packet_len(plain), Some(ipv4_packet().len()));
+    }
+
+    #[test]
+    fn content_padding_raises_the_window_for_a_larger_unpadded_packet() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(u32::MAX), false);
+        let mut packet = ipv4_packet();
+        packet.resize(600, 0x37);
+        packet[2..4].copy_from_slice(&600_u16.to_be_bytes());
+        tunnel.send_packet(&packet, 2).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        assert_eq!(tunnel.udp_window, 600 + TRANSPORT_HEADER_LEN + TAG_LEN);
+        assert_eq!(wire.len(), tunnel.udp_window);
+        assert_eq!(peer.open(&mut wire).unwrap(), packet);
+    }
+
+    #[test]
+    fn content_padding_inbound_window_matches_upstream_without_the_aead_tag() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(13), false);
+        tunnel.amnezia.transport_junk_size = 23;
+        let mut packet = ipv4_packet();
+        packet.resize(600, 0x37);
+        packet[2..4].copy_from_slice(&600_u16.to_be_bytes());
+        let mut wire = Vec::new();
+        peer.seal_with_padding(&packet, 13, &mut wire).unwrap();
+        let mut prefixed = vec![0_u8; 23];
+        prefixed.extend_from_slice(&wire);
+        let mut delivered = Vec::new();
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut prefixed, 2, &mut delivered)
+                .unwrap(),
+            Received::Packet
+        );
+        assert_eq!(delivered, packet);
+        assert_eq!(tunnel.udp_window, 23 + 16 + 600 + 13);
+    }
+
+    #[test]
+    fn content_padding_cannot_change_plain_wireguard_reserved_headers() {
+        let mut configured = settings(AmneziaParams {
+            content_padding_addition: Some(HeaderRange::single(13)),
+            ..Default::default()
+        });
+        configured.reserved = [0x11, 0x22, 0x33];
+        let mut tunnel = PeerTunnel::new(configured, Box::new(CountingEntropy(0))).unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        assert_eq!(&wire[1..4], &[0x11, 0x22, 0x33]);
+    }
+
+    #[test]
+    fn content_padding_zero_uses_standard_wireguard_block_padding() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(0), false);
+        let packet = ipv4_packet();
+        tunnel.send_packet(&packet, 2).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        assert_eq!(
+            wire.len(),
+            TRANSPORT_HEADER_LEN + TAG_LEN + packet.len().next_multiple_of(16)
+        );
+        let plain = peer.open(&mut wire).unwrap();
+        assert_eq!(&plain[..packet.len()], &packet);
+    }
+
+    #[test]
+    fn unauthenticated_content_padding_cannot_expand_the_udp_window() {
+        let (mut tunnel, mut peer) = content_padding_tunnel(HeaderRange::single(13), false);
+        let mut packet = ipv4_packet();
+        packet.resize(600, 0x37);
+        packet[2..4].copy_from_slice(&600_u16.to_be_bytes());
+        let mut wire = Vec::new();
+        peer.seal_with_padding(&packet, 13, &mut wire).unwrap();
+        *wire.last_mut().unwrap() ^= 1;
+        assert!(
+            tunnel
+                .receive_datagram(&mut wire, 2, &mut Vec::new())
+                .is_err()
+        );
+        assert_eq!(tunnel.udp_window, INITIAL_UDP_WINDOW);
+    }
+    fn protected_key() -> HeaderProtectionKey {
+        HeaderProtectionKey::from_bytes(zeroize::Zeroizing::new([0x55; 32])).unwrap()
+    }
+
+    fn protected_settings() -> PeerSettings {
+        settings(AmneziaParams {
+            init_junk_size: 12,
+            response_junk_size: 12,
+            cookie_junk_size: 12,
+            transport_junk_size: 12,
+            random_trailers: true,
+            header_initiation: HeaderRange::single(0x1111_1111),
+            header_response: HeaderRange::single(0x2222_2222),
+            header_cookie: HeaderRange::single(0x3333_3333),
+            header_transport: HeaderRange::single(0x4444_4444),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn header_protection_encrypts_the_initiation_after_its_mac() {
+        let configured = protected_settings();
+        let peer_public = configured.peer_public_key;
+        let key = protected_key();
+        let mut tunnel = PeerTunnel::new(
+            configured.with_header_protection_key(Some(key.clone())),
+            Box::new(CountingEntropy(0)),
+        )
+        .unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut wire = Vec::new();
+        tunnel.poll_transmit(&mut wire).unwrap();
+        assert_ne!(&wire[12..16], &0x1111_1111_u32.to_le_bytes());
+        let prefix = wire[..12].to_vec();
+        let tail = wire[12 + INITIATION_LEN..].to_vec();
+        key.transform(&prefix, &mut wire[12..12 + INITIATION_LEN])
+            .unwrap();
+        assert_eq!(&wire[12..16], &0x1111_1111_u32.to_le_bytes());
+        let mac: [u8; 16] = wire[12 + INITIATION_MAC1_OFFSET..12 + INITIATION_MAC1_OFFSET + 16]
+            .try_into()
+            .unwrap();
+        assert!(verify_mac1(
+            &peer_public,
+            &wire[12..12 + INITIATION_LEN],
+            INITIATION_MAC1_OFFSET,
+            &mac
+        ));
+        assert_eq!(&wire[..12], &prefix);
+        assert_eq!(&wire[12 + INITIATION_LEN..], &tail);
+    }
+
+    #[test]
+    fn header_protection_refuses_short_nonce_prefixes_before_start() {
+        let mut configured = protected_settings();
+        configured.amnezia.cookie_junk_size = 11;
+        assert!(
+            PeerTunnel::new(
+                configured.with_header_protection_key(Some(protected_key())),
+                Box::new(CountingEntropy(0))
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn header_protection_cookie_retry_preserves_plaintext_mac_ordering() {
+        let configured = protected_settings();
+        let params = configured.amnezia;
+        let key = protected_key();
+        let mut tunnel = PeerTunnel::new(
+            configured.with_header_protection_key(Some(key.clone())),
+            Box::new(CountingEntropy(0)),
+        )
+        .unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let mut packet = Vec::new();
+        tunnel.poll_transmit(&mut packet).unwrap();
+        let prefix = packet[..12].to_vec();
+        key.transform(&prefix, &mut packet[12..12 + INITIATION_LEN])
+            .unwrap();
+        let initiation = Initiation::decode(&params.deobfuscate(&packet).unwrap()).unwrap();
+        let cookie = [0x5a; 16];
+        let responder = Responder::new(&SERVER_STATIC, [0; 32]).unwrap();
+        let reply = responder
+            .issue_cookie(&initiation, cookie, [0x11; 24])
+            .unwrap();
+        let mut challenge = params
+            .obfuscate(&reply.encode(), |bytes| bytes.fill(0xee))
+            .unwrap();
+        tunnel
+            .protect_message(TYPE_COOKIE_REPLY, &mut challenge)
+            .unwrap();
+        let mut wrong = challenge.clone();
+        wrong[0] ^= 1;
+        assert!(
+            tunnel
+                .receive_datagram(&mut wrong, 1, &mut Vec::new())
+                .is_err()
+        );
+        assert!(tunnel.cookie.is_none());
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut challenge, 1, &mut Vec::new())
+                .unwrap(),
+            Received::None
+        );
+        assert_eq!(tunnel.cookie.as_ref().unwrap().value, cookie);
+        tunnel.tick(RETRY_DUE_MS + 1).unwrap();
+        tunnel.poll_transmit(&mut packet).unwrap();
+        let prefix = packet[..12].to_vec();
+        key.transform(&prefix, &mut packet[12..12 + INITIATION_LEN])
+            .unwrap();
+        let body = &packet[12..12 + INITIATION_LEN];
+        let mac1: [u8; 16] = body[INITIATION_MAC1_OFFSET..INITIATION_MAC2_OFFSET]
+            .try_into()
+            .unwrap();
+        assert!(verify_mac1(
+            &tunnel.identity.peer_public,
+            body,
+            INITIATION_MAC1_OFFSET,
+            &mac1
+        ));
+        assert_eq!(
+            &body[INITIATION_MAC2_OFFSET..],
+            &compute_mac2(&cookie, body, INITIATION_MAC2_OFFSET)
+        );
+    }
+
+    #[test]
+    fn header_protection_failed_response_candidate_preserves_transport_fallback() {
+        let (mut tunnel, mut peer) = established(0);
+        let key = protected_key();
+        let mut params = protected_settings().amnezia;
+        params.response_junk_size = 16;
+        tunnel.amnezia = params;
+        tunnel.header_protection_key = Some(key.clone());
+        tunnel.tick(REKEY_AFTER_TIME_MS + 1).unwrap();
+        let mut packet = ipv4_packet();
+        packet.resize(200, 0x37);
+        packet[2..4].copy_from_slice(&200_u16.to_be_bytes());
+        let mut body = Vec::new();
+        peer.seal(&packet, &mut body).unwrap();
+        body[..4].copy_from_slice(&params.header_transport.start().to_le_bytes());
+        let prefix = [0xa0; 12];
+        key.transform(&prefix, &mut body[..16]).unwrap();
+        let mut wire = prefix.to_vec();
+        wire.extend_from_slice(&body);
+        let mut candidate: [u8; 4] = wire[16..20].try_into().unwrap();
+        key.transform(&wire[..16], &mut candidate).unwrap();
+        tunnel.amnezia.header_response = HeaderRange::single(u32::from_le_bytes(candidate));
+        tunnel.amnezia.validate().unwrap();
+        let mut header_mask = [0_u8; TRANSPORT_HEADER_LEN];
+        key.transform(&wire[..12], &mut header_mask).unwrap();
+        let shadow = tunnel
+            .protected_handshake_body(
+                &wire,
+                16,
+                RESPONSE_LEN,
+                tunnel.amnezia.header_response,
+                true,
+                &header_mask,
+            )
+            .unwrap()
+            .unwrap();
+        let shadow_receiver = u32::from_le_bytes(shadow[8..12].try_into().unwrap());
+        // Force the false prefix candidate past receiver-index validation to exercise its MAC failure.
+        tunnel.handshake.as_mut().unwrap().handshake.sender_index = shadow_receiver;
+        let shadow_mac: [u8; 16] = shadow[RESPONSE_MAC1_OFFSET..RESPONSE_MAC1_OFFSET + 16]
+            .try_into()
+            .unwrap();
+        assert!(!verify_mac1(
+            &tunnel.identity.public,
+            &shadow,
+            RESPONSE_MAC1_OFFSET,
+            &shadow_mac
+        ));
+        let original = wire.clone();
+        let mut standard = shadow.clone();
+        standard[..4].copy_from_slice(&[TYPE_RESPONSE, 0, 0, 0]);
+        assert!(tunnel.accept_response(&standard, &shadow).is_err());
+        assert_eq!(wire, original);
+        let mut replay = original.clone();
+        let mut output = Vec::new();
+        assert_eq!(
+            tunnel
+                .receive_datagram(&mut wire, REKEY_AFTER_TIME_MS + 2, &mut output)
+                .unwrap(),
+            Received::Packet
+        );
+        assert_eq!(output, packet);
+        assert_eq!(&wire[..12], &original[..12]);
+        assert_eq!(&wire[12..16], &[TYPE_TRANSPORT, 0, 0, 0]);
+        assert_eq!(
+            tunnel.handshake.as_ref().unwrap().handshake.sender_index,
+            shadow_receiver
+        );
+        assert!(
+            tunnel
+                .receive_datagram(&mut replay, REKEY_AFTER_TIME_MS + 3, &mut Vec::new())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn header_protection_zero_key_preserves_legacy_wire_and_reserved_bytes() {
+        for params in [AmneziaParams::default(), protected_settings().amnezia] {
+            let mut configured = settings(params);
+            configured.reserved = [0x11, 0x22, 0x33];
+            let mut plain =
+                PeerTunnel::new(configured.clone(), Box::new(CountingEntropy(0))).unwrap();
+            let zero = HeaderProtectionKey::from_bytes(zeroize::Zeroizing::new([0; 32]));
+            let mut disabled = PeerTunnel::new(
+                configured.with_header_protection_key(zero),
+                Box::new(CountingEntropy(0)),
+            )
+            .unwrap();
+            let mut message = vec![0_u8; 64];
+            message[0] = TYPE_TRANSPORT;
+            let expected = plain.obfuscate_owned(message.clone()).unwrap();
+            let mut actual = disabled.obfuscate_owned(message).unwrap();
+            disabled
+                .protect_message(TYPE_TRANSPORT, &mut actual)
+                .unwrap();
+            assert_eq!(actual, expected);
+            if params.is_vanilla() {
+                assert_eq!(&actual[1..4], &[0x11, 0x22, 0x33]);
+            }
+        }
+    }
+
+    #[test]
+    fn header_protection_malformed_frames_never_change_cookie_or_output() {
+        let mut tunnel = PeerTunnel::new(
+            protected_settings().with_header_protection_key(Some(protected_key())),
+            Box::new(CountingEntropy(0)),
+        )
+        .unwrap();
+        tunnel.send_packet(&ipv4_packet(), 0).unwrap();
+        let outstanding = tunnel.handshake.as_ref().unwrap().handshake.sender_index;
+        for size in [0, 1, 11, 12, 27, 59, 100, 500] {
+            let mut frame = vec![0_u8; size];
+            let mut output = Vec::new();
+            assert!(tunnel.receive_datagram(&mut frame, 1, &mut output).is_err());
+            assert!(output.is_empty());
+            assert!(tunnel.cookie.is_none());
+            assert_eq!(tunnel.udp_window, INITIAL_UDP_WINDOW);
+            assert_eq!(
+                tunnel.handshake.as_ref().unwrap().handshake.sender_index,
+                outstanding
+            );
+        }
+    }
+    #[test]
+    fn header_protection_failed_aead_does_not_consume_the_valid_counter() {
+        let (mut tunnel, mut peer) = established(0);
+        let key = protected_key();
+        tunnel.amnezia = protected_settings().amnezia;
+        tunnel.header_protection_key = Some(key.clone());
+        let packet = ipv4_packet();
+        let mut body = Vec::new();
+        peer.seal(&packet, &mut body).unwrap();
+        body[..4].copy_from_slice(&tunnel.amnezia.header_transport.start().to_le_bytes());
+        let prefix = [0xa0; 12];
+        key.transform(&prefix, &mut body[..TRANSPORT_HEADER_LEN])
+            .unwrap();
+        let mut valid = prefix.to_vec();
+        valid.extend_from_slice(&body);
+        let mut forged = valid.clone();
+        *forged.last_mut().unwrap() ^= 1;
+        let mut output = Vec::new();
+        assert!(
+            tunnel
+                .receive_datagram(&mut forged, 1, &mut output)
+                .is_err()
+        );
+        assert!(output.is_empty());
+        assert_eq!(tunnel.udp_window, INITIAL_UDP_WINDOW);
+        let mut replay = valid.clone();
+        assert_eq!(
+            tunnel.receive_datagram(&mut valid, 2, &mut output).unwrap(),
+            Received::Packet
+        );
+        assert_eq!(output, packet);
+        assert!(
+            tunnel
+                .receive_datagram(&mut replay, 3, &mut Vec::new())
+                .is_err()
         );
     }
 }

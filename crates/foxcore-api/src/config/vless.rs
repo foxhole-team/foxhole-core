@@ -260,6 +260,7 @@ pub struct VmessConfig {
 pub enum VmessCipher {
     #[default]
     Auto,
+    #[serde(alias = "aes-128-gcm")]
     Aes128Gcm,
     Chacha20Poly1305,
     None,

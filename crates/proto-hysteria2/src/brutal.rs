@@ -1,6 +1,5 @@
 //! Hysteria2 "Brutal" congestion controller for quinn.
-//! `thjty/crates/vpn-core/src/hysteria2_brutal.rs`, kept algorithmically identical so both ends
-//! pace the same way.
+//! Quinn exposes pacing metrics for diagnostics; the UDP adapter enforces the send budget.
 //!
 //! Brutal deliberately ignores loss as a congestion signal: it sends at a fixed target rate
 //! (`target_bps`, bytes/sec) compensated by the recent ack rate, and sizes the window to about
@@ -11,6 +10,7 @@ use std::any::Any;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::negotiated::UploadControl;
 use quinn::congestion::{Controller, ControllerFactory, ControllerMetrics};
 use quinn_proto::RttEstimator;
 
@@ -23,12 +23,22 @@ const INITIAL_WINDOW: u64 = 10_240;
 #[derive(Debug, Clone)]
 pub struct BrutalConfig {
     target_bps: u64,
+    pacing: Option<Arc<UploadControl>>,
 }
 
 impl BrutalConfig {
     /// `target_bps` is the send-rate target in **bytes per second**.
     pub fn new(target_bps: u64) -> Self {
-        Self { target_bps }
+        Self {
+            target_bps,
+            pacing: None,
+        }
+    }
+    pub(crate) fn with_pacing(target_bps: u64, pacing: Arc<UploadControl>) -> Self {
+        Self {
+            target_bps,
+            pacing: Some(pacing),
+        }
     }
 }
 
@@ -88,6 +98,9 @@ impl BrutalController {
         }
         self.update_ack_rate(second);
         self.update_window();
+        if let Some(pacing) = &self.config.pacing {
+            pacing.compensate(self.config.target_bps, self.ack_rate);
+        }
     }
 
     fn update_ack_rate(&mut self, second: u64) {

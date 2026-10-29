@@ -6,10 +6,12 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
+#[cfg(feature = "wireguard")]
+use foxcore_api::DnsRoute;
 use foxcore_api::{
-    ContinuityInterruption, ControlProxyConfig, CoreEvent, DnsRoute, EngineConfig,
-    LoopbackInboundConfig, LoopbackUpstream, MAX_LOOPBACK_INBOUNDS, NamedOutboundConfig,
-    OutboundConfig, OutboundId, PolicyConfig, RouteAction, RuntimeConfig, TrafficPolicyConfig,
+    ContinuityInterruption, ControlProxyConfig, CoreEvent, EngineConfig, LoopbackInboundConfig,
+    LoopbackUpstream, MAX_LOOPBACK_INBOUNDS, NamedOutboundConfig, OutboundConfig, OutboundId,
+    PolicyConfig, RouteAction, RuntimeConfig, TrafficPolicyConfig,
 };
 use foxcore_dialer::{ProtectedDialer, SocketCallbacks};
 use foxcore_outbound::{Outbound, OutboundRegistry};
@@ -22,9 +24,16 @@ use foxcore_api::{
 };
 
 fn tor_profile() -> OutboundConfig {
+    let blocked_directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
     OutboundConfig::Tor(foxcore_api::TorConfig {
-        state_dir: "/nonexistent/state".into(),
-        cache_dir: "/nonexistent/cache".into(),
+        state_dir: blocked_directory
+            .join("state")
+            .to_string_lossy()
+            .into_owned(),
+        cache_dir: blocked_directory
+            .join("cache")
+            .to_string_lossy()
+            .into_owned(),
         upstream: None,
         bootstrap_timeout_s: 1,
         stream_connect_timeout_s: 1,
@@ -214,6 +223,7 @@ async fn the_retry_pass_neither_hammers_nor_loops() {
 fn packet_tunnel_engine_config(endpoint: std::net::SocketAddr) -> EngineConfig {
     EngineConfig {
         schema_version: foxcore_api::SCHEMA_VERSION,
+        bootstrap_dns: None,
         outbound: OutboundConfig::Wireguard(foxcore_api::WireguardConfig {
             server: endpoint.ip().to_string(),
             port: endpoint.port(),
@@ -262,6 +272,7 @@ fn vless_member(id: &str, server_ip: [u8; 4]) -> NamedOutboundConfig {
 fn vless_engine_config() -> EngineConfig {
     EngineConfig {
         schema_version: foxcore_api::SCHEMA_VERSION,
+        bootstrap_dns: None,
         outbound: OutboundConfig::Vless(VlessConfig {
             server: "bootstrap.invalid".into(),
             port: 443,
@@ -303,3 +314,7 @@ fn manual_continuity(timeout_ms: u64) -> TrafficPolicyConfig {
 mod lifecycle;
 mod network;
 mod stops;
+
+mod dns_continuation;
+
+mod dns_attribution;

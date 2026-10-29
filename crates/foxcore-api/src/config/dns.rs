@@ -54,6 +54,25 @@ pub enum DnsUpstream {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pinned_spki_sha256: Option<String>,
     },
+    Doq {
+        host: String,
+        port: u16,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_ip: Option<IpAddr>,
+        #[serde(default)]
+        insecure: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pinned_spki_sha256: Option<String>,
+    },
+    Doh3 {
+        url: SecretString,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        server_ip: Option<IpAddr>,
+        #[serde(default)]
+        insecure: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pinned_spki_sha256: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -116,6 +135,8 @@ pub struct DnsRuleSetConfig {
     /// malformed update is still rejected rather than ignored.
     #[serde(default = "default_true")]
     pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled_categories: Option<Vec<DnsCategory>>,
 }
 
 impl DnsRuleSetConfig {
@@ -143,6 +164,19 @@ impl DnsRuleSetConfig {
             return Err(ConfigError::Invalid(
                 "dns.rule_sets name must be bounded non-whitespace ASCII".into(),
             ));
+        }
+        if let Some(categories) = &self.enabled_categories {
+            if categories.len() > 4 {
+                return Err(ConfigError::Invalid(
+                    "dns.rule_sets enabled_categories must contain at most four categories".into(),
+                ));
+            }
+            let mut seen = HashSet::with_capacity(categories.len());
+            if categories.iter().any(|category| !seen.insert(*category)) {
+                return Err(ConfigError::Invalid(
+                    "dns.rule_sets enabled_categories must not repeat a category".into(),
+                ));
+            }
         }
         self.decoded_public_key()?;
         Ok(())
@@ -487,7 +521,7 @@ impl DnsConfig {
 }
 
 impl DnsUpstream {
-    fn validate(&self) -> Result<(), ConfigError> {
+    pub(super) fn validate(&self) -> Result<(), ConfigError> {
         match self {
             Self::Udp { address } | Self::Tcp { address } => {
                 if address.trim().is_empty()
@@ -504,13 +538,29 @@ impl DnsUpstream {
                 port,
                 pinned_spki_sha256,
                 ..
+            }
+            | Self::Doq {
+                host,
+                port,
+                pinned_spki_sha256,
+                ..
             } => {
                 validate_server(host, *port)?;
+                if matches!(self, Self::Doq { .. }) && *port == 53 {
+                    return Err(ConfigError::Invalid(
+                        "DNS DoQ cannot use UDP port 53".into(),
+                    ));
+                }
                 if let Some(pin) = pinned_spki_sha256 {
                     validate_spki_pin(pin)?;
                 }
             }
             Self::Doh {
+                url,
+                pinned_spki_sha256,
+                ..
+            }
+            | Self::Doh3 {
                 url,
                 pinned_spki_sha256,
                 ..
@@ -527,6 +577,7 @@ impl DnsUpstream {
                     || parsed.username() != ""
                     || parsed.password().is_some()
                     || parsed.fragment().is_some()
+                    || (matches!(self, Self::Doh3 { .. }) && parsed.port() == Some(0))
                 {
                     return Err(ConfigError::Invalid(
                         "DNS DoH URL must be an HTTPS URL without userinfo or fragment".into(),
@@ -577,4 +628,80 @@ pub(super) fn fake_ipv6_capacity(pool: Ipv6Net) -> u128 {
 
 fn default_fake_ttl_s() -> u32 {
     300
+}
+
+#[cfg(test)]
+mod categorized_dns_contract_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn explicit_category_selection_is_valid_native_configuration() {
+        let decoded = serde_json::from_value::<DnsRuleSetConfig>(json!({
+            "name": "foxhole-dns-categories-normal-medium",
+            "public_key": "AQ==",
+            "enabled_categories": ["telemetry"]
+        }));
+        assert!(
+            decoded.is_ok(),
+            "explicit category selection was refused: {decoded:?}"
+        );
+        assert!(decoded.unwrap().validate().is_ok());
+    }
+
+    #[test]
+    fn explicit_empty_category_selection_remains_off_after_serialization() {
+        let decoded = serde_json::from_value::<DnsRuleSetConfig>(json!({
+            "name": "foxhole-dns-categories-normal-medium",
+            "public_key": "AQ==",
+            "enabled_categories": []
+        }));
+        assert!(decoded.is_ok(), "explicit all-off was refused: {decoded:?}");
+        let serialized = serde_json::to_value(decoded.unwrap()).unwrap();
+        assert_eq!(serialized.get("enabled_categories"), Some(&json!([])));
+    }
+
+    #[test]
+    fn legacy_source_without_category_selection_retains_its_configuration() {
+        let decoded: DnsRuleSetConfig = serde_json::from_value(json!({
+            "name": "adguard",
+            "public_key": "AQ=="
+        }))
+        .unwrap();
+        assert!(decoded.validate().is_ok());
+        assert!(
+            serde_json::to_value(decoded)
+                .unwrap()
+                .get("enabled_categories")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn unknown_category_stays_rejected() {
+        assert!(
+            serde_json::from_value::<DnsRuleSetConfig>(json!({
+                "name": "foxhole-dns-categories-normal-medium",
+                "public_key": "AQ==",
+                "enabled_categories": ["unknown"]
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn duplicate_and_overlong_category_selections_are_invalid() {
+        for categories in [
+            json!(["ads", "ads"]),
+            json!(["ads", "telemetry", "trackers", "malicious", "ads"]),
+        ] {
+            let decoded: DnsRuleSetConfig = serde_json::from_value(json!({
+                "name": "foxhole-dns-categories-normal-medium",
+                "public_key": "AQ==",
+                "enabled_categories": categories
+            }))
+            .unwrap();
+            assert!(decoded.validate().is_err());
+        }
+    }
 }

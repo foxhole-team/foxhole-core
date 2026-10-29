@@ -110,6 +110,9 @@ pub(crate) struct PeerEndpoint {
     /// path, where there is no route to a resolver yet, and it makes a rebind
     /// free: no lookup, just bind, protect and connect.
     pinned: Option<IpAddr>,
+    candidates: Vec<SocketAddr>,
+    candidate: usize,
+    resolved_network: Option<u64>,
 }
 
 impl PeerEndpoint {
@@ -120,6 +123,9 @@ impl PeerEndpoint {
             host: endpoint.host.clone(),
             port: endpoint.port,
             pinned: endpoint.ip,
+            candidates: Vec::new(),
+            candidate: 0,
+            resolved_network: None,
         }
     }
 
@@ -133,18 +139,72 @@ impl PeerEndpoint {
     /// tun packet addressed to it is the relay's own output returning — sealing
     /// it would make the core amplify a routing loop (D15) — and after a rebind
     /// with an unpinned host it is not the address the profile named.
-    pub(crate) async fn open(&self) -> io::Result<(UdpSocket, SocketAddr)> {
-        match self.pinned {
-            Some(ip) => {
-                let address = SocketAddr::new(ip, self.port);
-                Ok((self.dialer.connect_udp(address).await?, address))
-            }
-            None => {
-                self.dialer
-                    .connect_udp_server_with_address(&self.host, self.port, None)
-                    .await
+    pub(crate) async fn open(&mut self) -> io::Result<(UdpSocket, SocketAddr)> {
+        if self.candidates.is_empty() || self.resolved_network != Some(self.dialer.network_handle())
+        {
+            self.resolve().await?;
+        }
+        let mut last_error = None;
+        let start = self.candidate;
+        for offset in 0..self.candidates.len() {
+            self.candidate = (start + offset) % self.candidates.len();
+            let address = self.candidates[self.candidate];
+            match self.dialer.connect_udp(address).await {
+                Ok(socket) => {
+                    if self.resolved_network != Some(self.dialer.network_handle()) {
+                        self.candidates.clear();
+                        self.resolved_network = None;
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            "WireGuard network changed while opening its socket",
+                        ));
+                    }
+                    return Ok((socket, address));
+                }
+                Err(error) => last_error = Some(error),
             }
         }
+        Err(last_error.unwrap_or_else(|| {
+            io::Error::new(io::ErrorKind::NotFound, "WireGuard peer has no address")
+        }))
+    }
+
+    pub(crate) async fn refresh(&mut self) -> io::Result<(UdpSocket, SocketAddr)> {
+        self.resolve().await?;
+        self.open().await
+    }
+
+    pub(crate) async fn next_candidate(&mut self) -> io::Result<Option<(UdpSocket, SocketAddr)>> {
+        if self.pinned.is_some() || self.candidates.len() < 2 {
+            return Ok(None);
+        }
+        self.candidate = (self.candidate + 1) % self.candidates.len();
+        self.open().await.map(Some)
+    }
+
+    async fn resolve(&mut self) -> io::Result<()> {
+        use std::collections::HashSet;
+        self.candidates.clear();
+        self.candidate = 0;
+        self.resolved_network = None;
+        let network = self.dialer.network_handle();
+        let addresses = self
+            .dialer
+            .resolve_server_addresses(&self.host, self.port, self.pinned)
+            .await?;
+        if self.dialer.network_handle() != network {
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "WireGuard network changed during DNS resolution",
+            ));
+        }
+        let mut seen = HashSet::new();
+        self.candidates = addresses
+            .into_iter()
+            .filter(|address| seen.insert(*address))
+            .collect();
+        self.resolved_network = Some(network);
+        Ok(())
     }
 }
 

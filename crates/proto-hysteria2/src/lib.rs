@@ -2,9 +2,12 @@
 
 pub mod brutal;
 pub mod codec;
+mod congestion;
 mod connection;
 mod hop;
+mod negotiated;
 mod obfs;
+mod pacing;
 #[cfg(test)]
 mod quic_fingerprint;
 mod session;

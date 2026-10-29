@@ -3,6 +3,7 @@
 mod outline;
 mod simple_obfs;
 
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::str::FromStr;
@@ -15,6 +16,7 @@ use foxcore_dialer::ProtectedDialer;
 use foxcore_transport::{
     BoxDatagramSession, BoxStream, Datagram, ServerFirstStream, datagram_channel, establish_stream,
 };
+use rand::TryRngCore;
 
 use crate::outline::{PrefixedProxyStream, prefixed_salt};
 use crate::simple_obfs::SimpleObfsStream;
@@ -23,6 +25,7 @@ use shadowsocks::context::{Context, SharedContext};
 use shadowsocks::crypto::CipherKind;
 use shadowsocks::relay::socks5::Address;
 use shadowsocks::relay::tcprelay::proxy_stream::ProxyClientStream;
+use shadowsocks::relay::udprelay::options::UdpSocketControlData;
 use shadowsocks::relay::udprelay::proxy_socket::UdpSocketType;
 use shadowsocks::relay::udprelay::{DatagramReceive, DatagramSend, DatagramSocket, ProxySocket};
 use tokio::io::ReadBuf;
@@ -148,6 +151,11 @@ impl ShadowsocksOutbound {
             &self.server,
             ProtectedUdpSocket(socket),
         );
+        let control = if self.config.method.starts_with("2022-") {
+            Some(Ss2022UdpState::new()?)
+        } else {
+            None
+        };
         let (session, mut channels) = datagram_channel(64);
         let default_destination = destination.clone();
         let cancel = channels.cancel.clone();
@@ -158,6 +166,7 @@ impl ShadowsocksOutbound {
                 &mut channels.uplink,
                 channels.downlink,
                 cancel,
+                control,
             )
             .await;
         });
@@ -181,12 +190,102 @@ fn from_address(address: Address) -> Destination {
     }
 }
 
+const SS2022_REPLAY_BITS: u64 = 1024;
+const SS2022_MAX_SERVER_SESSIONS: usize = 64;
+
+#[derive(Default)]
+struct Ss2022ReplayWindow {
+    highest: Option<u64>,
+    seen: [u64; 16],
+}
+
+impl Ss2022ReplayWindow {
+    fn accept(&mut self, packet: u64) -> bool {
+        if let Some(highest) = self.highest {
+            if packet > highest {
+                if packet - highest >= SS2022_REPLAY_BITS {
+                    self.seen.fill(0);
+                } else {
+                    for expired in highest + 1..=packet {
+                        let bit = expired % SS2022_REPLAY_BITS;
+                        self.seen[(bit / 64) as usize] &= !(1_u64 << (bit % 64));
+                    }
+                }
+            } else if highest - packet >= SS2022_REPLAY_BITS {
+                return false;
+            }
+        }
+        let bit = packet % SS2022_REPLAY_BITS;
+        let block = &mut self.seen[(bit / 64) as usize];
+        let mask = 1_u64 << (bit % 64);
+        if *block & mask != 0 {
+            return false;
+        }
+        *block |= mask;
+        self.highest = Some(self.highest.map_or(packet, |old| old.max(packet)));
+        true
+    }
+}
+
+struct Ss2022UdpState {
+    client_session_id: u64,
+    next_packet_id: Option<u64>,
+    replies: HashMap<u64, Ss2022ReplayWindow>,
+}
+
+impl Ss2022UdpState {
+    fn new() -> io::Result<Self> {
+        let client_session_id = rand::rngs::OsRng
+            .try_next_u64()
+            .map_err(|_| io::Error::other("operating system RNG failed"))?;
+        Ok(Self {
+            client_session_id,
+            next_packet_id: Some(0),
+            replies: HashMap::new(),
+        })
+    }
+
+    fn reserve_packet(&mut self) -> io::Result<UdpSocketControlData> {
+        let packet_id = self
+            .next_packet_id
+            .take()
+            .ok_or_else(|| io::Error::other("SS2022 datagram counter is exhausted"))?;
+        // Reservation is never rolled back, including after failed/cancelled I/O:
+        // using a nonce again would be worse than leaving a gap in the sequence.
+        self.next_packet_id = packet_id.checked_add(1);
+        let mut control = UdpSocketControlData::default();
+        control.client_session_id = self.client_session_id;
+        control.packet_id = packet_id;
+        Ok(control)
+    }
+
+    fn accept_reply(&mut self, control: &UdpSocketControlData) -> io::Result<bool> {
+        if control.client_session_id != self.client_session_id {
+            return Ok(false);
+        }
+        if !self.replies.contains_key(&control.server_session_id)
+            && self.replies.len() >= SS2022_MAX_SERVER_SESSIONS
+        {
+            // Evicting an authenticated session would forget its replay window.
+            // Close this association at the bound; a fresh association gets a
+            // different client identity without accepting old captured packets.
+            return Err(io::Error::other("SS2022 reply session bound exceeded"));
+        }
+        Ok(self
+            .replies
+            .entry(control.server_session_id)
+            .or_default()
+            .accept(control.packet_id))
+    }
+}
+
 async fn relay_datagrams(
     proxy: ProxySocket<ProtectedUdpSocket>,
     default_destination: Destination,
     uplink: &mut tokio::sync::mpsc::Receiver<Datagram>,
     downlink: tokio::sync::mpsc::Sender<Datagram>,
     cancel: CancellationToken,
+    mut control: Option<Ss2022UdpState>,
 ) {
     let mut receive_buffer = vec![0_u8; 65_536];
     loop {
@@ -199,16 +298,26 @@ async fn relay_datagrams(
                 } else {
                     &outgoing.destination
                 };
-                if proxy
-                    .send(&to_address(destination), &outgoing.payload)
-                    .await
-                    .is_err()
-                {
+                let sent = if let Some(state) = &mut control {
+                    let Ok(packet) = state.reserve_packet() else { break };
+                    proxy.send_with_ctrl(&to_address(destination), &packet, &outgoing.payload).await
+                } else {
+                    proxy.send(&to_address(destination), &outgoing.payload).await
+                };
+                if sent.is_err() {
                     break;
                 }
             }
-            received = proxy.recv(&mut receive_buffer) => {
-                let Ok((length, address, _wire_length)) = received else { break };
+            received = proxy.recv_with_ctrl(&mut receive_buffer) => {
+                let Ok((length, address, _wire_length, packet)) = received else { break };
+                if let Some(state) = &mut control {
+                    let Some(packet) = packet else { break };
+                    match state.accept_reply(&packet) {
+                        Ok(true) => {}
+                        Ok(false) => continue,
+                        Err(_) => break,
+                    }
+                }
                 let datagram = Datagram::new(
                     from_address(address),
                     Bytes::copy_from_slice(&receive_buffer[..length]),
@@ -295,6 +404,368 @@ mod tests {
     fn known_aead_methods_parse() {
         assert!(CipherKind::from_str("aes-128-gcm").is_ok());
         assert!(CipherKind::from_str("2022-blake3-aes-128-gcm").is_ok());
+    }
+
+    #[tokio::test]
+    async fn ss2022_udp_uses_one_session_and_advancing_packet_counters() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+        use std::time::Duration;
+
+        for (name, key_len) in [
+            ("2022-blake3-aes-128-gcm", 16),
+            ("2022-blake3-aes-256-gcm", 32),
+            ("2022-blake3-chacha20-poly1305", 32),
+        ] {
+            let socket = tokio::net::UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = socket.local_addr().unwrap();
+            let password = STANDARD.encode(vec![7_u8; key_len]);
+            let method = CipherKind::from_str(name).unwrap();
+            let server =
+                ServerConfig::new(ServerAddr::SocketAddr(address), &password, method).unwrap();
+            let peer = ProxySocket::from_socket(
+                UdpSocketType::Server,
+                Context::new_shared(ServerType::Server),
+                &server,
+                ProtectedUdpSocket(socket),
+            );
+            let mut config = profile(address.port());
+            config.method = name.to_owned();
+            config.password = foxcore_api::SecretString::new(password);
+            config.udp = true;
+            let outbound = ShadowsocksOutbound::new(config, ProtectedDialer::host())
+                .await
+                .unwrap();
+            let destination = Destination::new("127.0.0.1", 19003);
+            let session = outbound.connect_datagram(&destination).await.unwrap();
+            let mut controls = Vec::new();
+            for length in [1_usize, 31] {
+                let payload = vec![length as u8; length];
+                session
+                    .send(Datagram::new(destination.clone(), payload.clone()))
+                    .await
+                    .unwrap();
+                let mut buffer = [0_u8; 4096];
+                let (count, _, target, _, control) = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    peer.recv_from_with_ctrl(&mut buffer),
+                )
+                .await
+                .expect("actual encrypted datagram reached the reference decryptor")
+                .unwrap();
+                assert_eq!(&buffer[..count], payload);
+                assert_eq!(from_address(target), destination);
+                let control = control.expect("SS2022 carries actual session/counter fields");
+                controls.push((control.client_session_id, control.packet_id));
+            }
+            assert_eq!(
+                controls[0].0, controls[1].0,
+                "one datagram session identity"
+            );
+            assert_eq!(
+                controls[1].1,
+                controls[0].1.checked_add(1).unwrap(),
+                "the next real SS2022 datagram must not replay the first packet id",
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ss2022_udp_independent_sessions_have_distinct_client_ids() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+        use std::time::Duration;
+
+        for (name, key_len) in [
+            ("2022-blake3-aes-128-gcm", 16),
+            ("2022-blake3-aes-256-gcm", 32),
+            ("2022-blake3-chacha20-poly1305", 32),
+        ] {
+            let socket = tokio::net::UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = socket.local_addr().unwrap();
+            let password = STANDARD.encode(vec![7_u8; key_len]);
+            let method = CipherKind::from_str(name).unwrap();
+            let server =
+                ServerConfig::new(ServerAddr::SocketAddr(address), &password, method).unwrap();
+            let peer = ProxySocket::from_socket(
+                UdpSocketType::Server,
+                Context::new_shared(ServerType::Server),
+                &server,
+                ProtectedUdpSocket(socket),
+            );
+            let mut config = profile(address.port());
+            config.method = name.to_owned();
+            config.password = foxcore_api::SecretString::new(password);
+            config.udp = true;
+            let outbound = ShadowsocksOutbound::new(config, ProtectedDialer::host())
+                .await
+                .unwrap();
+            let destination = Destination::new("127.0.0.1", 19003);
+            let first = outbound.connect_datagram(&destination).await.unwrap();
+            let second = outbound.connect_datagram(&destination).await.unwrap();
+            let mut session_ids = Vec::new();
+            for (session, byte) in [(&first, 11_u8), (&second, 12_u8)] {
+                session
+                    .send(Datagram::new(destination.clone(), vec![byte]))
+                    .await
+                    .unwrap();
+                let mut buffer = [0_u8; 4096];
+                let (count, _, target, _, control) = tokio::time::timeout(
+                    Duration::from_secs(2),
+                    peer.recv_from_with_ctrl(&mut buffer),
+                )
+                .await
+                .expect("independent actual session reached the reference decryptor")
+                .unwrap();
+                assert_eq!(&buffer[..count], &[byte]);
+                assert_eq!(from_address(target), destination);
+                session_ids.push(control.unwrap().client_session_id);
+            }
+            assert_ne!(
+                session_ids[0], session_ids[1],
+                "independent sessions must not reuse the AES session key and packet nonce",
+            );
+        }
+    }
+
+    struct UdpReferencePeer {
+        session: BoxDatagramSession,
+        proxy: ProxySocket<ProtectedUdpSocket>,
+        client: SocketAddr,
+        control: UdpSocketControlData,
+        destination: Destination,
+    }
+
+    async fn udp_reference_peer(method: &str) -> UdpReferencePeer {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+        use std::time::Duration;
+
+        let socket = tokio::net::UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let cipher = CipherKind::from_str(method).unwrap();
+        let password = if method.starts_with("2022-") {
+            STANDARD.encode(vec![7_u8; if method.contains("aes-128") { 16 } else { 32 }])
+        } else {
+            "synthetic-udp-password".to_owned()
+        };
+        let server = ServerConfig::new(ServerAddr::SocketAddr(address), &password, cipher).unwrap();
+        let proxy = ProxySocket::from_socket(
+            UdpSocketType::Server,
+            Context::new_shared(ServerType::Server),
+            &server,
+            ProtectedUdpSocket(socket),
+        );
+        let mut config = profile(address.port());
+        config.method = method.to_owned();
+        config.password = foxcore_api::SecretString::new(password);
+        config.udp = true;
+        let outbound = ShadowsocksOutbound::new(config, ProtectedDialer::host())
+            .await
+            .unwrap();
+        let destination = Destination::new("127.0.0.1", 19003);
+        let session = outbound.connect_datagram(&destination).await.unwrap();
+        session
+            .send(Datagram::new(destination.clone(), vec![13]))
+            .await
+            .unwrap();
+        let mut buffer = [0_u8; 4096];
+        let (count, client, target, _, control) = tokio::time::timeout(
+            Duration::from_secs(2),
+            proxy.recv_from_with_ctrl(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buffer[..count], &[13]);
+        assert_eq!(from_address(target), destination);
+        UdpReferencePeer {
+            session,
+            proxy,
+            client,
+            control: control.unwrap_or_default(),
+            destination,
+        }
+    }
+
+    async fn reference_reply(
+        peer: &UdpReferencePeer,
+        client_id: u64,
+        server_id: u64,
+        packet_id: u64,
+        destination: &Destination,
+        payload: &[u8],
+    ) {
+        let mut control = UdpSocketControlData::default();
+        control.client_session_id = client_id;
+        control.server_session_id = server_id;
+        control.packet_id = packet_id;
+        peer.proxy
+            .send_to_with_ctrl(peer.client, &to_address(destination), &control, payload)
+            .await
+            .unwrap();
+    }
+
+    async fn receive_reply(peer: &UdpReferencePeer) -> Datagram {
+        tokio::time::timeout(std::time::Duration::from_secs(2), peer.session.recv())
+            .await
+            .expect("accepted authenticated reply reached the actual session")
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn ss2022_udp_rejects_wrong_client_and_replay_preserving_reordered_destinations() {
+        for method in [
+            "2022-blake3-aes-128-gcm",
+            "2022-blake3-aes-256-gcm",
+            "2022-blake3-chacha20-poly1305",
+        ] {
+            let peer = udp_reference_peer(method).await;
+            let client_id = peer.control.client_session_id;
+            let other = Destination::new("127.0.0.1", 19004);
+            reference_reply(
+                &peer,
+                client_id.wrapping_add(1),
+                11,
+                50,
+                &peer.destination,
+                b"wrong-client",
+            )
+            .await;
+            reference_reply(&peer, client_id, 9, 2, &peer.destination, b"two").await;
+            let first = receive_reply(&peer).await;
+            assert_eq!(first.payload.as_ref(), b"two");
+            assert_eq!(first.destination, peer.destination);
+            reference_reply(&peer, client_id, 9, 1, &other, b"one").await;
+            let second = receive_reply(&peer).await;
+            assert_eq!(second.payload.as_ref(), b"one");
+            assert_eq!(second.destination, other);
+            reference_reply(&peer, client_id, 9, 2, &peer.destination, b"duplicate").await;
+            reference_reply(&peer, client_id, 9, 0, &peer.destination, b"zero").await;
+            assert_eq!(receive_reply(&peer).await.payload.as_ref(), b"zero");
+            // Packet zero is valid in a different authenticated server session.
+            reference_reply(&peer, client_id, 10, 0, &other, b"second-server-session").await;
+            let next = receive_reply(&peer).await;
+            assert_eq!(next.payload.as_ref(), b"second-server-session");
+            assert_eq!(next.destination, other);
+        }
+    }
+
+    #[tokio::test]
+    async fn ss2022_udp_discards_stale_packets_but_keeps_recent_reordering() {
+        let peer = udp_reference_peer("2022-blake3-aes-128-gcm").await;
+        let id = peer.control.client_session_id;
+        reference_reply(&peer, id, 9, 1500, &peer.destination, b"highest").await;
+        assert_eq!(receive_reply(&peer).await.payload.as_ref(), b"highest");
+        reference_reply(&peer, id, 9, 0, &peer.destination, b"stale").await;
+        reference_reply(&peer, id, 9, 1499, &peer.destination, b"reordered").await;
+        assert_eq!(receive_reply(&peer).await.payload.as_ref(), b"reordered");
+    }
+
+    #[tokio::test]
+    async fn ss2022_udp_reply_session_bound_closes_without_eviction() {
+        let peer = udp_reference_peer("2022-blake3-aes-128-gcm").await;
+        let id = peer.control.client_session_id;
+        for server in 1000..1064 {
+            reference_reply(&peer, id, server, 0, &peer.destination, b"accepted").await;
+            assert_eq!(receive_reply(&peer).await.payload.as_ref(), b"accepted");
+        }
+        reference_reply(&peer, id, 1064, 0, &peer.destination, b"over-limit").await;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(2), peer.session.recv())
+                .await
+                .expect("bounded association terminates instead of forgetting replay state")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn ss2022_udp_counter_exhaustion_never_wraps_on_the_wire() {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::STANDARD;
+        use std::time::Duration;
+
+        let socket = tokio::net::UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        let address = socket.local_addr().unwrap();
+        let password = STANDARD.encode([7_u8; 16]);
+        let method = CipherKind::from_str("2022-blake3-aes-128-gcm").unwrap();
+        let server = ServerConfig::new(ServerAddr::SocketAddr(address), &password, method).unwrap();
+        let client_socket = tokio::net::UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        client_socket.connect(address).await.unwrap();
+        let proxy = ProxySocket::from_socket(
+            UdpSocketType::Client,
+            Context::new_shared(ServerType::Local),
+            &server,
+            ProtectedUdpSocket(client_socket),
+        );
+        let peer = ProxySocket::from_socket(
+            UdpSocketType::Server,
+            Context::new_shared(ServerType::Server),
+            &server,
+            ProtectedUdpSocket(socket),
+        );
+        let (session, mut channels) = datagram_channel(4);
+        let destination = Destination::new("127.0.0.1", 19003);
+        let mut state = Ss2022UdpState::new().unwrap();
+        state.next_packet_id = Some(u64::MAX);
+        let cancel = channels.cancel.clone();
+        let expected = destination.clone();
+        let task = tokio::spawn(async move {
+            relay_datagrams(
+                proxy,
+                expected,
+                &mut channels.uplink,
+                channels.downlink,
+                cancel,
+                Some(state),
+            )
+            .await;
+        });
+        session
+            .send(Datagram::new(destination.clone(), vec![1]))
+            .await
+            .unwrap();
+        let mut buffer = [0_u8; 4096];
+        let (count, _, _, _, control) = tokio::time::timeout(
+            Duration::from_secs(2),
+            peer.recv_from_with_ctrl(&mut buffer),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(&buffer[..count], &[1]);
+        assert_eq!(control.unwrap().packet_id, u64::MAX);
+        session
+            .send(Datagram::new(destination, vec![2]))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_secs(2), session.recv())
+                .await
+                .unwrap()
+                .is_err()
+        );
+        tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            tokio::time::timeout(
+                Duration::from_millis(100),
+                peer.recv_from_with_ctrl(&mut buffer)
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn basic_aead_udp_replies_keep_existing_wire_behavior() {
+        for method in ["chacha20-ietf-poly1305", "aes-128-gcm", "aes-256-gcm"] {
+            let peer = udp_reference_peer(method).await;
+            reference_reply(&peer, 0, 0, 0, &peer.destination, b"basic-aead").await;
+            assert_eq!(receive_reply(&peer).await.payload.as_ref(), b"basic-aead");
+        }
     }
 
     fn profile(port: u16) -> ShadowsocksConfig {

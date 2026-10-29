@@ -26,6 +26,8 @@ tokio-util.workspace = true
 zeroize.workspace = true
 
 [dev-dependencies]
+h2.workspace = true
+http.workspace = true
 blake3.workspace = true
 foxcore-link = { path = "../foxcore-link" }
 proto-reality = { path = "../proto-reality", features = ["testkit"] }

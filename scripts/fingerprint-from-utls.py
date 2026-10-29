@@ -15,21 +15,16 @@ So the chain is:
 This script checks the first arrow. The second is checked by
 `proto-reality`'s `fingerprint_vector.rs`, which runs under `cargo test`.
 
-Two profiles have no first arrow at all. `chrome_151` and `firefox_153` are
-transcribed from a first-party capture because uTLS has no table for either
-build, and a parrot faithful to a stale uTLS table is a client that matches no
-shipping browser -- which is louder than an unknown client, not quieter. Those
-two are listed in CAPTURE_DERIVED and are **not** silently skipped:
-
-* the script re-reads uTLS and refuses to pass if uTLS has meanwhile grown a
-  table for the build, because at that moment the exemption stops being true
-  and the profile should be re-derived from uTLS or the divergence justified;
-* it refuses to pass if the `Hello*_Auto` alias has moved past the version the
-  exemption was written against, for the same reason;
-* it refuses to pass if the committed file claims uTLS provenance while
-  claiming the exemption, so a file cannot be exempt and uTLS-derived at once;
-* and it says out loud, on every run, which profiles were checked against uTLS
-  and which were not.
+Two profiles retain first-party capture provenance: `chrome_151` and
+`firefox_153`. Neither has a matching named uTLS table. The captured151 table
+was recorded before upstream155; its historical provenance remains unchanged.
+The newer HelloChrome_155 reference is deliberately different: one leading
+signature GREASE entry and the trust_anchors extension. This watcher checks
+that exact difference contract without changing151 into155 or claiming155
+support. Firefox153 retains its absent-symbol and Auto-alias review gates.
+Every future alias movement, reference removal, or additional table difference
+requires another deliberate review. Capture profiles cannot claim uTLS-derived
+provenance at the same time.
 
 Run it deliberately -- when a browser moves, or before a release -- never from
 the build. The committed JSON is the source of truth for the build precisely so
@@ -40,6 +35,7 @@ Usage:
 
     scripts/fingerprint-from-utls.py                 # fetch u_parrots.go
     scripts/fingerprint-from-utls.py --source PATH   # use a local copy
+    scripts/fingerprint-from-utls.py --revision SHA  # immutable upstream snapshot
     scripts/fingerprint-from-utls.py --json          # emit the parsed spec
 
 Exit codes: 0 agreement, 1 divergence, 2 could not parse or fetch.
@@ -51,14 +47,15 @@ public uTLS source are involved.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import pathlib
 import re
 import sys
 import urllib.request
 
-UTLS_BASE = "https://raw.githubusercontent.com/refraction-networking/utls/master"
-UTLS_RAW = f"{UTLS_BASE}/u_parrots.go"
+UTLS_REPOSITORY = "https://raw.githubusercontent.com/refraction-networking/utls"
+UTLS_TIP = "https://api.github.com/repos/refraction-networking/utls/commits/master"
 UTLS_CONSTANT_FILES = ("u_common.go", "common.go", "cipher_suites.go")
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -149,6 +146,7 @@ EXTENSIONS = {
     "GREASEEncryptedClientHelloExtension": 0xFE0D,
     "BoringGREASEECH": 0xFE0D,
     "RenegotiationInfoExtension": 0xFF01,
+    "TrustAnchorsExtension": 0xCA34,
 }
 
 PROFILES = {
@@ -165,10 +163,12 @@ CAPTURE_DERIVED = {
     "chrome_151": {
         "browser": "Chromium 151 (captured from Brave 151.1.93.136)",
         "absent_symbols": ("HelloChrome_151",),
-        "alias": ("HelloChrome_Auto", "HelloChrome_133"),
-        "why": "Chromium 151 offers ML-DSA-44/65/87 (0x0904/0905/0906) ahead of "
-               "its other signature algorithms; no uTLS table carries them, so "
-               "HelloChrome_133 no longer reproduces a shipping Chrome.",
+        "alias": ("HelloChrome_Auto", "HelloChrome_155"),
+        "reference": "HelloChrome_155",
+        "why": "Captured Chromium 151 on 2026-08-17. The reviewed uTLS155 "
+               "reference now includes ML-DSA but additionally offers a leading "
+               "signature GREASE entry and trust_anchors 0xca34. Keeping the "
+               "independent 151 capture is intentional; it is not 155 support.",
     },
     "firefox_153": {
         "browser": "Firefox 153.0.4",
@@ -194,22 +194,29 @@ REFUSED = {
 }
 
 
-def fetch(source: str | None) -> str:
+def resolve_revision(revision: str | None) -> str:
+    if revision is None:
+        with urllib.request.urlopen(UTLS_TIP, timeout=60) as response:
+            revision = json.load(response)["sha"]
+    if not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("uTLS revision must be a full immutable commit SHA")
+    return revision
+
+
+def fetch(source: str | None, revision: str | None = None) -> str:
     if source:
         return pathlib.Path(source).read_text(encoding="utf-8")
-    with urllib.request.urlopen(UTLS_RAW, timeout=60) as response:
+    return fetch_companion(None, "u_parrots.go", revision)
+
+
+def fetch_companion(source: str | None, name: str, revision: str | None = None) -> str:
+    """Read a required companion from the same local or immutable snapshot."""
+    if source:
+        return (pathlib.Path(source).parent / name).read_text(encoding="utf-8")
+    if not revision or not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise ValueError("remote uTLS reads require an immutable revision")
+    with urllib.request.urlopen(f"{UTLS_REPOSITORY}/{revision}/{name}", timeout=60) as response:
         return response.read().decode("utf-8")
-
-
-def fetch_companion(source: str | None, name: str) -> str:
-    """One of the files next to `u_parrots.go`, or "" if it cannot be read."""
-    try:
-        if source:
-            return (pathlib.Path(source).parent / name).read_text(encoding="utf-8")
-        with urllib.request.urlopen(f"{UTLS_BASE}/{name}", timeout=60) as response:
-            return response.read().decode("utf-8")
-    except OSError:
-        return ""
 
 
 def check_capture_derived(text: str, common: str, failures: list) -> list[str]:
@@ -258,6 +265,19 @@ def check_capture_derived(text: str, common: str, failures: list) -> list[str]:
                 "Upstream moved its idea of the current browser; check whether "
                 "this profile should follow it."
             )
+        elif "reference" in claim:
+            symbol = claim["reference"]
+            if not re.search(rf"^\tcase {re.escape(symbol)}:$", text, re.M):
+                failures.append(f"{name}: required named reference {symbol} is missing")
+            else:
+                before = len(failures)
+                check_chrome_151_reference(text, committed, failures)
+                if len(failures) == before:
+                    lines.append(
+                        f"  {name:<12} {claim['browser']}\n"
+                        f"               intentional captured 151 difference from {symbol} checked\n"
+                        f"               {claim['why']}"
+                    )
         else:
             lines.append(
                 f"  {name:<12} {claim['browser']}\n"
@@ -267,23 +287,99 @@ def check_capture_derived(text: str, common: str, failures: list) -> list[str]:
     return lines
 
 
-def fetch_constants(source: str | None) -> dict[str, int]:
+
+def check_chrome_151_reference(text: str, committed: dict, failures: list) -> None:
+    """Check the reviewed 155 table against unchanged captured 151 plus two deltas.
+
+    Reference: immutable uTLS ff1b50fbbe9a6dff1dcb1cfc0493bd5b0f073f67,
+    u_parrots.go HelloChrome_155 and u_common.go trust_anchors 0xca34.
+    This compares table fields, not a live 155 browser or its implementation.
+    """
+    digest = "132cda7ad9c67f6a27f45c6cd49781bb5b45e378d75d153b35c68a9d13fe9c0e"
+    captured = committed["fingerprint"]
+    actual_digest = hashlib.sha256(json.dumps(
+        captured, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("ascii")).hexdigest()
+    if committed.get("fingerprint_sha256") != digest or actual_digest != digest:
+        failures.append("chrome_151: independent captured fingerprint digest changed")
+    if UTLS_CONSTANTS.get("utlsExtensionTrustAnchors") != 0xCA34:
+        failures.append("chrome_151: HelloChrome_155 trust_anchors code point changed")
+
+    reference = extract_case(text, "HelloChrome_155")
+    spec = parse_spec(reference)
+    expected_extensions = [
+        "GREASE" if value["type"] == "GREASE" else int(value["type"], 16)
+        for value in captured["extension_order"]
+    ]
+    # Its conditional padding is explicitly non-firing for the hybrid hello.
+    if expected_extensions[-1:] == [0x0015] and captured["padding_rule"]["fires_in_practice"] is False:
+        expected_extensions.pop()
+    expected_extensions.insert(expected_extensions.index(0xFE0D), 0xCA34)
+    compression = next(value for value in captured["extension_order"]
+                       if value.get("name") == "compress_certificate")
+    compression_bytes = bytes.fromhex(compression["body"])
+    if not compression_bytes or compression_bytes[0] != len(compression_bytes) - 1 or len(compression_bytes) % 2 != 1:
+        raise ValueError("captured151 certificate compression vector is malformed")
+    expected = {
+        "cipher_suites": as_points(captured["cipher_suites"]),
+        "extensions": expected_extensions,
+        "permute_extensions": captured["permute_extensions"],
+        "supported_groups": as_points(captured["supported_groups"]),
+        "key_shares": as_points(captured["key_shares"]),
+        "signature_algorithms": ["GREASE", *as_points(captured["signature_algorithms"])],
+        "supported_versions": as_points(captured["supported_versions"]),
+        "alpn": captured["alpn"],
+        "cert_compression": [int.from_bytes(compression_bytes[i:i + 2], "big")
+                             for i in range(1, len(compression_bytes), 2)],
+        "compression_methods": [int(value, 16) for value in captured["compression_methods"]],
+        "supported_points": [0],
+        "psk_modes": ["PskModeDHE"],
+        "alps_protocols": ["h2"],
+        "renegotiation": "Renegotiation:RenegotiateOnceAsClient",
+        "trust_anchor_body": "TrustAnchorIDs:chrome155TrustAnchorIDs()",
+        "spec_fields": ["CipherSuites", "CompressionMethods", "Extensions"],
+        "empty_extension_bodies": [""] * 5,
+        "grease_extension_bodies": ["", ""],
+    }
+
+    def compact(value):
+        return re.sub(r"\s+", "", re.sub(r"//[^\n]*", "", value or ""))
+
+    def literal_bytes(marker):
+        value = compact(block(reference, marker))
+        if not re.fullmatch(r"(?:(?:0x[0-9a-fA-F]+|[0-9]+),)*", value):
+            raise ValueError(f"HelloChrome_155 {marker} byte list is not understood")
+        return [int(item, 16 if item.startswith("0x") else 10)
+                for item in value.split(",") if item]
+
+    spec.update(
+        compression_methods=literal_bytes("CompressionMethods:"),
+        supported_points=literal_bytes("SupportedPoints:"),
+        psk_modes=tokens(block(reference, "PSKKeyExchangeModesExtension{") or ""),
+        alps_protocols=re.findall(r'"([^"]+)"', block(reference, "ApplicationSettingsExtensionNew{") or ""),
+        renegotiation=compact(block(reference, "RenegotiationInfoExtension{")),
+        trust_anchor_body=compact(block(reference, "TrustAnchorsExtension{")),
+        spec_fields=re.findall(r"^\t{3}([A-Za-z_][A-Za-z0-9_]*):", reference, re.M),
+        empty_extension_bodies=[compact(block(reference, name + "{")) for name in
+                               ("SNIExtension", "ExtendedMasterSecretExtension", "SessionTicketExtension",
+                                "StatusRequestExtension", "SCTExtension")],
+        grease_extension_bodies=[compact(value) for value in
+                                re.findall(r"&UtlsGREASEExtension\{([^{}]*)\}", reference)],
+    )
+    for field, wanted in expected.items():
+        if spec[field] != wanted:
+            failures.append(f"chrome_151: intentional HelloChrome_155 reference {field} drift\n"
+                            f"    expected: {wanted!r}\n    upstream: {spec[field]!r}")
+
+
+def fetch_constants(source: str | None, revision: str | None = None) -> dict[str, int]:
     """`NAME uint16 = 0x1234` / `NAME = uint16(0x1234)` / `NAME CurveID = 23`.
 
     Every code point this script resolves comes from here when uTLS declares
     it, so the hand-written tables below act as a cross-check rather than as
     the source of truth.
     """
-    texts = []
-    for name in UTLS_CONSTANT_FILES:
-        try:
-            if source:
-                texts.append((pathlib.Path(source).parent / name).read_text(encoding="utf-8"))
-            else:
-                with urllib.request.urlopen(f"{UTLS_BASE}/{name}", timeout=60) as response:
-                    texts.append(response.read().decode("utf-8"))
-        except OSError:
-            continue
+    texts = [fetch_companion(source, name, revision) for name in UTLS_CONSTANT_FILES]
 
     found: dict[str, int] = {}
     patterns = (
@@ -503,29 +599,36 @@ def fmt(values: list) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", help="local u_parrots.go instead of fetching")
+    parser.add_argument("--revision", help="full uTLS commit SHA instead of resolving master once")
     parser.add_argument("--json", action="store_true", help="print the parsed uTLS specs")
     args = parser.parse_args()
+    if args.source and args.revision:
+        parser.error("--source and --revision are mutually exclusive")
 
     try:
-        text = fetch(args.source)
-    except OSError as error:
-        print(f"could not read uTLS source: {error}", file=sys.stderr)
+        revision = None if args.source else resolve_revision(args.revision)
+        text = fetch(args.source, revision)
+        global UTLS_CONSTANTS
+        UTLS_CONSTANTS = fetch_constants(args.source, revision)
+        specs = {name: parse_spec(extract_case(text, symbol)) for name, symbol in PROFILES.items()}
+        common = fetch_companion(args.source, "u_common.go", revision)
+    except (OSError, ValueError, KeyError, TypeError, SystemExit) as error:
+        print(f"could not read or parse uTLS source: {error}", file=sys.stderr)
         return 2
-
-    global UTLS_CONSTANTS
-    UTLS_CONSTANTS = fetch_constants(args.source)
-
-    specs = {name: parse_spec(extract_case(text, symbol)) for name, symbol in PROFILES.items()}
 
     if args.json:
         print(json.dumps(specs, indent=2, default=str))
         return 0
 
     failures: list[str] = []
-    for name, symbol in PROFILES.items():
-        compare(name, symbol, specs[name], failures)
-
-    exempt = check_capture_derived(text, fetch_companion(args.source, "u_common.go"), failures)
+    try:
+        for name, symbol in PROFILES.items():
+            compare(name, symbol, specs[name], failures)
+        exempt = check_capture_derived(text, common, failures)
+    except (OSError, ValueError, KeyError, TypeError, SystemExit) as error:
+        print(f"could not read or parse fingerprint reference: {error}", file=sys.stderr)
+        return 2
+    print(f"uTLS source: {args.source if args.source else revision}")
 
     committed_files = {path.stem for path in (REPO / "fingerprints").glob("*.json")}
     unaccounted = committed_files - set(PROFILES) - set(CAPTURE_DERIVED)
@@ -550,12 +653,13 @@ def main() -> int:
 
     print(f"fingerprints/ agrees with uTLS for: {', '.join(PROFILES)}")
     if exempt:
-        print("\nnot checked against uTLS -- transcribed from a first-party capture:")
+        print("\ncapture-derived profiles -- not uTLS-derived:")
         for line in exempt:
             print(line)
         print(
             "\nEach exemption above was re-checked against the uTLS source on this\n"
-            "run: the symbol is still absent and the _Auto alias has not moved.\n"
+            "run: absent symbols and expected _Auto aliases still hold; the\n"
+            "Chrome 151 intentional 155 reference differences also still hold.\n"
             "These profiles are held instead by their committed vector, by\n"
             "`fingerprint_vector.rs`, and by the measured browser JA4 pinned in\n"
             "`the_captured_profiles_reproduce_the_browsers_measured_ja4`."

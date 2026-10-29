@@ -42,6 +42,7 @@ fn runtime_start_stop_is_owned_and_idempotent() {
     let tun_fd = OwnedFd::from(tun);
     let config = EngineConfig {
         schema_version: foxcore_api::SCHEMA_VERSION,
+        bootstrap_dns: None,
         outbound: OutboundConfig::Vless(VlessConfig {
             server: "bootstrap.invalid".into(),
             port: 443,
@@ -210,6 +211,7 @@ fn an_outbound_that_cannot_be_built_leaves_the_engine_and_the_other_lanes_runnin
     let (tun, _peer) = UnixStream::pair().unwrap();
     let config = EngineConfig {
         schema_version: foxcore_api::SCHEMA_VERSION,
+        bootstrap_dns: None,
         outbound: OutboundConfig::Vless(VlessConfig {
             server: "bootstrap.invalid".into(),
             port: 443,
@@ -248,19 +250,10 @@ fn an_outbound_that_cannot_be_built_leaves_the_engine_and_the_other_lanes_runnin
         unavailable[0].kind, "tor",
         "a lane that failed to build is still the lane the profile asked for"
     );
-    // Which failure this is depends on whether the Tor lane is compiled in,
-    // and that stopped being a property of this crate alone the day `tor`
-    // became a default feature of `foxcore-android`: a workspace test build
-    // unifies it on, `cargo test -p foxcore-runtime` leaves it off, and the
-    // same source produces `Internal` in one and `Unsupported` in the
-    // other. Both are deterministic — `tor_profile()` points at
-    // `/nonexistent/state`, so a compiled-in Arti fails to build its state
-    // directory every time, and an absent one refuses the profile outright
-    // — so the expectation is selected rather than loosened. Loosening it
-    // to "either" would give up the distinction between a lane this build
-    // cannot carry and a lane that broke.
+    // A file as the parent blocks Arti storage even when Docker runs as root.
+    // Feature unification decides whether the lane is unavailable or unsupported.
     let expected = if cfg!(feature = "tor") {
-        foxcore_api::UnavailableReason::Internal
+        foxcore_api::UnavailableReason::Permissions
     } else {
         foxcore_api::UnavailableReason::Unsupported
     };
@@ -277,22 +270,14 @@ fn an_outbound_that_cannot_be_built_leaves_the_engine_and_the_other_lanes_runnin
     );
     let events = runtime.drain_events_json(16);
     assert!(events.contains("outbound_unavailable"), "{events}");
-    let expected_json = if cfg!(feature = "tor") {
-        r#""reason":"internal""#
-    } else {
-        r#""reason":"unsupported""#
-    };
-    assert!(events.contains(expected_json), "{events}");
+    let expected_reason = serde_json::to_string(&expected).unwrap();
+    assert!(
+        events.contains(&format!("\"reason\":{expected_reason}")),
+        "{events}"
+    );
 
-    // And the reason code is not decoration: it decides whether the lane is
-    // ever tried again. A protocol that is not in the build never becomes
-    // available, so retrying it is a busy wait on a phone — zero attempts.
-    // An `Internal` failure is a different claim: something went wrong that
-    // might not be wrong later, so the lane is retried. Here it will fail
-    // again, because the directory it names cannot exist, and the lane
-    // stays down — which is the behaviour under test either way.
-    let expected_retries = usize::from(cfg!(feature = "tor"));
-    assert_eq!(runtime.retry_unavailable_outbounds(), expected_retries);
+    // Missing protocol support and an invalid storage parent cannot recover through retries.
+    assert_eq!(runtime.retry_unavailable_outbounds(), 0);
     runtime.network_changed_with_handle(7);
     assert_eq!(runtime.unavailable_outbounds().len(), 1);
 
@@ -304,6 +289,7 @@ fn a_switched_off_tor_lane_is_never_bootstrapped() {
     let (tun, _peer) = UnixStream::pair().unwrap();
     let config = EngineConfig {
         schema_version: foxcore_api::SCHEMA_VERSION,
+        bootstrap_dns: None,
         outbound: OutboundConfig::Vless(VlessConfig {
             server: "bootstrap.invalid".into(),
             port: 443,
@@ -498,6 +484,7 @@ fn a_selector_profile_starts_and_reports_config_applied() {
     let (tun, _peer) = UnixStream::pair().unwrap();
     let config = EngineConfig {
         schema_version: foxcore_api::SCHEMA_VERSION,
+        bootstrap_dns: None,
         outbound: OutboundConfig::Selector(foxcore_api::SelectorConfig {
             members: vec![
                 vless_member("node-a", [203, 0, 113, 7]),
@@ -577,4 +564,89 @@ fn a_selector_profile_starts_and_reports_config_applied() {
     );
 
     assert_eq!(runtime.stop(), StopResult::Stopped);
+}
+
+#[test]
+fn retained_tun_worker_replacement_preserves_unexpired_fake_dns_answers() {
+    use std::os::unix::net::UnixDatagram;
+
+    fn packet_for(domain: &str, transaction: u16) -> Vec<u8> {
+        let mut dns = vec![0_u8; 12];
+        dns[..2].copy_from_slice(&transaction.to_be_bytes());
+        dns[2] = 1;
+        dns[5] = 1;
+        for label in domain.split('.') {
+            dns.push(u8::try_from(label.len()).unwrap());
+            dns.extend_from_slice(label.as_bytes());
+        }
+        dns.extend_from_slice(&[0, 0, 1, 0, 1]);
+        let size = u16::try_from(28 + dns.len()).unwrap();
+        let mut packet = vec![0_u8; 28];
+        packet[0] = 0x45;
+        packet[2..4].copy_from_slice(&size.to_be_bytes());
+        packet[8] = 64;
+        packet[9] = 17;
+        packet[12..16].copy_from_slice(&[10, 77, 0, 2]);
+        packet[16..20].copy_from_slice(&[10, 77, 0, 1]);
+        let mut checksum = packet[..20]
+            .chunks_exact(2)
+            .map(|word| u32::from(u16::from_be_bytes([word[0], word[1]])))
+            .sum::<u32>();
+        while checksum > u32::from(u16::MAX) {
+            checksum = (checksum & u32::from(u16::MAX)) + (checksum >> 16);
+        }
+        packet[10..12].copy_from_slice(&(!(checksum as u16)).to_be_bytes());
+        packet[20..22].copy_from_slice(&49_152_u16.to_be_bytes());
+        packet[22..24].copy_from_slice(&53_u16.to_be_bytes());
+        packet[24..26].copy_from_slice(&(size - 20).to_be_bytes());
+        packet.extend_from_slice(&dns);
+        packet
+    }
+
+    fn answer(peer: &UnixDatagram, domain: &str, transaction: u16) -> Ipv4Addr {
+        peer.send(&packet_for(domain, transaction)).unwrap();
+        let mut bytes = [0_u8; 2048];
+        let length = peer.recv(&mut bytes).unwrap();
+        assert!(length >= 44, "DNS reply is a valid IPv4 UDP packet");
+        assert_eq!(&bytes[28..30], &transaction.to_be_bytes());
+        assert_eq!(u16::from_be_bytes([bytes[34], bytes[35]]), 1);
+        let address = &bytes[length - 4..length];
+        Ipv4Addr::new(address[0], address[1], address[2], address[3])
+    }
+
+    let (master, peer) = UnixDatagram::pair().unwrap();
+    peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let config = EngineConfig::parse(
+        r#"{"schema_version":1,"outbound":{"type":"direct"},"tun":{"mtu":1400,"ipv4":"10.77.0.1"},"dns":{"mode":"fake_ip","advertise":"10.77.0.1","fake_ttl_s":300},"runtime":{"worker_threads":4,"local_guard":true}}"#,
+    )
+    .unwrap();
+    let first = CoreRuntime::start(
+        201,
+        config.clone(),
+        OwnedFd::from(master.try_clone().unwrap()),
+        SocketCallbacks::none(),
+    )
+    .unwrap();
+    let issued = answer(&peer, "continuity-original.invalid", 1);
+    assert_eq!(answer(&peer, "continuity-original.invalid", 2), issued);
+    let dns_continuation = first.dns_continuation();
+    assert_eq!(first.stop(), StopResult::Stopped);
+
+    let mut changed = config;
+    changed.runtime.worker_threads = 2;
+    let second = CoreRuntime::start_with_dns_continuation(
+        202,
+        changed,
+        OwnedFd::from(master.try_clone().unwrap()),
+        SocketCallbacks::none(),
+        Some(dns_continuation),
+    )
+    .unwrap();
+    let other = answer(&peer, "new-generation.invalid", 3);
+    let after = answer(&peer, "continuity-original.invalid", 4);
+    assert_eq!(second.stop(), StopResult::Stopped);
+    assert_eq!(
+        after, issued,
+        "The same master TUN still serves applications holding {issued}; another name received {other}, and original name moved to {after} before its300s TTL expired"
+    );
 }

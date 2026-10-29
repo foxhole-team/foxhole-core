@@ -1,0 +1,85 @@
+{
+  "androidReleaseDefinition": {
+    "abis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ],
+    "androidDeliveryProfile": "android4",
+    "commands": [
+      "scripts/android-build.sh",
+      "scripts/rollback-artifact.sh record target/foxcore-release-candidate --libs target/android-jni --capabilities \"$FOXCORE_CURRENT_CAPABILITIES\" --capabilities-sha256 \"$FOXCORE_CURRENT_CAPABILITIES_SHA256\" --capabilities-provenance \"$FOXCORE_CURRENT_CAPABILITIES_PROVENANCE\" --capabilities-provenance-sha256 \"$FOXCORE_CURRENT_CAPABILITIES_PROVENANCE_SHA256\"",
+      "scripts/rollback-artifact.sh verify target/foxcore-release-candidate"
+    ],
+    "environment": {
+      "FOXCORE_ANDROID_ABIS": "arm64-v8a armeabi-v7a x86 x86_64",
+      "FOXCORE_JNI_OUTPUT": "target/android-jni"
+    },
+    "ownerDecision": "Current release requires current verified artifacts for ARM64, ARMv7, x86 and x86_64.",
+    "requiredChecks": [
+      "exact-compiled-inputs-and-producer",
+      "all-four-JNI-artifacts",
+      "ELF-LOAD-RELRO-page-and-export-gates",
+      "ABI-gate-PASS",
+      "Cargo.lock-and-capabilities-match",
+      "all-four-ABI-current-capabilities-origin",
+      "both-SBOMs-match",
+      "immutable-manifest-and-payload-hashes"
+    ],
+    "rustTargets": [
+      "aarch64-linux-android",
+      "armv7-linux-androideabi",
+      "i686-linux-android",
+      "x86_64-linux-android"
+    ],
+    "schema": 1,
+    "scope": "android-release",
+    "requiredEnvironmentInputs": [
+      "FOXCORE_CURRENT_CAPABILITIES",
+      "FOXCORE_CURRENT_CAPABILITIES_SHA256",
+      "FOXCORE_CURRENT_CAPABILITIES_PROVENANCE",
+      "FOXCORE_CURRENT_CAPABILITIES_PROVENANCE_SHA256"
+    ]
+  },
+  "baselineWorkflowSha256": "22ca5ef60352ba41570eeaa8527c5e40af1610590f78fb9229896553d48bd886",
+  "deferredAbis": [],
+  "fullGateAndroidABIs": [
+    "arm64-v8a",
+    "armeabi-v7a",
+    "x86",
+    "x86_64"
+  ],
+  "fuzzSecondsPerTarget": 120,
+  "historicalFourAbiDefinitionSha256": "49357f06f179a9cc642430bc676fa100228160ea99a7ffe77738969a48ee4b3f",
+  "historicalFourAbiScopeIsCurrentEvidence": false,
+  "kind": "core-full-lab-gate-required-scope",
+  "releaseAbis": [
+    "arm64-v8a",
+    "armeabi-v7a",
+    "x86",
+    "x86_64"
+  ],
+  "schema": 1,
+  "scopes": {
+    "abi": "b8666a5f99783d5c25e26f43ab039cc2ea3b068ad2e4ebb2cc1a62695e6d5881",
+    "android-release": "1e87efea7434be321d946dd969b1f56a78dc812f0604169901dbb01390a50f9e",
+    "features": "7cc44903e798b41e2799802e4bcd3eeb203c94592743c1527baabcc84f0825ff",
+    "fuzz-harness": "be5a7d5fc83002ad11f5f6b77c04aa9210151bb97fb3a611fbd048a665201e72",
+    "fuzz:dns_message": "706f47de525ff7ad74529fb326621b7c951463c7dce4ec1823b332f8f554a2bc",
+    "fuzz:flow_key_from_packet": "9fff34dd6a4ab3901e94c628fa769855e7ee2653848dfdef109cd2eb589d9fd3",
+    "fuzz:http_codec": "661c74b1994029203a227ca5b9d74b0250b527a4110f0641c5a65a5b1d251576",
+    "fuzz:netstack_packet": "5b280fc2eab77eb6b4492376b7423d4d0bfbac7a287ab2c1872db4649f859982",
+    "fuzz:reality_records": "d8853b5681ec9dd690bf2cc721c58b827f15997d9a0d498826e094c4dccdacba",
+    "fuzz:shadowtls_server_stream": "a2e579f196e9bba0381aa41b6704cfc2d0d39a650addf964e4da57bc132d33e9",
+    "fuzz:share_link": "15f6ac9f560eef3d38e962915505d7396731bd9806ed3b67d5dea742a414d7b9",
+    "fuzz:socks_codec": "31410f6bffec37dc81429c878e979bf299ad07ffb067c0ccb4037c9274f5f451",
+    "fuzz:wireguard_message": "b03f51cc35c9f26b0e0208bb454e975a6e9df1f40114b1f1681248b233632862",
+    "gate": "797fbef8e11cab5f96a44869388d77d0e0ed6f331acbc7ae790f1be98cb41bfa",
+    "miri": "bde4b4f7fbbbe0ec44210af53f9374109b394f0230a8cdf470964733c1e92a47",
+    "sentinel-native": "9f85205d391fcbf70f396b387ae1ad9de8f185713e0ab8f3777892bc41bc7d22",
+    "supply-chain": "20826743b105ed25f97b107633a97e292bfd4173193c3e8903aa543e64895a2f"
+  },
+  "previousAndroid64DefinitionSha256": "f37af8da93001fd372ce407bfffa96d05ab0c01153d412ef026127d935a41ac7",
+  "previousAndroid64ScopeIsCurrentEvidence": false
+}

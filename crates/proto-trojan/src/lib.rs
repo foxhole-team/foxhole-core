@@ -86,14 +86,7 @@ impl TrojanOutbound {
     }
 }
 
-/// Compose the client stream: the request header in front of the first write,
-/// wrapped so a read flushes it when the destination speaks first.
-///
-/// Trojan has no server greeting of its own — the proxy is transparent once the
-/// header is accepted — so the header travelling with the first payload write is
-/// what keeps the opening record the size of a real request. Against SSH, SMTP,
-/// IMAP or any other protocol whose server sends the banner, that alone
-/// deadlocks: the caller reads and never writes, and the header never leaves.
+/// Flush the request prefix on reads for destinations that send their banner first.
 fn client_stream(stream: BoxStream, prefix: Bytes) -> BoxStream {
     Box::new(ServerFirstStream::new(PrefixedStream::new(stream, prefix)))
 }
@@ -172,37 +165,42 @@ async fn relay_datagrams(
     cancel: CancellationToken,
 ) {
     let (mut reader, mut writer) = tokio::io::split(stream);
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            outgoing = uplink.recv() => {
-                let Some(outgoing) = outgoing else { break };
-                if outgoing.payload.is_empty() || outgoing.payload.len() > u16::MAX as usize {
-                    continue;
-                }
-                let destination = if outgoing.destination.host.is_empty() {
-                    &default_destination
-                } else {
-                    &outgoing.destination
-                };
-                let mut frame = BytesMut::with_capacity(32 + outgoing.payload.len());
-                if encode_address(destination, &mut frame).is_err() {
-                    continue;
-                }
-                frame.extend_from_slice(&(outgoing.payload.len() as u16).to_be_bytes());
-                frame.extend_from_slice(CRLF);
-                frame.extend_from_slice(&outgoing.payload);
-                if writer.write_all(&frame).await.is_err() {
-                    break;
-                }
+    let send = async {
+        let mut frame = BytesMut::with_capacity(2048);
+        while let Some(outgoing) = uplink.recv().await {
+            if outgoing.payload.is_empty() || outgoing.payload.len() > u16::MAX as usize {
+                continue;
             }
-            decoded = read_udp_frame(&mut reader) => {
-                let Ok(datagram) = decoded else { break };
-                if downlink.send(datagram).await.is_err() {
-                    break;
-                }
+            let destination = if outgoing.destination.host.is_empty() {
+                &default_destination
+            } else {
+                &outgoing.destination
+            };
+            frame.clear();
+            if encode_address(destination, &mut frame).is_err() {
+                continue;
+            }
+            frame.extend_from_slice(&(outgoing.payload.len() as u16).to_be_bytes());
+            frame.extend_from_slice(CRLF);
+            frame.extend_from_slice(&outgoing.payload);
+            if writer.write_all(&frame).await.is_err() {
+                break;
             }
         }
+    };
+    // A partial frame must outlive uplink activity; read_exact is not cancellation-safe.
+    let receive = async {
+        while let Ok(datagram) = read_udp_frame(&mut reader).await {
+            if downlink.send(datagram).await.is_err() {
+                break;
+            }
+        }
+    };
+    tokio::pin!(send, receive);
+    tokio::select! {
+        _ = cancel.cancelled() => {}
+        _ = &mut send => {}
+        _ = &mut receive => {}
     }
 }
 
@@ -300,6 +298,98 @@ fn invalid(message: impl Into<String>) -> io::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn udp_reply_framing_survives_an_uplink_between_tcp_fragments() {
+        let (carrier, mut peer) = tokio::io::duplex(1);
+        let (uplink, mut outgoing) = tokio::sync::mpsc::channel(2);
+        let (downlink, mut incoming) = tokio::sync::mpsc::channel(2);
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                relay_datagrams(
+                    Box::new(carrier),
+                    Destination::new("1.2.3.4", 53),
+                    &mut outgoing,
+                    downlink,
+                    cancel,
+                )
+                .await;
+            }
+        });
+
+        // The one-byte carrier forces the reader to consume part of the address.
+        peer.write_all(&[1, 1, 2]).await.unwrap();
+        uplink
+            .send(Datagram::new(
+                Destination::new("1.2.3.4", 53),
+                Bytes::from_static(b"query"),
+            ))
+            .await
+            .unwrap();
+        let mut request = [0_u8; 16];
+        tokio::time::timeout(Duration::from_secs(2), peer.read_exact(&mut request))
+            .await
+            .expect("the uplink must progress while a reply is incomplete")
+            .unwrap();
+        assert_eq!(
+            request,
+            [1, 1, 2, 3, 4, 0, 53, 0, 5, 13, 10, 113, 117, 101, 114, 121]
+        );
+        peer.write_all(&[3, 4, 0, 53, 0, 2, 13, 10, 111, 107])
+            .await
+            .unwrap();
+
+        let reply = tokio::time::timeout(Duration::from_millis(250), incoming.recv())
+            .await
+            .expect("an uplink must not discard bytes of an incomplete Trojan UDP reply")
+            .expect("the relay must remain open");
+        assert_eq!(reply.destination, Destination::new("1.2.3.4", 53));
+        assert_eq!(reply.payload, Bytes::from_static(b"ok"));
+        cancel.cancel();
+        task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelling_udp_releases_a_carrier_with_a_blocked_writer() {
+        let (carrier, mut peer) = tokio::io::duplex(1);
+        let (uplink, mut outgoing) = tokio::sync::mpsc::channel(1);
+        let (downlink, _incoming) = tokio::sync::mpsc::channel(1);
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn({
+            let cancel = cancel.clone();
+            async move {
+                relay_datagrams(
+                    Box::new(carrier),
+                    Destination::new("1.2.3.4", 53),
+                    &mut outgoing,
+                    downlink,
+                    cancel,
+                )
+                .await;
+            }
+        });
+        uplink
+            .send(Datagram::new(
+                Destination::new("1.2.3.4", 53),
+                Bytes::from_static(b"query"),
+            ))
+            .await
+            .unwrap();
+        peer.read_u8().await.unwrap();
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_millis(250), task)
+            .await
+            .expect("a blocked write must not retain the cancelled UDP carrier")
+            .unwrap();
+        let mut remainder = Vec::new();
+        tokio::time::timeout(Duration::from_millis(250), peer.read_to_end(&mut remainder))
+            .await
+            .expect("the cancelled relay must close its carrier")
+            .unwrap();
+    }
 
     #[test]
     fn tcp_header_matches_trojan_spec() {
@@ -319,12 +409,6 @@ mod tests {
         );
     }
 
-    /// A destination that speaks first — SSH, SMTP, IMAP, FTP, MySQL — never
-    /// gives the caller a byte to piggyback the Trojan header on. Before this,
-    /// the composed stream sent the header only from `poll_write`, so a caller
-    /// that read first waited for a banner the server could not send because it
-    /// had not yet been told where to connect. Nothing timed out and nothing
-    /// errored; the flow simply stopped.
     #[tokio::test]
     async fn a_client_that_reads_first_still_sends_the_request_header() {
         let (carrier, mut server) = tokio::io::duplex(64 * 1024);
@@ -364,9 +448,6 @@ mod tests {
         peer.await.unwrap();
     }
 
-    /// The header still rides with the first payload when there is one, so a
-    /// client-first flow keeps the opening record indistinguishable in size
-    /// from an ordinary request.
     #[tokio::test]
     async fn a_client_that_writes_first_sends_header_and_payload_together() {
         let (carrier, mut server) = tokio::io::duplex(64 * 1024);

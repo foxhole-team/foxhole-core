@@ -170,8 +170,8 @@ struct ProtocolMatrixEntry {
     existing_flow_behavior: ExistingFlowBehavior,
 }
 
-/// The five carriers `StreamTransportConfig` can express.
-const STREAM_CARRIERS: &[&str] = &["raw", "websocket", "http_upgrade", "grpc", "http2"];
+/// The stream carriers `StreamTransportConfig` can express.
+const STREAM_CARRIERS: &[&str] = &["raw", "websocket", "http_upgrade", "grpc", "http2", "xhttp"];
 /// Protocols whose config has no `transport` field at all.
 const NO_STREAM_CARRIERS: &[&str] = &[];
 
@@ -363,6 +363,8 @@ struct DnsCapabilities {
     tcp: bool,
     dot: bool,
     doh_http2: bool,
+    doq: bool,
+    doh_http3: bool,
     fake_ip: bool,
     private_namespaces_fail_closed: &'static [&'static str],
 }
@@ -444,7 +446,7 @@ fn protocol_matrix() -> ProtocolMatrix {
                 data_plane::PACKET_TUNNEL,
                 data_plane::GROUP,
             ],
-            // `StreamTransportConfig` has exactly these five variants
+            // `StreamTransportConfig` has exactly these six variants
             // (crates/foxcore-api/src/config/transport.rs).
             stream_carrier: STREAM_CARRIERS,
             existing_flow_outcome: &[
@@ -733,6 +735,7 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "http_upgrade",
                         "grpc",
                         "http2",
+                        "xhttp_stream_one_h2",
                         "udp_over_tcp",
                         "xudp",
                         "packetaddr",
@@ -784,6 +787,7 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "http_upgrade",
                         "grpc",
                         "http2",
+                        "xhttp_stream_one_h2",
                         "aead",
                         "ech",
                         "ech_grease",
@@ -850,6 +854,7 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "http_upgrade",
                         "grpc",
                         "http2",
+                        "xhttp_stream_one_h2",
                         "udp_over_tcp",
                         "ech",
                         "ech_grease",
@@ -984,6 +989,9 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "init_packet_timestamp_tag",
                         "conf_file_import",
                         "h1_h4_ranges",
+                        "random_trailers",
+                        "content_padding_addition",
+                        "header_protection_key",
                     ],
                     unsupported: &["endpoint_roaming", "server_role", "vpn_container_link"],
                 },
@@ -1120,6 +1128,8 @@ pub(crate) fn capabilities_json() -> &'static str {
                 tcp: true,
                 dot: true,
                 doh_http2: true,
+                doq: true,
+                doh_http3: true,
                 fake_ip: true,
                 private_namespaces_fail_closed: &["onion", "i2p"],
             },
@@ -1518,7 +1528,9 @@ mod tests {
     fn the_frozen_abi_v1_document_is_still_readable() {
         let old: serde_json::Value = serde_json::from_str(ABI_V1_FIXTURE).unwrap();
         let new: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
-        assert_eq!(old["core_version"], new["core_version"]);
+        assert_eq!(old["abi_version"], new["abi_version"]);
+        assert!(old["core_version"].is_string());
+        assert_eq!(new["core_version"], CORE_VERSION);
         let mut problems = Vec::new();
         compare_abi("", &old, &new, &mut problems);
         assert!(problems.is_empty(), "ABI v1 regressions: {problems:#?}");
@@ -1572,6 +1584,7 @@ mod tests {
     #[test]
     fn capability_document_is_versioned_and_truthful() {
         let document: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
+        assert_eq!(document["core_version"], CORE_VERSION);
         assert_eq!(document["abi_version"], CORE_ABI_VERSION);
         assert_eq!(document["config_schema_version"], SCHEMA_VERSION);
         assert_eq!(document["capabilities_schema_version"], 1);
@@ -1904,6 +1917,30 @@ mod tests {
     /// Maturity is a separate axis from `compiled`, and the document has to keep
     /// it separate or the app is back to inferring readiness from presence.
     #[test]
+    fn amnezia_declares_supported_sender_padding() {
+        let document: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
+        let amnezia = document["protocols"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|protocol| protocol["id"] == "amneziawg")
+            .unwrap();
+        let transports = amnezia["transports"].as_array().unwrap();
+        let unsupported = amnezia["unsupported"].as_array().unwrap();
+        for feature in [
+            "random_trailers",
+            "content_padding_addition",
+            "header_protection_key",
+        ] {
+            assert!(transports.iter().any(|value| value == feature), "{feature}");
+            assert!(
+                !unsupported.iter().any(|value| value == feature),
+                "{feature}"
+            );
+        }
+    }
+
+    #[test]
     fn every_feature_declares_a_maturity_from_the_published_vocabulary() {
         let document: serde_json::Value = serde_json::from_str(capabilities_json()).unwrap();
         let block = &document["maturity"];
@@ -2020,6 +2057,70 @@ mod tests {
                 "the capabilities document does not match capabilities.schema.json:\n  {}",
                 errors.join("\n  ")
             );
+        }
+    }
+
+    /// This is the config/runtime carrier vocabulary, not an interoperability
+    /// claim for every server implementation of each proxy codec.
+    #[test]
+    fn xhttp_schema_matrix_and_config_parser_agree_on_bounded_carrier() {
+        let schema = schema();
+        assert_eq!(
+            schema["$defs"]["streamCarrier"]["enum"],
+            serde_json::json!(["raw", "websocket", "http_upgrade", "grpc", "http2", "xhttp"])
+        );
+        let document = document();
+        for entry in document["protocol_matrix"]["protocols"].as_array().unwrap() {
+            let id = entry["id"].as_str().unwrap();
+            let offers_xhttp = entry["stream_carriers"]
+                .as_array()
+                .unwrap()
+                .contains(&serde_json::json!("xhttp"));
+            assert_eq!(
+                offers_xhttp,
+                matches!(id, "vless" | "vmess" | "trojan" | "shadowsocks"),
+                "{id} must match its shared stream carrier boundary"
+            );
+        }
+        for id in ["vless", "vmess", "trojan", "shadowsocks"] {
+            let mut outbound = serde_json::json!({
+                "type": id, "server": "synthetic.example", "port": 443,
+                "tls": {"enabled": true, "server_name": "synthetic.example"},
+                "transport": {"type": "xhttp", "path": "/fixture/", "mode": "stream-one"}
+            });
+            if matches!(id, "vless" | "vmess") {
+                outbound["uuid"] = serde_json::json!("d0cf0001-0000-4000-8000-000000000000");
+            } else {
+                outbound["password"] = serde_json::json!("synthetic-test-only");
+            }
+            if id == "shadowsocks" {
+                // A stream plugin is TCP-only; preserve the existing UDP guard.
+                outbound["method"] = serde_json::json!("aes-128-gcm");
+                outbound["udp"] = serde_json::json!(false);
+            }
+            let mut config = serde_json::json!({
+                "schema_version": 1, "outbound": outbound,
+                "tun": {"mtu": 1400, "ipv4": "10.0.0.1"}
+            });
+            foxcore_api::EngineConfig::parse(&config.to_string())
+                .unwrap_or_else(|error| panic!("{id} stream-one must validate: {error}"));
+            for mode in ["stream-up", "packet-up", "auto"] {
+                config["outbound"]["transport"]["mode"] = serde_json::json!(mode);
+                assert!(
+                    foxcore_api::EngineConfig::parse(&config.to_string()).is_err(),
+                    "{id} must refuse unimplemented XHTTP mode {mode}"
+                );
+            }
+        }
+        for unknown in ["splithttp", "stream-up", "packet-up", "future-carrier"] {
+            let mut invalid = document.clone();
+            invalid["protocol_matrix"]["vocabulary"]["stream_carrier"] =
+                serde_json::json!([unknown]);
+            assert!(schema::validate(&invalid, &schema).is_err());
+            let mut invalid = document.clone();
+            invalid["protocol_matrix"]["protocols"][0]["stream_carriers"] =
+                serde_json::json!([unknown]);
+            assert!(schema::validate(&invalid, &schema).is_err());
         }
     }
 

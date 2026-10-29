@@ -882,6 +882,77 @@ async fn doh_request_uses_http2_wire_format_and_zero_dns_id() {
     client_connection.abort();
 }
 
+#[tokio::test]
+async fn dot_query_negotiates_dot_instead_of_the_generic_http_alpn() {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    use sha2::{Digest, Sha256};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use x509_parser::prelude::{FromDer, X509Certificate};
+
+    let generated = rcgen::generate_simple_self_signed(vec!["dns.example".into()]).unwrap();
+    let (remaining, certificate) =
+        X509Certificate::from_der(generated.cert.der().as_ref()).unwrap();
+    assert!(remaining.is_empty());
+    let pin = STANDARD.encode(Sha256::digest(certificate.tbs_certificate.subject_pki.raw));
+    let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![generated.cert.der().clone()],
+        rustls::pki_types::PrivatePkcs8KeyDer::from(generated.signing_key.serialize_der()).into(),
+    )
+    .unwrap();
+    tls.alpn_protocols = vec![b"dot".to_vec()];
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut stream = tokio_rustls::TlsAcceptor::from(Arc::new(tls))
+            .accept(tcp)
+            .await
+            .unwrap();
+        assert_eq!(stream.get_ref().1.alpn_protocol(), Some(b"dot".as_slice()));
+        assert_eq!(stream.get_ref().1.server_name(), Some("dns.example"));
+        let length = stream.read_u16().await.unwrap();
+        let mut query = vec![0; usize::from(length)];
+        stream.read_exact(&mut query).await.unwrap();
+        let response = a_response(&query, [192, 0, 2, 53]);
+        stream
+            .write_u16(u16::try_from(response.len()).unwrap())
+            .await
+            .unwrap();
+        stream.write_all(&response).await.unwrap();
+    });
+    let config = DnsConfig {
+        advertise: Some("10.77.0.1".into()),
+        route: DnsRoute::Direct,
+        upstreams: vec![DnsUpstream::Dot {
+            host: "dns.example".into(),
+            port: address.port(),
+            server_ip: Some(address.ip()),
+            insecure: false,
+            pinned_spki_sha256: Some(pin),
+        }],
+        ..Default::default()
+    };
+    let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+    let proxy = DnsProxy::new(
+        1,
+        config,
+        Arc::new(DnsCache::new(8)),
+        Arc::new(OutboundRegistry::single(direct.clone())),
+        direct,
+    )
+    .unwrap();
+    let response = proxy.exchange_for_test(&dns_query(0x9876)).await.unwrap();
+    assert_eq!(&response[..2], &[0x98, 0x76]);
+    assert_eq!(&response[response.len() - 4..], &[192, 0, 2, 53]);
+    server.await.unwrap();
+}
+
 /// Run one DoH exchange against a server that answers with `content_type` and
 /// whatever `body` describes, and hand back what the parser made of it.
 async fn doh_exchange(
@@ -1205,87 +1276,194 @@ fn a_response(query: &[u8], address: [u8; 4]) -> Vec<u8> {
 #[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
 #[tokio::test]
 async fn a_udp_resolver_on_a_tcp_only_outbound_is_counted_and_reported_once() {
-    let tcp_only = Arc::new(
-        Outbound::from_config(
-            foxcore_api::OutboundConfig::I2p(foxcore_api::I2pConfig {
-                socks_address: "127.0.0.1:4447".parse().unwrap(),
-                username: None,
-                password: None,
-                connect_timeout_ms: 50,
-                handshake_timeout_ms: 50,
-            }),
-            ProtectedDialer::host(),
-        )
-        .await
-        .unwrap(),
-    );
-    let outbounds = Arc::new(OutboundRegistry::single(tcp_only));
-    let metrics = Arc::new(FlowMetrics::default());
-    let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let sink = {
-        let recorded = recorded.clone();
-        EventSink::new(move |event| {
-            recorded
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .push(event)
-        })
-    };
-    let config = DnsConfig {
-        route: DnsRoute::Primary,
-        upstreams: vec![DnsUpstream::Udp {
+    for upstream in [
+        DnsUpstream::Udp {
             address: "192.0.2.53:53".into(),
-        }],
-        timeout_ms: 200,
-        ..DnsConfig::default()
-    };
-    let proxy = DnsProxy::new_with_gates_and_rule_sets(
-        1,
-        config,
-        Arc::new(DnsCache::new(8)),
-        outbounds,
-        Arc::new(Outbound::direct(ProtectedDialer::host())),
-        false,
-        true,
-        metrics.clone(),
-        sink,
-        Vec::new(),
-    )
-    .expect("a UDP resolver behind a TCP-only outbound still builds");
+        },
+        DnsUpstream::Doq {
+            host: "dns.example".into(),
+            port: 853,
+            server_ip: Some("192.0.2.53".parse().unwrap()),
+            insecure: false,
+            pinned_spki_sha256: None,
+        },
+        DnsUpstream::Doh3 {
+            url: foxcore_api::SecretString::new("https://dns.example/dns-query"),
+            server_ip: Some("192.0.2.53".parse().unwrap()),
+            insecure: false,
+            pinned_spki_sha256: None,
+        },
+    ] {
+        let tcp_only = Arc::new(
+            Outbound::from_config(
+                foxcore_api::OutboundConfig::I2p(foxcore_api::I2pConfig {
+                    socks_address: "127.0.0.1:4447".parse().unwrap(),
+                    username: None,
+                    password: None,
+                    connect_timeout_ms: 50,
+                    handshake_timeout_ms: 50,
+                }),
+                ProtectedDialer::host(),
+            )
+            .await
+            .unwrap(),
+        );
+        let outbounds = Arc::new(OutboundRegistry::single(tcp_only));
+        let metrics = Arc::new(FlowMetrics::default());
+        let recorded = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = {
+            let recorded = recorded.clone();
+            EventSink::new(move |event| {
+                recorded
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .push(event)
+            })
+        };
+        let config = DnsConfig {
+            route: DnsRoute::Primary,
+            upstreams: vec![upstream],
+            timeout_ms: 200,
+            ..DnsConfig::default()
+        };
+        let proxy = DnsProxy::new_with_gates_and_rule_sets(
+            1,
+            config,
+            Arc::new(DnsCache::new(8)),
+            outbounds,
+            Arc::new(Outbound::direct(ProtectedDialer::host())),
+            false,
+            true,
+            metrics.clone(),
+            sink,
+            Vec::new(),
+        )
+        .expect("a UDP resolver behind a TCP-only outbound still builds");
 
-    for _ in 0..3 {
-        assert!(
-            proxy
-                .exchange(&dns_query(0x4242), Some("com.example"))
-                .await
-                .is_err(),
-            "a resolver the outbound cannot carry must fail, never fall back"
+        for _ in 0..3 {
+            assert!(
+                proxy
+                    .exchange(&dns_query(0x4242), Some("com.example"))
+                    .await
+                    .is_err(),
+                "a resolver the outbound cannot carry must fail, never fall back"
+            );
+        }
+
+        let snapshot = metrics.snapshot();
+        assert_eq!(
+            snapshot.udp_unsupported, 3,
+            "the counter's job is to say how much failed"
+        );
+        assert_eq!(snapshot.dns_queries, 3);
+        assert_eq!(snapshot.dns_blocked, 3);
+        assert_eq!(snapshot.dns_allowed, 0);
+
+        let events = recorded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        assert_eq!(
+            events,
+            vec![CoreEvent::DnsBlocked {
+                reason: BlockReason::UdpUnsupported,
+                domain: "example.com".into(),
+                package: Some("com.example".into()),
+                category: None,
+            }],
+            "reported once: the condition is static until the config changes"
         );
     }
+}
 
-    let snapshot = metrics.snapshot();
-    assert_eq!(
-        snapshot.udp_unsupported, 3,
-        "the counter's job is to say how much failed"
-    );
-    assert_eq!(snapshot.dns_queries, 3);
-    assert_eq!(snapshot.dns_blocked, 3);
-    assert_eq!(snapshot.dns_allowed, 0);
+#[cfg_attr(miri, ignore = "tokio's I/O driver: Miri implements no kqueue/epoll")]
+#[tokio::test]
+async fn encrypted_quic_dns_opens_the_selected_outbound_and_never_the_ambient_direct_path() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    let events = recorded
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .clone();
-    assert_eq!(
-        events,
-        vec![CoreEvent::DnsBlocked {
-            reason: BlockReason::UdpUnsupported,
-            domain: "example.com".into(),
-            package: Some("com.example".into()),
-            category: None,
-        }],
-        "reported once: the condition is static until the config changes"
-    );
+    for doq in [true, false] {
+        let upstream = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let address = upstream.local_addr().unwrap();
+        let selected_calls = Arc::new(AtomicUsize::new(0));
+        let ambient_calls = Arc::new(AtomicUsize::new(0));
+        let resolver_calls = Arc::new(AtomicUsize::new(0));
+        let selected_count = selected_calls.clone();
+        let resolver_count = resolver_calls.clone();
+        let callbacks = foxcore_dialer::SocketCallbacks::protect_only(move |_| {
+            selected_count.fetch_add(1, Ordering::SeqCst);
+            true
+        })
+        .with_host_resolver(move |_, _| {
+            resolver_count.fetch_add(1, Ordering::SeqCst);
+            Err(io::ErrorKind::NotFound.into())
+        });
+        let selected = Arc::new(Outbound::direct(ProtectedDialer::new(
+            callbacks,
+            Duration::from_millis(500),
+        )));
+        let ambient_count = ambient_calls.clone();
+        let ambient = Arc::new(Outbound::direct(ProtectedDialer::new(
+            foxcore_dialer::SocketCallbacks::protect_only(move |_| {
+                ambient_count.fetch_add(1, Ordering::SeqCst);
+                false
+            }),
+            Duration::from_millis(500),
+        )));
+        let upstream_config = if doq {
+            DnsUpstream::Doq {
+                host: "dns.example".into(),
+                port: address.port(),
+                server_ip: Some(address.ip()),
+                insecure: false,
+                pinned_spki_sha256: None,
+            }
+        } else {
+            DnsUpstream::Doh3 {
+                url: foxcore_api::SecretString::new(format!(
+                    "https://dns.example:{}/dns-query",
+                    address.port()
+                )),
+                server_ip: Some(address.ip()),
+                insecure: false,
+                pinned_spki_sha256: None,
+            }
+        };
+        let metrics = Arc::new(FlowMetrics::default());
+        let proxy = DnsProxy::new_with_gates(
+            1,
+            DnsConfig {
+                route: DnsRoute::Primary,
+                timeout_ms: 500,
+                upstreams: vec![upstream_config],
+                ..Default::default()
+            },
+            Arc::new(DnsCache::new(8)),
+            Arc::new(OutboundRegistry::single(selected)),
+            ambient,
+            false,
+            true,
+            metrics.clone(),
+            EventSink::none(),
+        )
+        .unwrap();
+        let query = dns_query(0x4242);
+        let mut packet = [0; 2048];
+        let (result, received) = tokio::join!(
+            tokio::time::timeout(Duration::from_secs(2), proxy.exchange_for_test(&query)),
+            tokio::time::timeout(Duration::from_secs(1), upstream.recv_from(&mut packet)),
+        );
+        // The owned peer deliberately has no TLS implementation: only routing
+        // and a selected-session QUIC Initial are proven, not a DNS answer.
+        assert!(result.unwrap().is_err());
+        let (length, _) = received.unwrap().unwrap();
+        assert_eq!(length, 1200);
+        assert_ne!(packet[0] & 0x80, 0);
+        assert_ne!(&packet[..length], query.as_slice());
+        assert_eq!(selected_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(ambient_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(resolver_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(metrics.snapshot().udp_unsupported, 0);
+    }
 }
 
 /// D14, as the device ran it: the same blocklist under `fake_ip` and under
@@ -1374,5 +1552,88 @@ async fn the_blocklist_refuses_the_same_names_in_both_resolve_modes() {
         "the resolve mode decides what a resolved name is answered with. It \
              must not decide whether the name is answered at all: this is the \
              third time a blocklist has been found failing open (D1, D14)"
+    );
+}
+
+#[tokio::test]
+async fn lane1_owned_cname_target_is_checked_before_cache_acceptance() {
+    owned_cname_fixture(false).await;
+}
+
+#[tokio::test]
+async fn owned_cname_filter_keeps_explicit_package_bypass() {
+    owned_cname_fixture(true).await;
+}
+
+async fn owned_cname_fixture(bypass: bool) {
+    let upstream = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let address = upstream.local_addr().unwrap();
+    let peer = tokio::spawn(async move {
+        let mut incoming = [0_u8; 512];
+        let (length, from) = upstream.recv_from(&mut incoming).await.unwrap();
+        assert_eq!(
+            &incoming[..length],
+            dns_query_for(417, "allowed.owned.invalid")
+        );
+        let mut reply = vec![0x01, 0xa1, 0x81, 0x80, 0, 1, 0, 2, 0, 0, 0, 0];
+        reply.extend_from_slice(&incoming[12..length]);
+        let mut target = Vec::new();
+        for label in "blocked.owned.invalid".split('.') {
+            target.push(label.len() as u8);
+            target.extend_from_slice(label.as_bytes());
+        }
+        target.push(0);
+        reply.extend_from_slice(&[0xc0, 0x0c, 0, 5, 0, 1, 0, 0, 0, 60]);
+        reply.extend_from_slice(&(target.len() as u16).to_be_bytes());
+        reply.extend_from_slice(&target);
+        reply.extend_from_slice(&target);
+        reply.extend_from_slice(&[0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 192, 0, 2, 42]);
+        upstream.send_to(&reply, from).await.unwrap();
+        1_usize
+    });
+    let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+    let proxy = DnsProxy::new(
+        1,
+        DnsConfig {
+            mode: DnsMode::RealIp,
+            route: DnsRoute::Direct,
+            upstreams: vec![DnsUpstream::Udp {
+                address: address.to_string(),
+            }],
+            blocklist: DnsBlocklistConfig {
+                suffixes: vec!["blocked.owned.invalid".into()],
+                bypass_packages: if bypass {
+                    vec!["owned.fixture".into()]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            },
+            timeout_ms: 1000,
+            ..Default::default()
+        },
+        Arc::new(DnsCache::new(8)),
+        Arc::new(OutboundRegistry::single(direct.clone())),
+        direct,
+    )
+    .unwrap();
+    let response = proxy
+        .exchange_for_identity(
+            &dns_query_for(417, "allowed.owned.invalid"),
+            Some(10001),
+            Some("owned.fixture"),
+            &["owned.fixture".into()],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        peer.await.unwrap(),
+        1,
+        "exactly one owned benign upstream question"
+    );
+    assert_eq!(
+        response[3] & 0x0f,
+        if bypass { 0 } else { 3 },
+        "answered alias follows the selected filtering policy"
     );
 }

@@ -141,6 +141,64 @@ pub(crate) struct AddressAnswer {
     pub(crate) ttl: u32,
 }
 
+/// Addresses answering this exact query, excluding unrelated and additional records.
+pub fn validated_response_addresses(query: &[u8], response: &[u8]) -> Option<Vec<IpAddr>> {
+    response_metadata(query, response)?;
+    Some(
+        parse_addresses(response)?
+            .into_iter()
+            .map(|answer| answer.address)
+            .collect(),
+    )
+}
+
+pub fn response_domain_chain(query: &[u8], response: &[u8]) -> Option<Vec<String>> {
+    use std::collections::{HashMap, HashSet};
+    response_metadata(query, response)?;
+    let flags = u16::from_be_bytes([response[2], response[3]]);
+    if flags & 0x000f != 0 {
+        return Some(Vec::new());
+    }
+    let question = parse_question(query)?.question;
+    if question.class != 1 {
+        return Some(Vec::new());
+    }
+    let mut offset = DNS_HEADER_LEN;
+    read_name(response, &mut offset)?;
+    offset = offset.checked_add(4)?;
+    let count = u16::from_be_bytes([response[6], response[7]]);
+    let mut aliases = HashMap::new();
+    for _ in 0..count {
+        let owner = read_name(response, &mut offset)?;
+        let header = response.get(offset..offset.checked_add(10)?)?;
+        let kind = u16::from_be_bytes([header[0], header[1]]);
+        let class = u16::from_be_bytes([header[2], header[3]]);
+        let length = usize::from(u16::from_be_bytes([header[8], header[9]]));
+        offset += 10;
+        let end = offset.checked_add(length)?;
+        response.get(offset..end)?;
+        if class == 1 && kind == 5 {
+            let mut cursor = offset;
+            let target = read_name(response, &mut cursor)?;
+            if cursor != end || aliases.insert(owner, target).is_some() {
+                return None;
+            }
+        }
+        offset = end;
+    }
+    let mut owner = question.domain;
+    let mut visited = HashSet::new();
+    let mut chain = Vec::new();
+    while let Some(target) = aliases.get(&owner) {
+        if chain.len() >= 32 || !visited.insert(owner) {
+            return None;
+        }
+        owner = target.clone();
+        chain.push(owner.clone());
+    }
+    Some(chain)
+}
+
 pub(crate) fn parse_addresses(packet: &[u8]) -> Option<Vec<AddressAnswer>> {
     use std::collections::{HashMap, HashSet};
     if packet.len() < DNS_HEADER_LEN {
@@ -215,7 +273,7 @@ pub(crate) fn parse_addresses(packet: &[u8]) -> Option<Vec<AddressAnswer>> {
     )
 }
 
-fn read_name(packet: &[u8], offset: &mut usize) -> Option<String> {
+pub(crate) fn read_name(packet: &[u8], offset: &mut usize) -> Option<String> {
     let mut labels = Vec::new();
     let mut position = *offset;
     let mut jumped = false;
@@ -258,4 +316,144 @@ fn read_name(packet: &[u8], offset: &mut usize) -> Option<String> {
         position = end;
     }
     Some(labels.join("."))
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+
+    fn name(domain: &str) -> Vec<u8> {
+        let mut out = Vec::new();
+        for label in domain.split('.') {
+            out.push(label.len() as u8);
+            out.extend_from_slice(label.as_bytes());
+        }
+        out.push(0);
+        out
+    }
+
+    fn query(kind: u16) -> Vec<u8> {
+        let mut out = vec![0, 17, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0];
+        out.extend(name("allowed.owned.invalid"));
+        out.extend(kind.to_be_bytes());
+        out.extend(1_u16.to_be_bytes());
+        out
+    }
+
+    fn response(query: &[u8], answers: &[(&str, &str)], additional: &[(&str, &str)]) -> Vec<u8> {
+        let mut out = query.to_vec();
+        out[2..4].copy_from_slice(&[0x81, 0x80]);
+        out[6..8].copy_from_slice(&(answers.len() as u16).to_be_bytes());
+        out[10..12].copy_from_slice(&(additional.len() as u16).to_be_bytes());
+        for (owner, target) in answers.iter().chain(additional.iter()) {
+            let target = name(target);
+            out.extend(name(owner));
+            out.extend([0, 5, 0, 1, 0, 0, 0, 60]);
+            out.extend((target.len() as u16).to_be_bytes());
+            out.extend(target);
+        }
+        out
+    }
+
+    #[test]
+    fn validated_addresses_follow_answer_aliases_and_refuse_foreign_transactions() {
+        let query = query(1);
+        let mut answer = response(
+            &query,
+            &[("allowed.owned.invalid", "target.owned.invalid")],
+            &[],
+        );
+        answer[6..8].copy_from_slice(&3_u16.to_be_bytes());
+        for (owner, address) in [
+            ("unrelated.owned.invalid", [192, 0, 2, 2]),
+            ("target.owned.invalid", [192, 0, 2, 1]),
+        ] {
+            answer.extend(name(owner));
+            answer.extend([0, 1, 0, 1, 0, 0, 0, 60, 0, 4]);
+            answer.extend(address);
+        }
+        assert_eq!(
+            validated_response_addresses(&query, &answer),
+            Some(vec!["192.0.2.1".parse().unwrap()])
+        );
+        answer[1] ^= 1;
+        assert!(validated_response_addresses(&query, &answer).is_none());
+        answer[1] ^= 1;
+        answer[2] |= 2;
+        assert!(validated_response_addresses(&query, &answer).is_none());
+    }
+
+    #[test]
+    fn only_question_connected_answer_aliases_are_returned_for_a_and_aaaa() {
+        for kind in [1, 28] {
+            let query = query(kind);
+            let answer = response(
+                &query,
+                &[
+                    ("unrelated.owned.invalid", "blocked.owned.invalid"),
+                    ("allowed.owned.invalid", "middle.owned.invalid"),
+                    ("middle.owned.invalid", "target.owned.invalid"),
+                ],
+                &[("target.owned.invalid", "additional.owned.invalid")],
+            );
+            assert_eq!(
+                response_domain_chain(&query, &answer).unwrap(),
+                ["middle.owned.invalid", "target.owned.invalid"]
+            );
+        }
+    }
+
+    #[test]
+    fn loops_duplicates_malformed_and_foreign_transactions_are_refused() {
+        let query = query(1);
+        let answer = response(
+            &query,
+            &[
+                ("allowed.owned.invalid", "middle.owned.invalid"),
+                ("middle.owned.invalid", "allowed.owned.invalid"),
+            ],
+            &[],
+        );
+        assert!(response_domain_chain(&query, &answer).is_none());
+        let duplicate = response(
+            &query,
+            &[
+                ("allowed.owned.invalid", "middle.owned.invalid"),
+                ("allowed.owned.invalid", "other.owned.invalid"),
+            ],
+            &[],
+        );
+        assert!(response_domain_chain(&query, &duplicate).is_none());
+        let mut answer = response(
+            &query,
+            &[("allowed.owned.invalid", "target.owned.invalid")],
+            &[],
+        );
+        answer[1] = 18;
+        assert!(response_domain_chain(&query, &answer).is_none());
+        answer[1] = 17;
+        answer.pop();
+        assert!(response_domain_chain(&query, &answer).is_none());
+    }
+
+    #[test]
+    fn truncated_flag_does_not_hide_valid_answer_aliases() {
+        let query = query(1);
+        let mut answer = response(
+            &query,
+            &[("allowed.owned.invalid", "blocked.owned.invalid")],
+            &[],
+        );
+        answer[2] |= 2;
+        assert_eq!(
+            response_domain_chain(&query, &answer).unwrap(),
+            ["blocked.owned.invalid"]
+        );
+        let truncated = crate::truncated_response(&query).unwrap();
+        assert!(
+            response_domain_chain(&query, &truncated)
+                .unwrap()
+                .is_empty()
+        );
+    }
 }

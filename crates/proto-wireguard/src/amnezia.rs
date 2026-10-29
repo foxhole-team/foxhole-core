@@ -61,6 +61,11 @@ impl HeaderRange {
         self.start <= other.end && other.start <= self.end
     }
 
+    pub(crate) const fn sample_padding(&self, draw: u32) -> u32 {
+        let span = self.end as u64 - self.start as u64 + 1;
+        self.start + ((draw as u64 * span) >> 32) as u32
+    }
+
     pub const fn pick(&self, draw: u32) -> u32 {
         if self.start == self.end {
             return self.start;
@@ -90,6 +95,8 @@ pub struct AmneziaParams {
     /// header, exactly like `S1`/`S2`.
     pub cookie_junk_size: u16,
     pub transport_junk_size: u16,
+    pub random_trailers: bool,
+    pub content_padding_addition: Option<HeaderRange>,
     pub header_initiation: HeaderRange,
     pub header_response: HeaderRange,
     pub header_cookie: HeaderRange,
@@ -106,6 +113,8 @@ impl Default for AmneziaParams {
             response_junk_size: 0,
             cookie_junk_size: 0,
             transport_junk_size: 0,
+            random_trailers: false,
+            content_padding_addition: None,
             header_initiation: HeaderRange::single(TYPE_INITIATION as u32),
             header_response: HeaderRange::single(TYPE_RESPONSE as u32),
             header_cookie: HeaderRange::single(TYPE_COOKIE_REPLY as u32),
@@ -118,11 +127,15 @@ impl Default for AmneziaParams {
 /// allocation by an oversized parameter.
 pub const MAX_JUNK_SIZE: u16 = 1280;
 const MAX_JUNK_PACKET_COUNT: u16 = 128;
+pub(crate) const INITIAL_UDP_WINDOW: usize = 500;
 
 impl AmneziaParams {
-    /// True when these parameters are indistinguishable from plain WireGuard.
+    /// Sender-local padding does not alter the shared header or prefix shape.
     pub fn is_vanilla(&self) -> bool {
-        *self == Self::default()
+        Self {
+            content_padding_addition: None,
+            ..*self
+        } == Self::default()
     }
 
     /// Reject parameters that cannot describe a working session. Validation
@@ -166,8 +179,7 @@ impl AmneziaParams {
         Ok(())
     }
 
-    /// Junk bytes AmneziaWG prepends to a given handshake message type. Only the
-    /// initiation and response are padded; cookie replies are not.
+    /// Prefix size for each configured message type.
     fn junk_for(&self, kind: u8) -> usize {
         match kind {
             TYPE_INITIATION => self.init_junk_size as usize,
@@ -230,6 +242,16 @@ impl AmneziaParams {
         &self,
         message: &[u8],
         out: &mut Vec<u8>,
+        random: impl FnMut(&mut [u8]),
+    ) -> Result<(), WireguardError> {
+        self.obfuscate_into_with_window(message, out, INITIAL_UDP_WINDOW, random)
+    }
+
+    pub(crate) fn obfuscate_into_with_window(
+        &self,
+        message: &[u8],
+        out: &mut Vec<u8>,
+        udp_window: usize,
         mut random: impl FnMut(&mut [u8]),
     ) -> Result<(), WireguardError> {
         let kind = self.classify(message)?;
@@ -252,6 +274,17 @@ impl AmneziaParams {
         };
         out.extend_from_slice(&header.to_le_bytes());
         out.extend_from_slice(&message[4..]);
+        if self.random_trailers && kind != TYPE_TRANSPORT {
+            let available = udp_window.saturating_sub(out.len());
+            if available > 0 {
+                let mut draw = [0_u8; 4];
+                random(&mut draw);
+                let trailer_len = u32::from_le_bytes(draw) as usize % available;
+                let body_len = out.len();
+                out.resize(body_len + trailer_len, 0);
+                random(&mut out[body_len..]);
+            }
+        }
         Ok(())
     }
 
@@ -262,6 +295,14 @@ impl AmneziaParams {
     /// candidate type is matched by total length and confirmed by its custom
     /// header, which also disambiguates any length collision.
     pub fn deobfuscate(&self, datagram: &[u8]) -> Result<Vec<u8>, WireguardError> {
+        let (kind, body) = self.handshake_body(datagram)?;
+        let mut out = body.to_vec();
+        out[..4].copy_from_slice(&[kind, 0, 0, 0]);
+        Ok(out)
+    }
+
+    /// Retain the wire header until its MAC has been verified.
+    pub fn handshake_body<'a>(&self, datagram: &'a [u8]) -> Result<(u8, &'a [u8]), WireguardError> {
         for (kind, body_len, junk_size, header) in [
             (
                 TYPE_INITIATION,
@@ -282,20 +323,18 @@ impl AmneziaParams {
                 self.header_cookie,
             ),
         ] {
-            if datagram.len() != junk_size + body_len {
+            let expected = junk_size + body_len;
+            if datagram.len() < expected || (!self.random_trailers && datagram.len() != expected) {
                 continue;
             }
-            let body = &datagram[junk_size..];
+            let body = &datagram[junk_size..expected];
             let Some(header_bytes) = body.first_chunk::<4>() else {
                 continue;
             };
             if !self.header_matches(*header_bytes, header) {
                 continue;
             }
-            let mut out = vec![0_u8; body_len];
-            out[0] = kind;
-            out[4..].copy_from_slice(&body[4..]);
-            return Ok(out);
+            return Ok((kind, body));
         }
         Err(WireguardError::UnexpectedMessage)
     }
@@ -438,6 +477,8 @@ mod tests {
             response_junk_size: 15,
             cookie_junk_size: 0,
             transport_junk_size: 0,
+            random_trailers: false,
+            content_padding_addition: None,
             header_initiation: HeaderRange::single(0x1000_0001),
             header_response: HeaderRange::single(0x2000_0002),
             header_cookie: HeaderRange::single(0x3000_0003),
@@ -581,6 +622,38 @@ mod tests {
     }
 
     #[test]
+    fn configured_handshake_trailers_are_trimmed_without_changing_the_wire_header() {
+        let mut params = tuned();
+        let mut body = vec![0_u8; RESPONSE_LEN];
+        body[..4].copy_from_slice(&[TYPE_RESPONSE, 0, 0, 0]);
+        body[4..].fill(0x5a);
+        let original = params.obfuscate(&body, |junk| junk.fill(0xee)).unwrap();
+        let mut with_trailer = original.clone();
+        with_trailer.extend_from_slice(b"upstream random trailer");
+        assert!(params.deobfuscate(&with_trailer).is_err());
+        params.random_trailers = true;
+        let (kind, recovered) = params.handshake_body(&with_trailer).unwrap();
+        assert_eq!(kind, TYPE_RESPONSE);
+        assert_eq!(
+            recovered,
+            &original[usize::from(params.response_junk_size)..]
+        );
+        assert_eq!(params.deobfuscate(&with_trailer).unwrap(), body);
+    }
+
+    #[test]
+    fn configured_outgoing_handshake_trailers_fit_the_initial_udp_window() {
+        let mut params = tuned();
+        params.random_trailers = true;
+        let mut body = vec![0_u8; INITIATION_LEN];
+        body[0] = TYPE_INITIATION;
+        let wire = params.obfuscate(&body, |bytes| bytes.fill(5)).unwrap();
+        assert!(wire.len() > usize::from(params.init_junk_size) + INITIATION_LEN);
+        assert!(wire.len() < 500);
+        assert_eq!(params.deobfuscate(&wire).unwrap(), body);
+    }
+
+    #[test]
     fn a_ranged_header_is_drawn_inside_the_interval_and_moves_between_datagrams() {
         let params = ranged();
         assert!(params.validate().is_ok(), "a range profile is a valid one");
@@ -711,5 +784,16 @@ mod tests {
             params.deobfuscate(&datagram),
             Err(WireguardError::UnexpectedMessage)
         ));
+    }
+    #[test]
+    fn padding_sampling_covers_the_full_uint32_span_without_wrapping() {
+        let full = HeaderRange::new(0, u32::MAX).unwrap();
+        assert_eq!(full.sample_padding(0), 0);
+        assert_eq!(full.sample_padding(0x8000_0000), 0x8000_0000);
+        assert_eq!(full.sample_padding(u32::MAX), u32::MAX);
+        let pair = HeaderRange::new(7, 8).unwrap();
+        assert_eq!(pair.sample_padding(0), 7);
+        assert_eq!(pair.sample_padding(u32::MAX), 8);
+        assert!(HeaderRange::new(8, 7).is_none());
     }
 }

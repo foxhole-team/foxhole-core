@@ -1,0 +1,71 @@
+{
+  "artiVersion": "0.47.0",
+  "rsaVersion": "0.9.10",
+  "scope": "Pinned source and resolved features; not compiler-verified call graph or adversarial runtime proof",
+  "directDependents": [
+    "ssh-key-fork-arti 0.6.7",
+    "tor-key-forge 0.47.0",
+    "tor-llcrypto 0.47.0"
+  ],
+  "reviewedDecisions": [
+    {
+      "source": "tor-netdoc/src/doc/authcert.rs:533,696,721",
+      "decision": "Public compiled signing helpers; constructors/signing have no client/onion callers in scanned graph. Their constructor callers are same AuthCert implementation, tests and documentation."
+    },
+    {
+      "source": "tor-netdoc/src/doc/routerdesc.rs:1356,1683,1715",
+      "decision": "New RSA signing references are within cfg(test) module."
+    },
+    {
+      "source": "tor-cert/src/rsa/encode.rs:26,65",
+      "decision": "Compiled crosscertificate helper; observed calls are test or disabled tor-proto relay."
+    },
+    {
+      "source": "tor-proto/src/lib.rs:71,72;src/relay/channel.rs:626",
+      "decision": "Relay module disabled in resolved widest graph; no relay RSA key generation."
+    },
+    {
+      "source": "tor-key-forge/src/macros.rs:412,469,541,571",
+      "decision": "Exported RSA macro API; observed instantiations are docs/test. HS keys remain Ed25519/X25519."
+    }
+  ],
+  "watchAdded": "rsa-signing-call aliases in addition to private key API names",
+  "inputs": [
+    {
+      "path": "tor-cert-0.47.0/src/rsa/encode.rs",
+      "sha256": "7ee32ed083bb06a13d8f4e22dc2a1f7164ff5a3f2cba6edc74f1c00d1c6af58f"
+    },
+    {
+      "path": "tor-key-forge-0.47.0/src/macros.rs",
+      "sha256": "368d1deac0b3d701fa907ee6a643e71e529afb3fa38a10bcfc497caaaeeb5031"
+    },
+    {
+      "path": "tor-key-forge-0.47.0/src/ssh.rs",
+      "sha256": "da48612caf20680aa87123dda0aa3782490afd04f67fe5b66b9040f3db1e3f07"
+    },
+    {
+      "path": "tor-key-forge-0.47.0/src/traits.rs",
+      "sha256": "ff8e5f06737a13d6a0f9ba59e3c78f0ca675962033d4daefab045719ee3ce15f"
+    },
+    {
+      "path": "tor-llcrypto-0.47.0/src/pk/rsa.rs",
+      "sha256": "4267539faeb5e866dc323978119b75c8ac51feed5fd15288e9a2cb883b3cc874"
+    },
+    {
+      "path": "tor-llcrypto-0.47.0/tests/testvec.rs",
+      "sha256": "2b4729be8284d9c58839651675877c338661658d3f7ddac61b07da12863a6d08"
+    },
+    {
+      "path": "tor-netdoc-0.47.0/src/doc/authcert.rs",
+      "sha256": "e2ddd9eb076d283e90a0864cae520e1935a2d595e9132a3540254a9b22d3e95c"
+    },
+    {
+      "path": "tor-netdoc-0.47.0/src/doc/routerdesc.rs",
+      "sha256": "ae19c86236a498fd7ecabe8e0db944202903820a80f8681077635df0d85ab4fa"
+    },
+    {
+      "path": "tor-netdoc-0.47.0/src/types/misc.rs",
+      "sha256": "88e6f16630adb7828c9d73a3d30cf87e489c71b5fe24f3505b78de4548bf927a"
+    }
+  ]
+}

@@ -52,10 +52,9 @@ id = "RUSTSEC-2023-0071"
 #
 #   * no RSA decryption exists anywhere in the graph; TAP, the only handshake
 #     that would need it, is not implemented in Arti;
-#   * RSA signing is compiled (tor_llcrypto::pk::rsa::KeyPair::sign is behind no
-#     feature at all) but has no caller: all five call sites are relay or
-#     directory-authority code, under #[cfg(test)] or in crates that are not in
-#     Cargo.lock (tor-relay-crypto, tor-cert-x509);
+#   * RSA signing and certificate-construction APIs are compiled, but the
+#     reviewed client/onion-service graph does not call them. AuthCert
+#     constructors are used by tests/documentation; relay callers are disabled.
 #   * what the client does with RSA is verify other people's signatures with a
 #     public key, which has no secret to leak.
 #
@@ -256,7 +255,7 @@ reason = "derive macro for error types; no runtime code, no data path"
 # below — they are needed again immediately. Deleting them would mean
 # rediscovering that argument from scratch.
 [[bans.skip-tree]]
-crate = "arti-client@0.44.0"
+crate = "arti-client@0.47.0"
 reason = "generation splits inside Arti's dependency tree; not ours to close, and pinned so an Arti bump re-opens the question"
 
 [sources]
@@ -268,15 +267,12 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 
 [graph]
-# The two ABIs that ship, plus the two hosts the workspace is developed and
-# tested on. The Android x86 targets were here when the build script still had
-# x86_64 in its default ABI list; it does not ship, so checking its
-# cfg-dependent graph is checking a build nobody installs. An emulator build is
-# still possible by name (scripts/android-build.sh) — it is just not what this
-# policy is about.
+# Four shipping Android ABIs and the existing host verification targets.
 targets = [
     "aarch64-linux-android",
     "armv7-linux-androideabi",
+    "i686-linux-android",
+    "x86_64-linux-android",
     "x86_64-unknown-linux-gnu",
     "aarch64-apple-darwin",
 ]

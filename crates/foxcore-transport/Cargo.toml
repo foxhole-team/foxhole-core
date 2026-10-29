@@ -16,9 +16,13 @@ async-trait.workspace = true
 base64.workspace = true
 bytes.workspace = true
 foxcore-api = { path = "../foxcore-api" }
+foxcore-dns = { path = "../foxcore-dns" }
 futures.workspace = true
 getrandom.workspace = true
 h2.workspace = true
+h3.workspace = true
+h3-quinn.workspace = true
+quinn.workspace = true
 http.workspace = true
 # The `aws-lc-rs` feature is asked for here, and nowhere else, because this is
 # the crate that spends it: rustls implements HPKE — and therefore ECH — only in
@@ -29,7 +33,7 @@ http.workspace = true
 # foxcore-route, foxcore-tun, proto-reality and proto-wireguard, so this is not
 # a second native blob arriving — what it actually costs is measured on both
 # shipped ABIs.
-rustls = { workspace = true, features = ["aws-lc-rs"] }
+rustls = { workspace = true, features = ["aws-lc-rs", "chrome-hello"] }
 rustls-pki-types.workspace = true
 sha2.workspace = true
 tokio.workspace = true
@@ -40,6 +44,7 @@ webpki-roots.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 aws-lc-rs.workspace = true
 # Same pin proto-reality already uses, so the ECH tests add no crate to the
 # graph cargo-deny reasons about.

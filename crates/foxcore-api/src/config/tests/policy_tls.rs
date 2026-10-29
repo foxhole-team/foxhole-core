@@ -1,6 +1,27 @@
 use super::*;
 
 #[test]
+fn a_certificate_fingerprint_is_admitted_as_its_own_typed_pin() {
+    let pin = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [7_u8; 32]);
+    let value = serde_json::json!({"enabled":true,"pinned_certificate_sha256":pin});
+    let tls: TlsConfig = serde_json::from_value(value).unwrap();
+    assert!(tls.validate().is_ok());
+}
+
+#[test]
+fn ambiguous_disabled_and_badly_sized_certificate_pins_are_refused() {
+    let pin = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [7_u8; 32]);
+    for value in [
+        serde_json::json!({"enabled":true,"pinned_certificate_sha256":"invalid"}),
+        serde_json::json!({"enabled":false,"pinned_certificate_sha256":pin}),
+        serde_json::json!({"enabled":true,"pinned_certificate_sha256":pin,"pinned_spki_sha256":pin}),
+    ] {
+        let tls: TlsConfig = serde_json::from_value(value).unwrap();
+        assert!(tls.validate().is_err());
+    }
+}
+
+#[test]
 fn validates_dns_security_boundary_and_redacts_doh_url() {
     let parsed = EngineConfig::parse(
         r#"{

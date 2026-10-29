@@ -2,7 +2,7 @@
 name = "foxcore-fuzz"
 version = "0.0.0"
 edition = "2024"
-rust-version = "1.91"
+rust-version = "1.92"
 license = "GPL-3.0-or-later"
 publish = false
 
@@ -91,3 +91,6 @@ path = "fuzz_targets/shadowtls_server_stream.rs"
 test = false
 doc = false
 bench = false
+
+[patch.crates-io]
+rustls = { path = "../vendor/rustls" }

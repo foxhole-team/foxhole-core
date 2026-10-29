@@ -28,7 +28,12 @@ pub use foxcore_trafficmap::{
 };
 pub use publish::{OnionAddress, OnionPublisher, PublishError, PublishedShare, publish_share};
 
+mod bootstrap_dns;
 mod continuity;
+mod dns_continuation;
+pub use dns_continuation::{
+    DnsContinuation, DnsContinuationCleanupError, dns_continuation_cleanup_result,
+};
 mod control;
 mod registry;
 mod snapshot;

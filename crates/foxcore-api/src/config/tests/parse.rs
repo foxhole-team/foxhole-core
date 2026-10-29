@@ -714,6 +714,7 @@ fn signed_dns_rule_set_config_pins_a_bounded_key_and_cannot_be_inert_or_duplicat
         public_key: public_key.clone(),
         minimum_sequence: 7,
         required: true,
+        enabled_categories: None,
     };
     let valid = DnsConfig {
         mode: DnsMode::FakeIp,

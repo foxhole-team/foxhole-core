@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::netstack::DatagramFlow;
-use foxcore_api::{BlockReason, FlowContext, IpTransport, RouteAction};
+use foxcore_api::{BlockReason, DnsConfig, FlowContext, IpTransport, RouteAction};
 use foxcore_outbound::Outbound;
 use foxcore_route::RouteTable;
 use foxcore_transport::Datagram;
@@ -77,8 +77,19 @@ impl FlowEngine {
             destination,
             &policy.dns,
         );
-        if !self
-            .attribute_context(
+        let dns_flow = destination.port() == 53 && policy.dns_proxy.is_some();
+        let attributed = if dns_flow {
+            self.attribute_dns_context(
+                &mut context,
+                source,
+                destination,
+                &policy.routes,
+                &policy.dns_config,
+                IpTransport::Udp,
+            )
+            .await
+        } else {
+            self.attribute_context(
                 &mut context,
                 source,
                 destination,
@@ -86,18 +97,17 @@ impl FlowEngine {
                 IpTransport::Udp,
             )
             .await
-        {
+        };
+        if !attributed {
             self.metrics.attribution_error();
             self.metrics.block_flow();
             self.emit_block(BlockReason::Unattributed, context.transport, &context);
             return;
         }
-        if context.destination.port == 53 && policy.dns_proxy.is_some() {
-            let metrics = self.metrics.clone();
-            let policy = self.policy.clone();
-            metrics.open_udp();
-            serve_dns_udp(&mut stream, policy, context, &metrics, cancel).await;
-            metrics.close_flow();
+        if dns_flow {
+            self.metrics.open_udp();
+            serve_dns_udp(&mut stream, self, context, cancel).await;
+            self.metrics.close_flow();
             return;
         }
         // Port 853 must not bypass filtering over QUIC either.
@@ -241,9 +251,78 @@ impl FlowEngine {
         routes: &RouteTable,
         transport: IpTransport,
     ) -> bool {
-        if !routes.requires_identity()
-            && !(routes.requires_domain_hints() && context.destination.ip().is_some())
+        let required = routes.requires_identity()
+            || (routes.requires_domain_hints() && context.destination.ip().is_some());
+        self.attribute_required_context(
+            context,
+            source,
+            destination,
+            transport,
+            required,
+            routes.requires_package(),
+        )
+        .await
+    }
+
+    pub(crate) async fn attribute_dns_context(
+        &self,
+        context: &mut FlowContext,
+        source: std::net::SocketAddr,
+        destination: std::net::SocketAddr,
+        routes: &RouteTable,
+        dns: &DnsConfig,
+        transport: IpTransport,
+    ) -> bool {
+        if source.port() == 0
+            || source.ip().is_unspecified()
+            || source.ip().is_multicast()
+            || matches!(source.ip(), std::net::IpAddr::V4(address) if address.is_broadcast())
         {
+            return false;
+        }
+        let advertised = destination.port() == 53
+            && dns.mode == foxcore_api::DnsMode::FakeIp
+            && dns.intercepts()
+            && dns.advertised_resolver() == Some(destination.ip());
+        let package_bypass = !dns.blocklist.bypass_packages.is_empty();
+        // Resolver bootstrap carries a question, not an application IP needing a DNS hint.
+        let required = routes.requires_identity()
+            || (!advertised
+                && routes.requires_domain_hints()
+                && context.destination.ip().is_some());
+        let require_packages = routes.requires_package() || package_bypass;
+        if (required || package_bypass)
+            && context.uid.is_some()
+            && (!require_packages || !context.packages.is_empty())
+        {
+            return true;
+        }
+        let cached_identity_is_sufficient =
+            context.uid.is_some() && (!routes.requires_package() || !context.packages.is_empty());
+        // Missing bypass metadata keeps filtering active; mandatory routing identity still fails closed.
+        self.attribute_required_context(
+            context,
+            source,
+            destination,
+            transport,
+            required || package_bypass,
+            routes.requires_package(),
+        )
+        .await
+            || !required
+            || cached_identity_is_sufficient
+    }
+
+    async fn attribute_required_context(
+        &self,
+        context: &mut FlowContext,
+        source: std::net::SocketAddr,
+        destination: std::net::SocketAddr,
+        transport: IpTransport,
+        required: bool,
+        require_packages: bool,
+    ) -> bool {
+        if !required {
             return true;
         }
         if !self.attributor.is_available() {
@@ -252,7 +331,7 @@ impl FlowEngine {
         let Some(identity) = self.resolve_identity(transport, source, destination).await else {
             return false;
         };
-        if routes.requires_package() && identity.packages.is_empty() {
+        if require_packages && identity.packages.is_empty() {
             return false;
         }
         context.uid = Some(identity.uid);
@@ -291,14 +370,20 @@ impl FlowEngine {
         let Ok(Some(Ok(Some(mut identity)))) = resolved else {
             return None;
         };
-        identity.packages.retain(|package| {
-            !package.trim().is_empty()
-                && package.len() <= 255
-                && !package.chars().any(char::is_control)
-        });
-        identity.packages.sort_unstable();
-        identity.packages.dedup();
-        identity.packages.truncate(32);
+        let complete_packages = identity.packages.len() <= 32
+            && identity.packages.iter().all(|package| {
+                !package.trim().is_empty()
+                    && package.len() <= 255
+                    && !package.chars().any(char::is_control)
+            });
+        if !complete_packages {
+            // A partial shared-UID list cannot authorize package rules or a filter bypass.
+            identity.packages.clear();
+            identity.signing_digest = None;
+        } else {
+            identity.packages.sort_unstable();
+            identity.packages.dedup();
+        }
         Some(identity)
     }
 

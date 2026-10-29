@@ -19,6 +19,8 @@ use thiserror::Error;
 
 use crate::domain::{FLAG_EXACT, FLAG_SUFFIX, MAX_DOMAIN_BYTES, category_bit, reversed_key};
 
+mod categories;
+
 pub const RULE_SET_FORMAT: &str = "foxhole-dns-fst-v1";
 pub const RULE_SET_MAGIC: [u8; 8] = *b"FHDNS1\0\0";
 pub const RULE_SET_HEADER_LEN: usize = 80;
@@ -29,6 +31,7 @@ pub const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 pub const MAX_SIGNATURE_BYTES: usize = 256;
 pub const MAX_PUBLIC_KEY_BYTES: usize = 4 * 1024;
 pub const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_TAGGED_INPUT_BYTES: usize = 256 * 1024 * 1024;
 const MAX_RULE_ENTRIES: usize = 5_000_000;
 const SHA256_HEX_LEN: usize = 64;
 
@@ -65,6 +68,7 @@ pub struct VerifiedRuleSetMetadata {
     pub allow_entries: usize,
     pub artifact_sha256: [u8; 32],
     pub public_key_sha256: [u8; 32],
+    pub categorized_manifest_sha256: Option<[u8; 32]>,
 }
 
 #[derive(Clone)]
@@ -106,6 +110,9 @@ pub struct RuleSetArtifact {
     pub(crate) block_entries: usize,
     pub(crate) allow_entries: usize,
     pub(crate) source_sha256: [u8; 32],
+    pub(crate) enabled_category_mask: Option<u64>,
+    pub(crate) categorized_available_mask: Option<u64>,
+    pub(crate) categorized_counts: Option<[u64; 4]>,
 }
 
 /// Owned bytes supplied by the trusted host through a non-JSON bootstrap or
@@ -162,6 +169,32 @@ pub enum RuleSetBuildError {
 }
 
 impl RuleSetArtifact {
+    pub fn select_categories(
+        &self,
+        categories: Option<&[DnsCategory]>,
+    ) -> Result<Self, RuleSetError> {
+        let mut artifact = self.clone();
+        match (self.categorized_available_mask, categories) {
+            (None, None) => Ok(artifact),
+            (Some(available), Some(selected)) => {
+                if selected.len() > 4 {
+                    return Err(RuleSetError::UnsupportedManifest);
+                }
+                let mut mask = 0;
+                for category in selected {
+                    let bit = category_bit(*category);
+                    if mask & bit != 0 || available & bit == 0 {
+                        return Err(RuleSetError::UnsupportedManifest);
+                    }
+                    mask |= bit;
+                }
+                artifact.enabled_category_mask = Some(mask);
+                Ok(artifact)
+            }
+            _ => Err(RuleSetError::UnsupportedManifest),
+        }
+    }
+
     pub fn block_entries(&self) -> usize {
         self.block_entries
     }
@@ -263,6 +296,12 @@ pub fn verify_rule_set(
     key.verify_sig(manifest_bytes, signature)
         .map_err(|_| RuleSetError::InvalidSignature)?;
 
+    let schema: serde_json::Value =
+        serde_json::from_slice(manifest_bytes).map_err(|_| RuleSetError::InvalidManifest)?;
+    if schema.get("schema").and_then(serde_json::Value::as_u64) == Some(3) {
+        return categories::verify(manifest_bytes, public_key, artifact_bytes, policy);
+    }
+
     let manifest: Manifest =
         serde_json::from_slice(manifest_bytes).map_err(|_| RuleSetError::InvalidManifest)?;
     validate_manifest(&manifest, public_key, artifact_bytes, policy)?;
@@ -290,6 +329,7 @@ pub fn verify_rule_set(
             allow_entries,
             artifact_sha256,
             public_key_sha256: sha256(public_key),
+            categorized_manifest_sha256: None,
         },
         artifact,
     })
@@ -302,6 +342,25 @@ pub fn parse_trusted_embedded_rule_set(bytes: &[u8]) -> Result<RuleSetArtifact, 
         return Err(RuleSetError::TooLarge);
     }
     parse_artifact(bytes)
+}
+
+pub fn parse_trusted_categorized_rule_set(
+    name: &str,
+    bytes: &[u8],
+) -> Result<RuleSetArtifact, RuleSetError> {
+    if !matches!(
+        name,
+        "foxhole-dns-categories-normal-medium"
+            | "foxhole-dns-categories-normal-full"
+            | "foxhole-dns-categories-pro-medium"
+            | "foxhole-dns-categories-pro-full"
+    ) {
+        return Err(RuleSetError::WrongIdentity);
+    }
+    let mut artifact = parse_trusted_embedded_rule_set(bytes)?;
+    let counts = categories::artifact_categories(&artifact)?;
+    artifact.categorized_available_mask = Some(categories::available_mask(counts));
+    Ok(artifact)
 }
 
 /// Compile normalized DNS suffixes into the same bounded artifact parsed by
@@ -325,6 +384,20 @@ pub fn compile_rule_set_artifact(
     let category_flag = category.map(category_bit).unwrap_or(0);
     let block = compile_suffix_map(block_suffixes, category_flag)?;
     let allow = compile_suffix_map(allow_suffixes, 0)?;
+    assemble_artifact(source_bytes, block, allow)
+}
+
+pub fn compile_tagged_rule_set_artifact(
+    source_bytes: &[u8],
+) -> Result<CompiledRuleSetArtifact, RuleSetBuildError> {
+    categories::compile(source_bytes)
+}
+
+fn assemble_artifact(
+    source_bytes: &[u8],
+    block: CompiledMap,
+    allow: CompiledMap,
+) -> Result<CompiledRuleSetArtifact, RuleSetBuildError> {
     let output_len = RULE_SET_HEADER_LEN
         .checked_add(block.bytes.len())
         .and_then(|value| value.checked_add(allow.bytes.len()))
@@ -514,22 +587,34 @@ fn parse_artifact(bytes: &[u8]) -> Result<RuleSetArtifact, RuleSetError> {
         Map::new(bytes[block_end..allow_end].to_vec())
             .map_err(|_| RuleSetError::InvalidArtifact)?,
     );
-    validate_map(&block, block_entries, true)?;
-    validate_map(&allow, allow_entries, false)?;
+    let block_facts = validate_map(&block, block_entries, true)?;
+    let allow_facts = validate_map(&allow, allow_entries, false)?;
+    let categorized_counts = (block_facts.suffix_categorized
+        && allow_facts.suffix_categorized
+        && block_facts.counts.iter().any(|count| *count > 0))
+    .then_some(block_facts.counts);
     Ok(RuleSetArtifact {
         block,
         allow,
         block_entries,
         allow_entries,
         source_sha256,
+        enabled_category_mask: None,
+        categorized_available_mask: None,
+        categorized_counts,
     })
+}
+
+struct ValidatedMapFacts {
+    suffix_categorized: bool,
+    counts: [u64; 4],
 }
 
 fn validate_map(
     map: &Map<Vec<u8>>,
     expected_entries: usize,
     block: bool,
-) -> Result<(), RuleSetError> {
+) -> Result<ValidatedMapFacts, RuleSetError> {
     if map.len() != expected_entries {
         return Err(RuleSetError::InvalidArtifact);
     }
@@ -542,6 +627,16 @@ fn validate_map(
     .into_iter()
     .fold(0, |mask, category| mask | category_bit(category));
     let allowed_flags = FLAG_EXACT | FLAG_SUFFIX | if block { category_mask } else { 0 };
+    let mut facts = ValidatedMapFacts {
+        suffix_categorized: true,
+        counts: [0; 4],
+    };
+    let categories = [
+        DnsCategory::Malicious,
+        DnsCategory::Telemetry,
+        DnsCategory::Trackers,
+        DnsCategory::Ads,
+    ];
     let mut stream = map.stream();
     while let Some((key, value)) = stream.next() {
         if !valid_reversed_domain(key)
@@ -550,8 +645,18 @@ fn validate_map(
         {
             return Err(RuleSetError::InvalidArtifact);
         }
+        facts.suffix_categorized &= value & FLAG_SUFFIX != 0
+            && value & FLAG_EXACT == 0
+            && (!block || value & category_mask != 0);
+        if block {
+            for (index, category) in categories.iter().enumerate() {
+                if value & category_bit(*category) != 0 {
+                    facts.counts[index] += 1;
+                }
+            }
+        }
     }
-    Ok(())
+    Ok(facts)
 }
 
 fn valid_reversed_domain(key: &[u8]) -> bool {
@@ -708,6 +813,158 @@ mod tests {
         assert_eq!(verified.metadata().block_entries, 1);
         assert_eq!(verified.metadata().allow_entries, 1);
         assert_eq!(verified.artifact.source_sha256(), [7_u8; 32]);
+    }
+
+    #[test]
+    fn one_pass_facts_cannot_promote_exact_or_untagged_legacy_maps() {
+        for (block_flags, allow_flags, categorized) in [
+            (
+                FLAG_SUFFIX | category_bit(DnsCategory::Ads),
+                FLAG_SUFFIX,
+                true,
+            ),
+            (
+                FLAG_EXACT | category_bit(DnsCategory::Ads),
+                FLAG_SUFFIX,
+                false,
+            ),
+            (FLAG_SUFFIX, FLAG_SUFFIX, false),
+            (
+                FLAG_SUFFIX | category_bit(DnsCategory::Ads),
+                FLAG_EXACT,
+                false,
+            ),
+        ] {
+            let block = map(&[("invalid.owned.ads", block_flags)]);
+            let allow = map(&[("invalid.owned.ads.safe", allow_flags)]);
+            let mut bytes = Vec::new();
+            bytes.extend_from_slice(&RULE_SET_MAGIC);
+            for number in [1, 1, block.len() as u64, allow.len() as u64] {
+                bytes.extend_from_slice(&number.to_be_bytes());
+            }
+            bytes.extend_from_slice(&[7; 32]);
+            bytes.extend_from_slice(&[0; 8]);
+            bytes.extend_from_slice(&block);
+            bytes.extend_from_slice(&allow);
+            assert!(parse_trusted_embedded_rule_set(&bytes).is_ok());
+            assert_eq!(
+                parse_trusted_categorized_rule_set("foxhole-dns-categories-normal-medium", &bytes)
+                    .is_ok(),
+                categorized
+            );
+        }
+    }
+
+    #[test]
+    fn categorized_manifest_verifies_signed_categories_and_tiers() {
+        let artifact = artifact();
+        let key_pair = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap();
+        let public_key = key_pair.public_key().as_ref();
+        let mut manifest = serde_json::to_vec(&json!({
+            "schema": 3,
+            "name": "foxhole-dns-categories-normal-medium",
+            "format": RULE_SET_FORMAT,
+            "sequence": 7,
+            "generated_at_unix": 1000,
+            "expires_at_unix": 2000,
+            "key_sha256": encode_hex(&sha256(public_key)),
+            "categories": ["ads"],
+            "tagged_input_sha256": encode_hex(&[7_u8; 32]),
+            "tiers": {"trackers":"normal", "malicious":"medium"},
+            "sources": [{
+                "id": "owned-fixture",
+                "repo": "https://example.invalid/owned-fixture",
+                "commit": "2222222222222222222222222222222222222222",
+                "license": "CC0-1.0",
+                "inputs": [{"path":"fixture/suffixes.txt", "sha256":encode_hex(&[7_u8;32])}],
+                "categories": ["ads"]
+            }],
+            "artifact": {
+                "file": "dns-categories.fhds", "size": artifact.len(),
+                "sha256": encode_hex(&sha256(&artifact)), "block_entries":1, "allow_entries":1,
+                "category_entries": {"malicious":0,"telemetry":0,"trackers":0,"ads":1}
+            },
+            "compatibility": {"core_schema":1,"category_schema":1}
+        }))
+        .unwrap();
+        manifest.push(b'\n');
+        let signature = key_pair.sign(&SystemRandom::new(), &manifest).unwrap();
+        let result = verify_rule_set(
+            &manifest,
+            signature.as_ref(),
+            public_key,
+            &artifact,
+            RuleSetVerificationPolicy::new("foxhole-dns-categories-normal-medium", 6, 1500),
+        );
+        assert!(
+            result.is_ok(),
+            "valid signed categorized manifest was refused: {result:?}"
+        );
+        let verified = result.unwrap();
+        assert!(verified.artifact().select_categories(None).is_err());
+        assert!(
+            verified
+                .artifact()
+                .select_categories(Some(&[DnsCategory::Telemetry]))
+                .is_err()
+        );
+        assert!(
+            verified
+                .artifact()
+                .select_categories(Some(&[DnsCategory::Ads, DnsCategory::Ads]))
+                .is_err()
+        );
+        assert!(verified.artifact().select_categories(Some(&[])).is_ok());
+        assert!(
+            verified
+                .artifact()
+                .select_categories(Some(&[DnsCategory::Ads]))
+                .is_ok()
+        );
+
+        let value: serde_json::Value = serde_json::from_slice(&manifest).unwrap();
+        let mut cases = Vec::new();
+        for field in [
+            "unknown",
+            "tiers",
+            "artifact",
+            "categories",
+            "sequence",
+            "expires_at_unix",
+        ] {
+            let mut changed = value.clone();
+            match field {
+                "unknown" => changed["unknown"] = json!(true),
+                "tiers" => changed["tiers"]["trackers"] = json!("pro"),
+                "artifact" => changed["artifact"]["category_entries"]["ads"] = json!(2),
+                "categories" => changed["categories"] = json!(["ads", "ads"]),
+                "sequence" => changed["sequence"] = json!(0),
+                "expires_at_unix" => changed["expires_at_unix"] = json!(1500),
+                _ => unreachable!(),
+            }
+            let mut bytes = serde_json::to_vec(&changed).unwrap();
+            bytes.push(b'\n');
+            cases.push(bytes);
+        }
+        let mut whitespace = manifest.clone();
+        whitespace.insert(1, b' ');
+        cases.push(whitespace);
+        let mut duplicate = b"{\"schema\":3,".to_vec();
+        duplicate.extend_from_slice(&manifest[1..]);
+        cases.push(duplicate);
+        for bytes in cases {
+            let signature = key_pair.sign(&SystemRandom::new(), &bytes).unwrap();
+            assert!(
+                verify_rule_set(
+                    &bytes,
+                    signature.as_ref(),
+                    public_key,
+                    &artifact,
+                    RuleSetVerificationPolicy::new("foxhole-dns-categories-normal-medium", 6, 1500)
+                )
+                .is_err()
+            );
+        }
     }
 
     #[test]

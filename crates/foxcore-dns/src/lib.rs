@@ -19,9 +19,10 @@ use crate::message::nodata_response;
 use crate::wire::{parse_addresses, parse_question, query_key, response_metadata};
 
 pub use crate::message::{
-    http_query, nxdomain_response, restore_transaction_id, servfail_response, truncated_response,
+    doq_query, http_query, nxdomain_response, restore_doq_response, restore_transaction_id,
+    servfail_response, truncated_response,
 };
-pub use crate::wire::DnsQuestion;
+pub use crate::wire::{DnsQuestion, response_domain_chain, validated_response_addresses};
 
 pub struct DnsCache {
     capacity: usize,

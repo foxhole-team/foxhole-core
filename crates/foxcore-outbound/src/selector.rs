@@ -578,6 +578,7 @@ struct ProbeTarget {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "shadowsocks")]
     use std::sync::atomic::AtomicUsize;
 
     use foxcore_api::{NamedOutboundConfig, OutboundId, SecretString, ShadowsocksConfig};
@@ -723,6 +724,7 @@ mod tests {
         assert_eq!(selector.active_id(), "a");
     }
 
+    #[cfg(feature = "shadowsocks")]
     #[tokio::test]
     async fn a_group_that_moves_the_user_says_so_instead_of_waiting_to_be_asked() {
         use std::sync::Mutex;
@@ -785,6 +787,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "shadowsocks")]
     #[tokio::test]
     async fn a_disallowed_failover_opens_no_candidate_before_confirmation() {
         let selector = SelectorOutbound::new(
@@ -850,6 +853,7 @@ mod tests {
         assert_eq!(selector.active_id(), "b");
     }
 
+    #[cfg(feature = "shadowsocks")]
     #[tokio::test]
     async fn a_stale_failover_cannot_overwrite_a_new_selection() {
         let selector = SelectorOutbound::new(
@@ -902,6 +906,7 @@ mod tests {
         assert_eq!(selector.active_id(), "c");
     }
 
+    #[cfg(feature = "shadowsocks")]
     #[tokio::test]
     async fn every_member_is_tried_before_the_group_fails() {
         // Both members point at a discard address on a port nothing listens on,
@@ -1001,6 +1006,7 @@ mod tests {
     /// Exercises the failover loop itself with an injected attempt, because a
     /// real promotion needs one member to fail and the next to succeed — which
     /// no amount of unreachable addresses can produce.
+    #[cfg(feature = "shadowsocks")]
     #[tokio::test]
     async fn the_member_that_answered_becomes_active_and_is_tried_first_next_time() {
         let selector = SelectorOutbound::new(

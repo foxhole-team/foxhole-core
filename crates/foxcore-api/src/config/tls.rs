@@ -11,11 +11,15 @@ pub struct TlsConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fingerprint: Option<TlsFingerprint>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub server_name: Option<String>,
     #[serde(default)]
     pub insecure: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pinned_spki_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pinned_certificate_sha256: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub alpn: Vec<String>,
     /// Narrow the handshake to a version range. Absent means the core's own
@@ -33,6 +37,12 @@ pub struct TlsConfig {
     /// is what every profile written before this field did and still does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ech: Option<EchConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TlsFingerprint {
+    #[serde(rename = "chrome_151")]
+    Chrome151,
 }
 
 /// Encrypted Client Hello (draft-ietf-tls-esni-18), client side.
@@ -138,9 +148,11 @@ impl std::hash::Hash for CurveGroup {
 impl TlsConfig {
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
         if !self.enabled
-            && (self.server_name.is_some()
+            && (self.fingerprint.is_some()
+                || self.server_name.is_some()
                 || self.insecure
                 || self.pinned_spki_sha256.is_some()
+                || self.pinned_certificate_sha256.is_some()
                 || !self.alpn.is_empty()
                 || self.min_version.is_some()
                 || self.max_version.is_some()
@@ -172,6 +184,14 @@ impl TlsConfig {
         if let Some(pin) = &self.pinned_spki_sha256 {
             validate_spki_pin(pin)?;
         }
+        if let Some(pin) = &self.pinned_certificate_sha256 {
+            validate_sha256_pin(pin, "certificate")?;
+        }
+        if self.pinned_spki_sha256.is_some() && self.pinned_certificate_sha256.is_some() {
+            return Err(ConfigError::Invalid(
+                "TLS permits one certificate or SPKI pin, not both".into(),
+            ));
+        }
         if let (Some(min), Some(max)) = (self.min_version, self.max_version)
             && min > max
         {
@@ -184,6 +204,31 @@ impl TlsConfig {
             if !seen.insert(*curve) {
                 return Err(ConfigError::Invalid(
                     "tls.curve_preferences must not repeat a group".into(),
+                ));
+            }
+        }
+        if self.fingerprint.is_some() {
+            if self.ech.is_some() {
+                return Err(ConfigError::Invalid(
+                    "tls.fingerprint cannot be combined with tls.ech".into(),
+                ));
+            }
+            if self.min_version.is_some_and(|v| v != TlsVersion::Tls12)
+                || self.max_version.is_some_and(|v| v != TlsVersion::Tls13)
+            {
+                return Err(ConfigError::Invalid(
+                    "Chrome151 fingerprint requires the TLS1.2..TLS1.3 offer".into(),
+                ));
+            }
+            let chrome_groups = [
+                CurveGroup::X25519MlKem768,
+                CurveGroup::X25519,
+                CurveGroup::Secp256r1,
+                CurveGroup::Secp384r1,
+            ];
+            if !self.curve_preferences.is_empty() && self.curve_preferences != chrome_groups {
+                return Err(ConfigError::Invalid(
+                    "Chrome151 fingerprint cannot discard explicit curve preferences".into(),
                 ));
             }
         }
@@ -246,14 +291,18 @@ fn validate_ech_config_list(encoded: &str) -> Result<(), ConfigError> {
 }
 
 pub(super) fn validate_spki_pin(pin: &str) -> Result<(), ConfigError> {
+    validate_sha256_pin(pin, "SPKI")
+}
+
+fn validate_sha256_pin(pin: &str, kind: &str) -> Result<(), ConfigError> {
     let decoded = STANDARD
         .decode(pin)
         .or_else(|_| URL_SAFE_NO_PAD.decode(pin))
-        .map_err(|_| ConfigError::Invalid("SPKI SHA-256 pin is not valid base64".into()))?;
+        .map_err(|_| ConfigError::Invalid(format!("{kind} SHA-256 pin is not valid base64")))?;
     if decoded.len() != 32 {
-        return Err(ConfigError::Invalid(
-            "SPKI SHA-256 pin must decode to 32 bytes".into(),
-        ));
+        return Err(ConfigError::Invalid(format!(
+            "{kind} SHA-256 pin must decode to 32 bytes"
+        )));
     }
     Ok(())
 }

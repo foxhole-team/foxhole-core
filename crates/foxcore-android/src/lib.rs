@@ -3,7 +3,10 @@
 
 mod boundary;
 mod capabilities;
+mod dns_continuation;
 mod ecosystem;
+#[cfg(any(target_os = "android", test))]
+mod identity_metadata;
 mod link;
 #[cfg(target_os = "android")]
 mod logcat;
@@ -32,15 +35,16 @@ use foxcore_api::{
 use foxcore_api::{FlowIdentity, IpTransport, decode_signing_digest};
 use foxcore_dialer::SocketCallbacks;
 use foxcore_runtime::{
-    ComponentId, ConfirmResult, CoreRuntime, LanCredentials, LanProxyConfig, LanProxyPreset,
-    LanTransport, MAX_DNS_RULE_SET_ARTIFACT_BYTES, MAX_DNS_RULE_SET_MANIFEST_BYTES,
+    ComponentId, ConfirmResult, CoreRuntime, DnsContinuation, LanCredentials, LanProxyConfig,
+    LanProxyPreset, LanTransport, MAX_DNS_RULE_SET_ARTIFACT_BYTES, MAX_DNS_RULE_SET_MANIFEST_BYTES,
     MAX_DNS_RULE_SET_SIGNATURE_BYTES, NetworkBinding, PolicyRefusal, RevokeTarget, RuleSetBundle,
-    StopResult, TrustedRuleSetBundle, lan_proxy_stopped_status_json, loopback_inbounds_empty_json,
+    StopResult, TrustedRuleSetBundle, dns_continuation_cleanup_result,
+    lan_proxy_stopped_status_json, loopback_inbounds_empty_json,
 };
 #[cfg(target_os = "android")]
-use jni::objects::JObjectArray;
+use jni::objects::{AutoLocal, JObjectArray};
 use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
-use jni::sys::{jint, jlong, jstring};
+use jni::sys::{JNI_FALSE, JNI_TRUE, jboolean, jint, jlong, jstring};
 use jni::{JNIEnv, JavaVM};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -51,9 +55,14 @@ use crate::boundary::{
     component_result, guarded, lock, read_string, release_engine_handles,
 };
 use crate::capabilities::capabilities_json;
+use crate::dns_continuation::{
+    BootstrapShape, DnsContinuationPool, LeaseError, UnpublishedCleanup, bootstrap_shape,
+    commit_or_retire, cooperative_retire,
+};
 
 static RUNTIMES: OnceLock<Mutex<HashMap<u64, Arc<CoreRuntime>>>> = OnceLock::new();
 static STOP_REAPERS: OnceLock<Mutex<HashMap<u64, std::thread::JoinHandle<()>>>> = OnceLock::new();
+static DNS_CONTINUATIONS: OnceLock<Mutex<DnsContinuationPool<DnsContinuation>>> = OnceLock::new();
 static NEXT_HANDLE: AtomicU64 = AtomicU64::new(1);
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 const NATIVE_STOPPED: jint = 0;
@@ -98,8 +107,98 @@ struct JavaFlowAttributor {
 #[derive(Clone)]
 struct CachedJavaFlowIdentity {
     inserted: Instant,
-    packages: Vec<String>,
-    signing_digest: Option<[u8; 32]>,
+    identity: identity_metadata::PackageIdentity,
+}
+
+#[cfg(target_os = "android")]
+struct JavaPackageArrayReader<'reader, 'local> {
+    env: &'reader mut JNIEnv<'local>,
+    owner: &'reader JavaFlowAttributor,
+    uid: jint,
+    packages: Option<AutoLocal<'local, JObjectArray<'local>>>,
+}
+
+#[cfg(target_os = "android")]
+impl identity_metadata::PackageArrayReader for JavaPackageArrayReader<'_, '_> {
+    fn package_count(&mut self) -> std::io::Result<usize> {
+        let packages = self
+            .env
+            .call_method(
+                &self.owner.package_manager,
+                "getPackagesForUid",
+                "(I)[Ljava/lang/String;",
+                &[JValue::Int(self.uid)],
+            )
+            .and_then(|value| value.l())
+            .map_err(|error| {
+                io::Error::other(clear_jni_error(
+                    self.env,
+                    "resolve packages for Android UID",
+                    error,
+                ))
+            })?;
+        if packages.is_null() {
+            return Ok(0);
+        }
+        let packages = self.env.auto_local(JObjectArray::from(packages));
+        let length = self.env.get_array_length(&*packages).map_err(|error| {
+            io::Error::other(clear_jni_error(
+                self.env,
+                "read Android package array",
+                error,
+            ))
+        })?;
+        self.packages = Some(packages);
+        usize::try_from(length).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "negative Android package array length",
+            )
+        })
+    }
+
+    fn package(&mut self, index: usize) -> std::io::Result<Option<String>> {
+        let packages = self
+            .packages
+            .as_ref()
+            .ok_or_else(|| io::Error::other("missing Android package array"))?;
+        let index = jint::try_from(index).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Android package index overflow",
+            )
+        })?;
+        let package = self
+            .env
+            .get_object_array_element(&**packages, index)
+            .map_err(|error| {
+                io::Error::other(clear_jni_error(
+                    self.env,
+                    "read Android package name",
+                    error,
+                ))
+            })?;
+        if package.is_null() {
+            return Ok(None);
+        }
+        let package = self.env.auto_local(JString::from(package));
+        let value: String = self
+            .env
+            .get_string(&*package)
+            .map_err(|error| {
+                io::Error::other(clear_jni_error(
+                    self.env,
+                    "decode Android package name",
+                    error,
+                ))
+            })?
+            .into();
+        Ok(Some(value))
+    }
+
+    fn signing_digest(&mut self, package: &str) -> std::io::Result<Option<[u8; 32]>> {
+        self.owner.signing_digest_for_package(self.env, package)
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -265,6 +364,176 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeS
         )
     }));
     finish_native_start(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeRetainDnsContinuation(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    handle: jlong,
+) -> jlong {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let runtime =
+            runtime(handle).ok_or_else(|| "DNS continuation owner is unavailable".to_string())?;
+        let continuation = runtime.dns_continuation();
+        let retained = {
+            let mut pool = lock(dns_continuations());
+            let current = lock(registry())
+                .get(&(handle as u64))
+                .is_some_and(|owner| Arc::ptr_eq(owner, &runtime));
+            if current {
+                pool.retain(handle as u64, continuation)
+            } else {
+                Err((LeaseError::StaleOwner, continuation))
+            }
+        };
+        retained.map_err(|(error, _continuation)| error.message().to_string())
+    }));
+    finish_native_start(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeReleaseDnsContinuation(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    token: jlong,
+) {
+    if catch_unwind(AssertUnwindSafe(|| {
+        if token > 0 {
+            let released = { lock(dns_continuations()).release(token as u64) };
+            drop(released);
+        }
+    }))
+    .is_err()
+    {
+        let _ = env.throw_new(
+            "java/lang/IllegalStateException",
+            "panic releasing DNS continuation",
+        );
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeStartOnNetworkWithDnsContinuity(
+    mut env: JNIEnv<'_>,
+    _class: JClass<'_>,
+    tun_fd: jint,
+    config_json: JString<'_>,
+    network_handle: jlong,
+    token: jlong,
+    name: JString<'_>,
+    manifest: JByteArray<'_>,
+    signature: JByteArray<'_>,
+    artifact: JByteArray<'_>,
+    trusted: jboolean,
+    host: JObject<'_>,
+) -> jlong {
+    reap_stop_reapers();
+    let result = catch_unwind(AssertUnwindSafe(|| -> Result<u64, NativeStartError> {
+        let tun_fd = take_tun_fd(tun_fd)?;
+        let continuation = borrow_dns_continuation(token)?;
+        if trusted != JNI_FALSE && trusted != JNI_TRUE {
+            return Err("DNS bootstrap trust flag is invalid".to_string().into());
+        }
+        let shape = bootstrap_shape(
+            !name.is_null(),
+            !manifest.is_null(),
+            !signature.is_null(),
+            !artifact.is_null(),
+            trusted == JNI_TRUE,
+        )
+        .ok_or_else(|| "DNS bootstrap payload shape is mixed or incomplete".to_string())?;
+        let (rule_sets, trusted_rule_sets) = match shape {
+            BootstrapShape::None => (Vec::new(), Vec::new()),
+            BootstrapShape::Trusted => {
+                let name = read_rule_set_name(&mut env, name)?;
+                let artifact = read_bounded_array(
+                    &env,
+                    &artifact,
+                    MAX_DNS_RULE_SET_ARTIFACT_BYTES,
+                    "artifact",
+                )?;
+                (
+                    Vec::new(),
+                    vec![TrustedRuleSetBundle::from_signed_package(name, artifact)],
+                )
+            }
+            BootstrapShape::Signed => {
+                let bundle =
+                    read_rule_set_bundle(&mut env, name, &manifest, &signature, &artifact)?;
+                (vec![bundle], Vec::new())
+            }
+        };
+        start_owned_with_dns_continuation(
+            &mut env,
+            tun_fd,
+            config_json,
+            network_handle,
+            host,
+            rule_sets,
+            trusted_rule_sets,
+            Some((token as u64, continuation)),
+        )
+    }));
+    finish_dns_native_start(&mut env, result)
+}
+
+const DNS_CONTINUITY_START_QUARANTINED: jlong = -1;
+const DNS_CONTINUITY_START_FAILED: jlong = -2;
+
+struct NativeStartError {
+    message: String,
+    cleanup: Option<UnpublishedCleanup>,
+}
+
+impl From<String> for NativeStartError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            cleanup: None,
+        }
+    }
+}
+
+fn finish_dns_native_start(
+    env: &mut JNIEnv<'_>,
+    result: Result<Result<u64, NativeStartError>, Box<dyn std::any::Any + Send>>,
+) -> jlong {
+    match result {
+        Ok(Ok(handle)) => handle as jlong,
+        Ok(Err(error)) => match error.cleanup {
+            Some(UnpublishedCleanup::Quarantined) => DNS_CONTINUITY_START_QUARANTINED,
+            Some(UnpublishedCleanup::Failed) => DNS_CONTINUITY_START_FAILED,
+            _ => {
+                let _ = env.throw_new("java/lang/IllegalStateException", error.message);
+                0
+            }
+        },
+        Err(_) => DNS_CONTINUITY_START_FAILED,
+    }
+}
+
+fn dns_continuations() -> &'static Mutex<DnsContinuationPool<DnsContinuation>> {
+    DNS_CONTINUATIONS.get_or_init(|| Mutex::new(DnsContinuationPool::default()))
+}
+
+fn borrow_dns_continuation(token: jlong) -> Result<DnsContinuation, String> {
+    if token <= 0 {
+        return Err("DNS continuation token must be positive".to_string());
+    }
+    let continuation = { lock(dns_continuations()).clone_for_start(token as u64) }
+        .ok_or_else(|| "DNS continuation token is stale".to_string())?;
+    if !continuation.is_ready() {
+        return Err("DNS continuation predecessor is not cleanly stopped".to_string());
+    }
+    Ok(continuation)
+}
+
+fn revoke_dns_continuations(owner: u64) {
+    let revoked = { lock(dns_continuations()).revoke_owner(owner) };
+    if let Some(continuation) = revoked {
+        continuation.revoke();
+    }
 }
 
 fn native_start(
@@ -486,7 +755,9 @@ pub extern "system" fn Java_com_foxhole_core_runtime_FoxholeNativeEngine_nativeF
         let key = handle as u64;
         // Removed first: after this call the app is entitled to believe the
         // handle is gone, whatever the worker is still doing.
-        let Some(runtime) = lock(registry()).remove(&key) else {
+        let removed = { lock(registry()).remove(&key) };
+        revoke_dns_continuations(key);
+        let Some(runtime) = removed else {
             return NATIVE_STOP_UNKNOWN_HANDLE;
         };
         release_engine_handles(key, &runtime);
@@ -1471,6 +1742,30 @@ fn start_owned(
     rule_sets: Vec<RuleSetBundle>,
     trusted_rule_sets: Vec<TrustedRuleSetBundle>,
 ) -> Result<u64, String> {
+    start_owned_with_dns_continuation(
+        env,
+        tun_fd,
+        config_json,
+        network_handle,
+        host,
+        rule_sets,
+        trusted_rule_sets,
+        None,
+    )
+    .map_err(|error| error.message)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn start_owned_with_dns_continuation(
+    env: &mut JNIEnv<'_>,
+    tun_fd: OwnedFd,
+    config_json: JString<'_>,
+    network_handle: jlong,
+    host: JObject<'_>,
+    rule_sets: Vec<RuleSetBundle>,
+    trusted_rule_sets: Vec<TrustedRuleSetBundle>,
+    continuation: Option<(u64, DnsContinuation)>,
+) -> Result<u64, NativeStartError> {
     // Every start path funnels through here, and this is idempotent, so the
     // core's own diagnostics are readable from the first generation onwards
     // rather than from whenever someone remembered to call it.
@@ -1491,7 +1786,7 @@ fn start_owned(
     let (callbacks, attributor) = java_callbacks(env, host, requires_attribution)?;
     let generation = NEXT_GENERATION.fetch_add(1, Ordering::Relaxed);
     let runtime = Arc::new(
-        CoreRuntime::start_on_network_with_attributor_and_trusted_rule_sets(
+        CoreRuntime::start_on_network_with_attributor_and_trusted_rule_sets_and_dns_continuation(
             generation,
             config,
             tun_fd,
@@ -1500,11 +1795,44 @@ fn start_owned(
             attributor,
             rule_sets,
             trusted_rule_sets,
+            continuation.as_ref().map(|(_, value)| value.clone()),
         )
-        .map_err(|error| render_error(&error))?,
+        .map_err(|error| NativeStartError {
+            cleanup: match dns_continuation_cleanup_result(&error) {
+                Some(StopResult::TimedOut) => Some(UnpublishedCleanup::Quarantined),
+                _ => None,
+            },
+            message: render_error(&error),
+        })?,
     );
     let handle = next_handle();
-    lock(registry()).insert(handle, runtime);
+    if let Some((token, continuation)) = continuation {
+        let publication = commit_or_retire(
+            &runtime,
+            |successor| {
+                let pool = lock(dns_continuations());
+                if !pool.contains(token) || !continuation.is_ready() {
+                    return false;
+                }
+                lock(registry()).insert(handle, Arc::clone(successor));
+                true
+            },
+            |successor| {
+                catch_unwind(AssertUnwindSafe(|| {
+                    cooperative_retire(|| successor.stop(), || successor.force_kill())
+                }))
+                .unwrap_or(UnpublishedCleanup::Failed)
+            },
+        );
+        if let Err(cleanup) = publication {
+            return Err(NativeStartError {
+                message: "DNS continuation revoked before successor publication".to_string(),
+                cleanup: (cleanup != UnpublishedCleanup::Clean).then_some(cleanup),
+            });
+        }
+    } else {
+        lock(registry()).insert(handle, runtime);
+    }
     Ok(handle)
 }
 
@@ -1720,11 +2048,7 @@ impl JavaFlowAttributor {
             return Ok(None);
         };
         let identity = self.identity_for_uid(&mut env, uid)?;
-        Ok(Some(FlowIdentity {
-            uid,
-            packages: identity.packages,
-            signing_digest: identity.signing_digest,
-        }))
+        Ok(Some(identity.identity.bind(uid)))
     }
 
     fn identity_for_uid(
@@ -1742,55 +2066,20 @@ impl JavaFlowAttributor {
         }
         let java_uid = jint::try_from(uid)
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "UID exceeds Java int"))?;
-        let packages = env
-            .call_method(
-                &self.package_manager,
-                "getPackagesForUid",
-                "(I)[Ljava/lang/String;",
-                &[JValue::Int(java_uid)],
-            )
-            .and_then(|value| value.l())
-            .map_err(|error| {
-                io::Error::other(clear_jni_error(
-                    env,
-                    "resolve packages for Android UID",
-                    error,
-                ))
-            })?;
-        let mut output = Vec::new();
-        if !packages.is_null() {
-            let packages = JObjectArray::from(packages);
-            let length = env.get_array_length(&packages).map_err(|error| {
-                io::Error::other(clear_jni_error(env, "read Android package array", error))
-            })?;
-            for index in 0..length.min(32) {
-                let package = env
-                    .get_object_array_element(&packages, index)
-                    .map_err(|error| {
-                        io::Error::other(clear_jni_error(env, "read Android package name", error))
-                    })?;
-                let package = JString::from(package);
-                let package: String = env
-                    .get_string(&package)
-                    .map_err(|error| {
-                        io::Error::other(clear_jni_error(env, "decode Android package name", error))
-                    })?
-                    .into();
-                output.push(package);
-            }
-        }
-        let signing_digest = match unique_package_for_signing_digest(&output) {
-            Some(package) => self.signing_digest_for_package(env, package)?,
-            // A shared UID is accepted only when every package in it is present in the frozen
-            // baseline. The baseline intentionally carries no per-package digest for that case,
-            // because Android cannot identify which package in the UID opened this flow.
-            None => None,
+        let mut reader = JavaPackageArrayReader {
+            env,
+            owner: self,
+            uid: java_uid,
+            packages: None,
         };
+        let decoded = identity_metadata::decode_identity(&mut reader);
         let identity = CachedJavaFlowIdentity {
             inserted: Instant::now(),
-            packages: output,
-            signing_digest,
+            identity: decoded.identity,
         };
+        if !decoded.cacheable {
+            return Ok(identity);
+        }
         let mut cache = lock(&self.package_cache);
         if cache.len() >= MAX_PACKAGE_CACHE {
             cache.clear();
@@ -1804,9 +2093,9 @@ impl JavaFlowAttributor {
         env: &mut JNIEnv<'_>,
         package: &str,
     ) -> io::Result<Option<[u8; 32]>> {
-        let package = env
-            .new_string(package)
-            .map_err(|error| io::Error::other(format!("encode Android package name: {error}")))?;
+        let package = env.new_string(package).map_err(|error| {
+            io::Error::other(clear_jni_error(env, "encode Android package name", error))
+        })?;
         let package = JObject::from(package);
         let digest = env
             .call_method(

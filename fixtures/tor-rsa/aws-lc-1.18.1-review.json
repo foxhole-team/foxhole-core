@@ -1,0 +1,33 @@
+{
+  "provider": "aws-lc-rs",
+  "previousVersion": "1.17.3",
+  "currentVersion": "1.18.1",
+  "sourceComparison": [
+    {
+      "path": "examples/cipher.rs",
+      "oldSha256": "7f85b06c901fcb33c9519b6cbb321c55f81eb2da4923243d2355e5625243462a",
+      "newSha256": "7f85b06c901fcb33c9519b6cbb321c55f81eb2da4923243d2355e5625243462a",
+      "identical": true
+    },
+    {
+      "path": "src/cipher.rs",
+      "oldSha256": "7fe26bab7c1ab023030d85f5fce9f26624e3803e454672ac5c344bafbf795b02",
+      "newSha256": "7fe26bab7c1ab023030d85f5fce9f26624e3803e454672ac5c344bafbf795b02",
+      "identical": true
+    },
+    {
+      "path": "src/cipher/tests/fips.rs",
+      "oldSha256": "b03ce005dcb47c94fe01e08c801376e81421042aa090c549e44b729ec862bd90",
+      "newSha256": "b03ce005dcb47c94fe01e08c801376e81421042aa090c549e44b729ec862bd90",
+      "identical": true
+    },
+    {
+      "path": "src/rsa.rs",
+      "oldSha256": "336af65d91bd881330faa93c8bb06a4629267f97eb2a12aaed4a885e42a617d1",
+      "newSha256": "788ed648d5b2ca4ce8896b04068ad0f7d5082fdb1197cb618f7fe46b5e9221b2",
+      "identical": false
+    }
+  ],
+  "review": "Three matched private-key-name files are byte-identical. src/rsa.rs changes only the public re-export of provider KeyPairComponents; no added call site or changed operation in these four matched files. This does not open a RustCrypto rsa0.9.10 private-key path. OriginalArti graph/dependent/forbiddenfeature checks remain required. No advisory ignore or scanner pattern changed.",
+  "scope": "Pinned-source fixture review, not compiler-verified callgraph or blanket statement about all provider files."
+}

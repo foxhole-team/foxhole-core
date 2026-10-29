@@ -112,7 +112,6 @@ def walk(path: str, old, new) -> None:
             walk(f"{path}[{position}]", item, new[position])
         return
 
-    # Scalars.
     leaf = path.rsplit(".", 1)[-1]
     if leaf in PINNED and old != new:
         problems.append(

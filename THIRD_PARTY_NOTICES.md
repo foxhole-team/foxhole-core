@@ -99,3 +99,71 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+## HTTP/3 and Brotli dependency notices
+
+The locked graph additionally uses the unmodified registry crates `h3` 0.0.8
+and `h3-quinn` 0.0.10 from `hyperium/h3` under MIT, and
+`brotli-decompressor` 5.0.3, `alloc-no-stdlib` 2.0.4 and `alloc-stdlib` 0.2.4
+from Dropbox's Rust Brotli/allocation projects. The latter crates declare
+`BSD-3-Clause/MIT`, `BSD-3-Clause` and `BSD-3-Clause`, respectively.
+The BSD-3-Clause notice below is retained for all three.
+
+The original `alloc-stdlib` crate omits its licence file. Its upstream licence
+is bound to repository `dropbox/rust-alloc-no-stdlib` commit
+`ae42d22078b98549e987d2f03d12df7b984fde47`, path `LICENSE`, SHA-256
+`c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae`.
+This is the same previously qualified upstream licence used by the current
+consumer notices, rather than a licence inferred from another package.
+
+### h3 and h3-quinn — original MIT notice
+
+Copyright (c) 2020 h3 authors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+### Dropbox allocation and Brotli crates — original BSD notice
+
+Copyright (c) 2016 Dropbox, Inc.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+## Modified rustls source
+
+The path dependency `vendor/rustls` 0.23.46 is FoxHole's modified fork, not an
+unmodified crates.io copy. Its frozen upstream inventory, patch, modification
+notice and original Apache-2.0/ISC/MIT licence texts are retained under
+`config/source-forks/rustls-0.23.46*`, `patches/rustls-0.23.46-chrome151.patch`
+and `vendor/rustls/LICENSE-*`. Its source-bound identity and provenance are
+validated by `scripts/rustls-fork-origin.py` and included by `scripts/sbom.sh`.

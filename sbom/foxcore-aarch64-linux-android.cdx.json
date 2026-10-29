@@ -7,7 +7,7 @@
       "type": "application",
       "bom-ref": "foxcore-workspace",
       "name": "foxcore",
-      "version": "0.0.6",
+      "version": "1.0.0",
       "description": "FoxCore native VPN core"
     },
     "properties": [
@@ -25,7 +25,15 @@
       },
       {
         "name": "foxcore:workspace_members",
-        "value": "30"
+        "value": "31"
+      },
+      {
+        "name": "foxhole:native:vendored-fork-components",
+        "value": "1"
+      },
+      {
+        "name": "foxcore:source-revision",
+        "value": "543efe47cb002af1aa768b9c482a2adc79b323f1"
       }
     ]
   },
@@ -128,6 +136,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/aes@0.9.3",
+      "name": "aes",
+      "version": "0.9.3",
+      "purl": "pkg:cargo/aes@0.9.3",
+      "scope": "required",
+      "description": "Pure Rust implementation of the Advanced Encryption Standard (a.k.a. Rijndael)",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/block-ciphers"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/aho-corasick@1.1.4",
       "name": "aho-corasick",
       "version": "1.1.4",
@@ -143,6 +175,54 @@
         {
           "type": "vcs",
           "url": "https://github.com/BurntSushi/aho-corasick"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/alloc-no-stdlib@2.0.4",
+      "name": "alloc-no-stdlib",
+      "version": "2.0.4",
+      "purl": "pkg:cargo/alloc-no-stdlib@2.0.4",
+      "scope": "required",
+      "description": "A dynamic allocator that may be used with or without the stdlib. This allows a package with nostd to allocate memory dynamically and be used either with a custom allocator, items on the stack, or by a package that wishes to simply use Box<>. It also provides options to use calloc or a mutable global variable for pre-zeroed memory",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dropbox/rust-alloc-no-stdlib"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/alloc-stdlib@0.2.4",
+      "name": "alloc-stdlib",
+      "version": "0.2.4",
+      "purl": "pkg:cargo/alloc-stdlib@0.2.4",
+      "scope": "required",
+      "description": "A dynamic allocator example that may be used with the stdlib",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dropbox/rust-alloc-no-stdlib"
         },
         {
           "type": "distribution",
@@ -320,6 +400,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/arraydeque@0.5.1",
+      "name": "arraydeque",
+      "version": "0.5.1",
+      "purl": "pkg:cargo/arraydeque@0.5.1",
+      "scope": "required",
+      "description": "A ring buffer with a fixed capacity, which can be stored on the stack.",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/andylokandy/arraydeque"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/arrayref@0.3.9",
       "name": "arrayref",
       "version": "0.3.9",
@@ -368,10 +472,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/arti-client@0.44.0",
+      "bom-ref": "pkg:cargo/arti-client@0.47.0",
       "name": "arti-client",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/arti-client@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/arti-client@0.47.0",
       "scope": "required",
       "description": "Library for connecting to the Tor network as an anonymous client",
       "licenses": [
@@ -1040,6 +1144,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/brotli-decompressor@5.0.3",
+      "name": "brotli-decompressor",
+      "version": "5.0.3",
+      "purl": "pkg:cargo/brotli-decompressor@5.0.3",
+      "scope": "required",
+      "description": "A brotli decompressor that with an interface avoiding the rust stdlib. This makes it suitable for embedded devices and kernels. It is designed with a pluggable allocator so that the standard lib's allocator may be employed. The default build also includes a stdlib allocator and stream interface. Disable this with --features=no-stdlib. Alternatively, --features=unsafe turns off array bounds checks and memory initialization but provides a safe interface for the caller.  Without adding the --features=unsafe argument, all included code is safe. For compression in addition to this library, download https://github.com/dropbox/rust-brotli ",
+      "licenses": [
+        {
+          "expression": "BSD-3-Clause/MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/dropbox/rust-brotli-decompressor"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/bs58@0.5.1",
       "name": "bs58",
       "version": "0.5.1",
@@ -1184,10 +1312,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/caret@0.10.0",
+      "bom-ref": "pkg:cargo/caret@0.11.0",
       "name": "caret",
-      "version": "0.10.0",
-      "purl": "pkg:cargo/caret@0.10.0",
+      "version": "0.11.0",
+      "purl": "pkg:cargo/caret@0.11.0",
       "scope": "required",
       "description": "Macros for declaring non-exhaustive C-style enumerations, with named members",
       "licenses": [
@@ -1424,6 +1552,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/cipher@0.5.2",
+      "name": "cipher",
+      "version": "0.5.2",
+      "purl": "pkg:cargo/cipher@0.5.2",
+      "scope": "required",
+      "description": "Traits for describing block ciphers and stream ciphers",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/cmake@0.1.58",
       "name": "cmake",
       "version": "0.1.58",
@@ -1439,6 +1591,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/rust-lang/cmake-rs"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cmov@0.5.4",
+      "name": "cmov",
+      "version": "0.5.4",
+      "purl": "pkg:cargo/cmov@0.5.4",
+      "scope": "required",
+      "description": "Conditional move CPU intrinsics which are guaranteed on major platforms (ARM32/ARM64, x86/x86_64,\nRISC-V) to execute in constant-time and not be rewritten as branches by the compiler. Provides\nwrappers for the CMOV family of instructions on x86/x86_64 and CSEL on AArch64, along with a\nportable \"best-effort\" pure Rust fallback implementation.\n",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
         },
         {
           "type": "distribution",
@@ -1496,10 +1672,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/compression-codecs@0.4.38",
+      "bom-ref": "pkg:cargo/compression-codecs@0.4.46",
       "name": "compression-codecs",
-      "version": "0.4.38",
-      "purl": "pkg:cargo/compression-codecs@0.4.38",
+      "version": "0.4.46",
+      "purl": "pkg:cargo/compression-codecs@0.4.46",
       "scope": "required",
       "description": "Adaptors for various compression algorithms.\n",
       "licenses": [
@@ -1520,10 +1696,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/compression-core@0.4.32",
+      "bom-ref": "pkg:cargo/compression-core@0.4.34",
       "name": "compression-core",
-      "version": "0.4.32",
-      "purl": "pkg:cargo/compression-core@0.4.32",
+      "version": "0.4.34",
+      "purl": "pkg:cargo/compression-core@0.4.34",
       "scope": "required",
       "description": "Abstractions for compression algorithms.\n",
       "licenses": [
@@ -1655,6 +1831,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/rust-bakery/cookie-factory"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/cpubits@0.1.1",
+      "name": "cpubits",
+      "version": "0.1.1",
+      "purl": "pkg:cargo/cpubits@0.1.1",
+      "scope": "required",
+      "description": "Compile-time detection heuristics for the optimal word size to use for the\ntarget CPU, which in some cases may differ from its address size a.k.a.\n`target_pointer_width`. Implemented as `macro_rules!`\n",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
         },
         {
           "type": "distribution",
@@ -1856,6 +2056,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/ctr@0.10.1",
+      "name": "ctr",
+      "version": "0.10.1",
+      "purl": "pkg:cargo/ctr@0.10.1",
+      "scope": "required",
+      "description": "CTR block modes of operation",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/block-modes"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/ctr@0.9.2",
       "name": "ctr",
       "version": "0.9.2",
@@ -1871,6 +2095,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/RustCrypto/block-modes"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/ctutils@0.4.4",
+      "name": "ctutils",
+      "version": "0.4.4",
+      "purl": "pkg:cargo/ctutils@0.4.4",
+      "scope": "required",
+      "description": "Constant-time utility library with selection and equality testing support targeting cryptographic\napplications. Supports `const fn` where appropriate. Built on the `cmov` crate which provides\narchitecture-specific predication intrinsics. Heavily inspired by the `subtle` crate.\n",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
         },
         {
           "type": "distribution",
@@ -2288,10 +2536,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/derive-deftly-macros@1.11.3",
+      "bom-ref": "pkg:cargo/derive-deftly-macros@1.12.1",
       "name": "derive-deftly-macros",
-      "version": "1.11.3",
-      "purl": "pkg:cargo/derive-deftly-macros@1.11.3",
+      "version": "1.12.1",
+      "purl": "pkg:cargo/derive-deftly-macros@1.12.1",
       "scope": "required",
       "description": "Macros that implement the derive_deftly crate",
       "licenses": [
@@ -2312,10 +2560,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/derive-deftly@1.11.3",
+      "bom-ref": "pkg:cargo/derive-deftly@1.12.1",
       "name": "derive-deftly",
-      "version": "1.11.3",
-      "purl": "pkg:cargo/derive-deftly@1.11.3",
+      "version": "1.12.1",
+      "purl": "pkg:cargo/derive-deftly@1.12.1",
       "scope": "required",
       "description": "An easy way to write derive() macros",
       "licenses": [
@@ -3056,6 +3304,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/extend@1.2.0",
+      "name": "extend",
+      "version": "1.2.0",
+      "purl": "pkg:cargo/extend@1.2.0",
+      "scope": "required",
+      "description": "Create extensions for types you don't own with extension traits but without the boilerplate.",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/davidpdrsn/extend"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/fallible-iterator@0.3.0",
       "name": "fallible-iterator",
       "version": "0.3.0",
@@ -3368,10 +3640,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/fs-mistrust@0.15.0",
+      "bom-ref": "pkg:cargo/fs-mistrust@0.16.0",
       "name": "fs-mistrust",
-      "version": "0.15.0",
-      "purl": "pkg:cargo/fs-mistrust@0.15.0",
+      "version": "0.16.0",
+      "purl": "pkg:cargo/fs-mistrust@0.16.0",
       "scope": "required",
       "description": "Ensure that files can only be read or written by trusted users",
       "licenses": [
@@ -3416,10 +3688,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/fslock-guard@0.8.0",
+      "bom-ref": "pkg:cargo/fslock-guard@0.9.0",
       "name": "fslock-guard",
-      "version": "0.8.0",
-      "purl": "pkg:cargo/fslock-guard@0.8.0",
+      "version": "0.9.0",
+      "purl": "pkg:cargo/fslock-guard@0.9.0",
       "scope": "required",
       "description": "Wrapper around a lockfile with unlock-on-drop semantics",
       "licenses": [
@@ -3964,6 +4236,54 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/h3-quinn@0.0.10",
+      "name": "h3-quinn",
+      "version": "0.0.10",
+      "purl": "pkg:cargo/h3-quinn@0.0.10",
+      "scope": "required",
+      "description": "QUIC transport implementation based on Quinn.",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/hyperium/h3"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/h3@0.0.8",
+      "name": "h3",
+      "version": "0.0.8",
+      "purl": "pkg:cargo/h3@0.0.8",
+      "scope": "required",
+      "description": "An async HTTP/3 implementation.",
+      "licenses": [
+        {
+          "expression": "MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/hyperium/h3"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/hash32@0.3.1",
       "name": "hash32",
       "version": "0.3.1",
@@ -4088,6 +4408,30 @@
       "name": "hashlink",
       "version": "0.11.1",
       "purl": "pkg:cargo/hashlink@0.11.1",
+      "scope": "required",
+      "description": "HashMap-like containers that hold their key-value pairs in a user controllable order",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/djc/hashlink"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/hashlink@0.12.2",
+      "name": "hashlink",
+      "version": "0.12.2",
+      "purl": "pkg:cargo/hashlink@0.12.2",
       "scope": "required",
       "description": "HashMap-like containers that hold their key-value pairs in a user controllable order",
       "licenses": [
@@ -4804,6 +5148,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/inout@0.2.2",
+      "name": "inout",
+      "version": "0.2.2",
+      "purl": "pkg:cargo/inout@0.2.2",
+      "scope": "required",
+      "description": "Custom reference types for code generic over in-place and buffer-to-buffer modes of operation.",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/utils"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/inventory@0.3.24",
       "name": "inventory",
       "version": "0.3.24",
@@ -4852,21 +5220,21 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/itertools@0.14.0",
-      "name": "itertools",
-      "version": "0.14.0",
-      "purl": "pkg:cargo/itertools@0.14.0",
+      "bom-ref": "pkg:cargo/iprange@0.6.7",
+      "name": "iprange",
+      "version": "0.6.7",
+      "purl": "pkg:cargo/iprange@0.6.7",
       "scope": "required",
-      "description": "Extra iterator adaptors, iterator methods, free functions, and macros.",
+      "description": "A library to manage IP ranges",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "MIT"
         }
       ],
       "externalReferences": [
         {
           "type": "vcs",
-          "url": "https://github.com/rust-itertools/itertools"
+          "url": "https://github.com/sticnarf/iprange-rs"
         },
         {
           "type": "distribution",
@@ -5980,10 +6348,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/oneshot-fused-workaround@0.7.0",
+      "bom-ref": "pkg:cargo/oneshot-fused-workaround@0.8.0",
       "name": "oneshot-fused-workaround",
-      "version": "0.7.0",
-      "purl": "pkg:cargo/oneshot-fused-workaround@0.7.0",
+      "version": "0.8.0",
+      "purl": "pkg:cargo/oneshot-fused-workaround@0.8.0",
       "scope": "required",
       "description": "Fused wrapper for futures::channel::oneshot",
       "licenses": [
@@ -6340,10 +6708,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/phf@0.13.1",
+      "bom-ref": "pkg:cargo/phf@0.14.0",
       "name": "phf",
-      "version": "0.13.1",
-      "purl": "pkg:cargo/phf@0.13.1",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/phf@0.14.0",
       "scope": "required",
       "description": "Runtime support for perfect hash function data structures",
       "licenses": [
@@ -6364,10 +6732,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/phf_generator@0.13.1",
+      "bom-ref": "pkg:cargo/phf_generator@0.14.0",
       "name": "phf_generator",
-      "version": "0.13.1",
-      "purl": "pkg:cargo/phf_generator@0.13.1",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/phf_generator@0.14.0",
       "scope": "required",
       "description": "PHF generation logic",
       "licenses": [
@@ -6388,10 +6756,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/phf_macros@0.13.1",
+      "bom-ref": "pkg:cargo/phf_macros@0.14.0",
       "name": "phf_macros",
-      "version": "0.13.1",
-      "purl": "pkg:cargo/phf_macros@0.13.1",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/phf_macros@0.14.0",
       "scope": "required",
       "description": "Macros to generate types in the phf crate",
       "licenses": [
@@ -6412,10 +6780,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/phf_shared@0.13.1",
+      "bom-ref": "pkg:cargo/phf_shared@0.14.0",
       "name": "phf_shared",
-      "version": "0.13.1",
-      "purl": "pkg:cargo/phf_shared@0.13.1",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/phf_shared@0.14.0",
       "scope": "required",
       "description": "Support code shared by PHF libraries",
       "licenses": [
@@ -6608,6 +6976,30 @@
       "name": "polyval",
       "version": "0.6.2",
       "purl": "pkg:cargo/polyval@0.6.2",
+      "scope": "required",
+      "description": "POLYVAL is a GHASH-like universal hash over GF(2^128) useful for constructing\na Message Authentication Code (MAC)\n",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/universal-hashes"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/polyval@0.7.3",
+      "name": "polyval",
+      "version": "0.7.3",
+      "purl": "pkg:cargo/polyval@0.7.3",
       "scope": "required",
       "description": "POLYVAL is a GHASH-like universal hash over GF(2^128) useful for constructing\na Message Authentication Code (MAC)\n",
       "licenses": [
@@ -6844,10 +7236,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/quinn-proto@0.11.16",
+      "bom-ref": "pkg:cargo/quinn-proto@0.11.19",
       "name": "quinn-proto",
-      "version": "0.11.16",
-      "purl": "pkg:cargo/quinn-proto@0.11.16",
+      "version": "0.11.19",
+      "purl": "pkg:cargo/quinn-proto@0.11.19",
       "scope": "required",
       "description": "State machine for the QUIC transport protocol",
       "licenses": [
@@ -6868,10 +7260,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/quinn-udp@0.5.15",
+      "bom-ref": "pkg:cargo/quinn-udp@0.5.16",
       "name": "quinn-udp",
-      "version": "0.5.15",
-      "purl": "pkg:cargo/quinn-udp@0.5.15",
+      "version": "0.5.16",
+      "purl": "pkg:cargo/quinn-udp@0.5.16",
       "scope": "required",
       "description": "UDP sockets with ECN information for the QUIC transport protocol",
       "licenses": [
@@ -6892,10 +7284,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/quinn@0.11.11",
+      "bom-ref": "pkg:cargo/quinn@0.11.12",
       "name": "quinn",
-      "version": "0.11.11",
-      "purl": "pkg:cargo/quinn@0.11.11",
+      "version": "0.11.12",
+      "purl": "pkg:cargo/quinn@0.11.12",
       "scope": "required",
       "description": "Versatile QUIC transport protocol implementation",
       "licenses": [
@@ -7228,6 +7620,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/rangemap@1.8.0",
+      "name": "rangemap",
+      "version": "1.8.0",
+      "purl": "pkg:cargo/rangemap@1.8.0",
+      "scope": "required",
+      "description": "Map and set data structures whose keys are stored as ranges.\n\nContiguous and overlapping ranges that map to the same value are coalesced into a single range.\n",
+      "licenses": [
+        {
+          "expression": "MIT/Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/jeffparsons/rangemap"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/rcgen@0.14.8",
       "name": "rcgen",
       "version": "0.14.8",
@@ -7243,6 +7659,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/rustls/rcgen"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/rdrand@0.9.0",
+      "name": "rdrand",
+      "version": "0.9.0",
+      "purl": "pkg:cargo/rdrand@0.9.0",
+      "scope": "required",
+      "description": "An implementation of random number generator based on rdrand and rdseed instructions",
+      "licenses": [
+        {
+          "expression": "ISC"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/nagisa/rust_rdrand/"
         },
         {
           "type": "distribution",
@@ -7396,10 +7836,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/retry-error@0.13.0",
+      "bom-ref": "pkg:cargo/retry-error@0.14.0",
       "name": "retry-error",
-      "version": "0.13.0",
-      "purl": "pkg:cargo/retry-error@0.13.0",
+      "version": "0.14.0",
+      "purl": "pkg:cargo/retry-error@0.14.0",
       "scope": "required",
       "description": "An error type for an operation that can fail more than once",
       "licenses": [
@@ -7660,10 +8100,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/rustls-webpki@0.103.15",
+      "bom-ref": "pkg:cargo/rustls-webpki@0.103.16",
       "name": "rustls-webpki",
-      "version": "0.103.15",
-      "purl": "pkg:cargo/rustls-webpki@0.103.15",
+      "version": "0.103.16",
+      "purl": "pkg:cargo/rustls-webpki@0.103.16",
       "scope": "required",
       "description": "Web PKI X.509 Certificate Verification.",
       "licenses": [
@@ -7675,30 +8115,6 @@
         {
           "type": "vcs",
           "url": "https://github.com/rustls/webpki"
-        },
-        {
-          "type": "distribution",
-          "url": "registry+https://github.com/rust-lang/crates.io-index"
-        }
-      ]
-    },
-    {
-      "type": "library",
-      "bom-ref": "pkg:cargo/rustls@0.23.45",
-      "name": "rustls",
-      "version": "0.23.45",
-      "purl": "pkg:cargo/rustls@0.23.45",
-      "scope": "required",
-      "description": "Rustls is a modern TLS library written in Rust.",
-      "licenses": [
-        {
-          "expression": "Apache-2.0 OR ISC OR MIT"
-        }
-      ],
-      "externalReferences": [
-        {
-          "type": "vcs",
-          "url": "https://github.com/rustls/rustls"
         },
         {
           "type": "distribution",
@@ -7756,10 +8172,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/safelog@0.9.0",
+      "bom-ref": "pkg:cargo/safelog@0.10.0",
       "name": "safelog",
-      "version": "0.9.0",
-      "purl": "pkg:cargo/safelog@0.9.0",
+      "version": "0.10.0",
+      "purl": "pkg:cargo/safelog@0.10.0",
       "scope": "required",
       "description": "Conditionally suppress confidential information from logs",
       "licenses": [
@@ -7828,10 +8244,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/saturating-time@0.4.0",
+      "bom-ref": "pkg:cargo/saturating-time@0.5.0",
       "name": "saturating-time",
-      "version": "0.4.0",
-      "purl": "pkg:cargo/saturating-time@0.4.0",
+      "version": "0.5.0",
+      "purl": "pkg:cargo/saturating-time@0.5.0",
       "scope": "required",
       "description": "A trait for limits and saturations on types inside std::time",
       "licenses": [
@@ -7842,7 +8258,7 @@
       "externalReferences": [
         {
           "type": "vcs",
-          "url": "https://codeberg.org/cve/saturating-time"
+          "url": "https://gitlab.torproject.org/tpo/core/arti.git"
         },
         {
           "type": "distribution",
@@ -8668,10 +9084,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/slotmap-careful@0.8.0",
+      "bom-ref": "pkg:cargo/slotmap-careful@0.9.0",
       "name": "slotmap-careful",
-      "version": "0.8.0",
-      "purl": "pkg:cargo/slotmap-careful@0.8.0",
+      "version": "0.9.0",
+      "purl": "pkg:cargo/slotmap-careful@0.9.0",
       "scope": "required",
       "description": "Wrap the slotmap crate and prevent key reuse",
       "licenses": [
@@ -9676,10 +10092,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tokio@1.52.3",
+      "bom-ref": "pkg:cargo/tokio@1.53.3",
       "name": "tokio",
-      "version": "1.52.3",
-      "purl": "pkg:cargo/tokio@1.52.3",
+      "version": "1.53.3",
+      "purl": "pkg:cargo/tokio@1.53.3",
       "scope": "required",
       "description": "An event-driven, non-blocking I/O platform for writing asynchronous I/O\nbacked applications.\n",
       "licenses": [
@@ -9916,10 +10332,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-async-utils@0.44.0",
+      "bom-ref": "pkg:cargo/tor-async-utils@0.47.0",
       "name": "tor-async-utils",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-async-utils@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-async-utils@0.47.0",
       "scope": "required",
       "description": "Async/futures helpers for use with Tor",
       "licenses": [
@@ -9940,10 +10356,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-basic-utils@0.44.0",
+      "bom-ref": "pkg:cargo/tor-basic-utils@0.47.0",
       "name": "tor-basic-utils",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-basic-utils@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-basic-utils@0.47.0",
       "scope": "required",
       "description": "General helpers used by Tor",
       "licenses": [
@@ -9964,10 +10380,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-bytes@0.44.0",
+      "bom-ref": "pkg:cargo/tor-bytes@0.47.0",
       "name": "tor-bytes",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-bytes@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-bytes@0.47.0",
       "scope": "required",
       "description": "Helpers for encoding and decoding byte-orientted data, as used by Tor",
       "licenses": [
@@ -9988,10 +10404,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-cell@0.44.0",
+      "bom-ref": "pkg:cargo/tor-cell@0.47.0",
       "name": "tor-cell",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-cell@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-cell@0.47.0",
       "scope": "required",
       "description": "Encode and decode Tor cells and messages",
       "licenses": [
@@ -10012,10 +10428,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-cert@0.44.0",
+      "bom-ref": "pkg:cargo/tor-cert@0.47.0",
       "name": "tor-cert",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-cert@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-cert@0.47.0",
       "scope": "required",
       "description": "Non-standard certificate formats used by Tor",
       "licenses": [
@@ -10036,10 +10452,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-chanmgr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-chanmgr@0.47.0",
       "name": "tor-chanmgr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-chanmgr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-chanmgr@0.47.0",
       "scope": "required",
       "description": "Manage a set of connections to the Tor network",
       "licenses": [
@@ -10060,10 +10476,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-checkable@0.44.0",
+      "bom-ref": "pkg:cargo/tor-checkable@0.47.0",
       "name": "tor-checkable",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-checkable@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-checkable@0.47.0",
       "scope": "required",
       "description": "Types to ensure that signed or time-bound data is validated before use",
       "licenses": [
@@ -10084,10 +10500,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-circmgr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-circmgr@0.47.0",
       "name": "tor-circmgr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-circmgr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-circmgr@0.47.0",
       "scope": "required",
       "description": "Manage a set of anonymous circuits over the Tor network",
       "licenses": [
@@ -10108,10 +10524,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-config-path@0.44.0",
+      "bom-ref": "pkg:cargo/tor-config-path@0.47.0",
       "name": "tor-config-path",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-config-path@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-config-path@0.47.0",
       "scope": "required",
       "description": "Low-level file path handling for configuration of the Arti Tor implementation",
       "licenses": [
@@ -10132,10 +10548,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-config@0.44.0",
+      "bom-ref": "pkg:cargo/tor-config@0.47.0",
       "name": "tor-config",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-config@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-config@0.47.0",
       "scope": "required",
       "description": "Low-level configuration for the Arti Tor implementation",
       "licenses": [
@@ -10156,10 +10572,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-consdiff@0.44.0",
+      "bom-ref": "pkg:cargo/tor-consdiff@0.47.0",
       "name": "tor-consdiff",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-consdiff@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-consdiff@0.47.0",
       "scope": "required",
       "description": "Handle the consensus-diff format used in the Tor directory protocol",
       "licenses": [
@@ -10180,10 +10596,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-dirclient@0.44.0",
+      "bom-ref": "pkg:cargo/tor-dirclient@0.47.0",
       "name": "tor-dirclient",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-dirclient@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-dirclient@0.47.0",
       "scope": "required",
       "description": "Downloads specific Tor network directory objects over the Tor network",
       "licenses": [
@@ -10204,10 +10620,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-dircommon@0.44.0",
+      "bom-ref": "pkg:cargo/tor-dircommon@0.47.0",
       "name": "tor-dircommon",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-dircommon@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-dircommon@0.47.0",
       "scope": "required",
       "description": "Common primitives for the Tor directory specification",
       "licenses": [
@@ -10228,10 +10644,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-dirmgr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-dirmgr@0.47.0",
       "name": "tor-dirmgr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-dirmgr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-dirmgr@0.47.0",
       "scope": "required",
       "description": "Bootstrap and update an accurate Tor network directory",
       "licenses": [
@@ -10252,10 +10668,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-error@0.44.0",
+      "bom-ref": "pkg:cargo/tor-error@0.47.0",
       "name": "tor-error",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-error@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-error@0.47.0",
       "scope": "required",
       "description": "Provides the unified type-erased error type returned by many (esp. high-level) Tor APIs.",
       "licenses": [
@@ -10276,10 +10692,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-general-addr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-general-addr@0.47.0",
       "name": "tor-general-addr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-general-addr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-general-addr@0.47.0",
       "scope": "required",
       "description": "Generalized socket address type used by Tor",
       "licenses": [
@@ -10300,10 +10716,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-guardmgr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-guardmgr@0.47.0",
       "name": "tor-guardmgr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-guardmgr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-guardmgr@0.47.0",
       "scope": "required",
       "description": "Manage a set of guard relays for Tor network",
       "licenses": [
@@ -10324,10 +10740,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-hsclient@0.44.0",
+      "bom-ref": "pkg:cargo/tor-hsclient@0.47.0",
       "name": "tor-hsclient",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-hsclient@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-hsclient@0.47.0",
       "scope": "required",
       "description": "Arti's implementation of an onion service client",
       "licenses": [
@@ -10348,10 +10764,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-hscrypto@0.44.0",
+      "bom-ref": "pkg:cargo/tor-hscrypto@0.47.0",
       "name": "tor-hscrypto",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-hscrypto@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-hscrypto@0.47.0",
       "scope": "required",
       "description": "Basic onion service cryptography types used by Aerti",
       "licenses": [
@@ -10372,10 +10788,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-hsservice@0.44.0",
+      "bom-ref": "pkg:cargo/tor-hsservice@0.47.0",
       "name": "tor-hsservice",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-hsservice@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-hsservice@0.47.0",
       "scope": "required",
       "description": "Arti's implementation of an onion service provider",
       "licenses": [
@@ -10396,10 +10812,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-key-forge@0.44.0",
+      "bom-ref": "pkg:cargo/tor-key-forge@0.47.0",
       "name": "tor-key-forge",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-key-forge@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-key-forge@0.47.0",
       "scope": "required",
       "description": "Low level cryptography wrappers used by Tor",
       "licenses": [
@@ -10420,10 +10836,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-keymgr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-keymgr@0.47.0",
       "name": "tor-keymgr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-keymgr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-keymgr@0.47.0",
       "scope": "required",
       "description": "Key management for the Arti Tor implementation",
       "licenses": [
@@ -10444,10 +10860,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-linkspec@0.44.0",
+      "bom-ref": "pkg:cargo/tor-linkspec@0.47.0",
       "name": "tor-linkspec",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-linkspec@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-linkspec@0.47.0",
       "scope": "required",
       "description": "Parts of the Tor protocol that indicate specific relays on the network",
       "licenses": [
@@ -10468,10 +10884,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-llcrypto@0.44.0",
+      "bom-ref": "pkg:cargo/tor-llcrypto@0.47.0",
       "name": "tor-llcrypto",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-llcrypto@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-llcrypto@0.47.0",
       "scope": "required",
       "description": "Low level cryptography wrappers used by Tor",
       "licenses": [
@@ -10492,10 +10908,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-log-ratelim@0.44.0",
+      "bom-ref": "pkg:cargo/tor-log-ratelim@0.47.0",
       "name": "tor-log-ratelim",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-log-ratelim@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-log-ratelim@0.47.0",
       "scope": "required",
       "description": "Facility for rate-limiting log messages in Arti",
       "licenses": [
@@ -10516,10 +10932,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-memquota-cost@0.44.0",
+      "bom-ref": "pkg:cargo/tor-memquota-cost@0.47.0",
       "name": "tor-memquota-cost",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-memquota-cost@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-memquota-cost@0.47.0",
       "scope": "required",
       "description": "Low-level memory tracking traits, for use by Arti",
       "licenses": [
@@ -10540,10 +10956,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-memquota@0.44.0",
+      "bom-ref": "pkg:cargo/tor-memquota@0.47.0",
       "name": "tor-memquota",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-memquota@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-memquota@0.47.0",
       "scope": "required",
       "description": "Memory use tracking and quota utilities, used by Tor software",
       "licenses": [
@@ -10564,10 +10980,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-netdir@0.44.0",
+      "bom-ref": "pkg:cargo/tor-netdir@0.47.0",
       "name": "tor-netdir",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-netdir@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-netdir@0.47.0",
       "scope": "required",
       "description": "Types to represent and use a Tor network directory",
       "licenses": [
@@ -10588,10 +11004,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-netdoc@0.44.0",
+      "bom-ref": "pkg:cargo/tor-netdoc@0.47.0",
       "name": "tor-netdoc",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-netdoc@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-netdoc@0.47.0",
       "scope": "required",
       "description": "Network document formats used with the Tor protocols.",
       "licenses": [
@@ -10612,10 +11028,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-persist@0.44.0",
+      "bom-ref": "pkg:cargo/tor-persist@0.47.0",
       "name": "tor-persist",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-persist@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-persist@0.47.0",
       "scope": "required",
       "description": "Persistent state for the Arti Tor implementation",
       "licenses": [
@@ -10636,10 +11052,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-proto@0.44.0",
+      "bom-ref": "pkg:cargo/tor-proto@0.47.0",
       "name": "tor-proto",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-proto@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-proto@0.47.0",
       "scope": "required",
       "description": "Asynchronous client-side implementation of the central Tor network protocols",
       "licenses": [
@@ -10660,10 +11076,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-protover@0.44.0",
+      "bom-ref": "pkg:cargo/tor-protover@0.47.0",
       "name": "tor-protover",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-protover@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-protover@0.47.0",
       "scope": "required",
       "description": "Implementation for Tor's subprotocol versioning",
       "licenses": [
@@ -10684,10 +11100,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-ptmgr@0.44.0",
+      "bom-ref": "pkg:cargo/tor-ptmgr@0.47.0",
       "name": "tor-ptmgr",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-ptmgr@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-ptmgr@0.47.0",
       "scope": "required",
       "description": "Manage a set of pluggable transports to circumvent censorship",
       "licenses": [
@@ -10708,10 +11124,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-relay-selection@0.44.0",
+      "bom-ref": "pkg:cargo/tor-relay-selection@0.47.0",
       "name": "tor-relay-selection",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-relay-selection@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-relay-selection@0.47.0",
       "scope": "required",
       "description": "Logic to select Tor relays for specific purposes",
       "licenses": [
@@ -10732,10 +11148,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-rtcompat@0.44.0",
+      "bom-ref": "pkg:cargo/tor-rtcompat@0.47.0",
       "name": "tor-rtcompat",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-rtcompat@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-rtcompat@0.47.0",
       "scope": "required",
       "description": "Compatibility layer for asynchronous runtimes, used by Tor",
       "licenses": [
@@ -10756,10 +11172,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-rtmock@0.44.0",
+      "bom-ref": "pkg:cargo/tor-rtmock@0.47.0",
       "name": "tor-rtmock",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-rtmock@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-rtmock@0.47.0",
       "scope": "required",
       "description": "Testing mock support for tor-rtcomapt",
       "licenses": [
@@ -10780,10 +11196,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-socksproto@0.44.0",
+      "bom-ref": "pkg:cargo/tor-socksproto@0.47.0",
       "name": "tor-socksproto",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-socksproto@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-socksproto@0.47.0",
       "scope": "required",
       "description": "Encode and decode the SOCKS protocol, as extended in Tor",
       "licenses": [
@@ -10804,10 +11220,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/tor-units@0.44.0",
+      "bom-ref": "pkg:cargo/tor-units@0.47.0",
       "name": "tor-units",
-      "version": "0.44.0",
-      "purl": "pkg:cargo/tor-units@0.44.0",
+      "version": "0.47.0",
+      "purl": "pkg:cargo/tor-units@0.47.0",
       "scope": "required",
       "description": "Provides macros for types which are constrained within a range, ensuring invalid values are unrepresentable.",
       "licenses": [
@@ -11212,6 +11628,30 @@
     },
     {
       "type": "library",
+      "bom-ref": "pkg:cargo/universal-hash@0.6.1",
+      "name": "universal-hash",
+      "version": "0.6.1",
+      "purl": "pkg:cargo/universal-hash@0.6.1",
+      "scope": "required",
+      "description": "Traits which describe the functionality of universal hash functions (UHFs)",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/RustCrypto/traits"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
       "bom-ref": "pkg:cargo/untrusted@0.7.1",
       "name": "untrusted",
       "version": "0.7.1",
@@ -11452,10 +11892,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/weak-table@0.3.2",
+      "bom-ref": "pkg:cargo/weak-table@0.4.0",
       "name": "weak-table",
-      "version": "0.3.2",
-      "purl": "pkg:cargo/weak-table@0.3.2",
+      "version": "0.4.0",
+      "purl": "pkg:cargo/weak-table@0.4.0",
       "scope": "required",
       "description": "Weak hash maps and sets",
       "licenses": [
@@ -11476,10 +11916,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/web-time-compat@0.2.0",
+      "bom-ref": "pkg:cargo/web-time-compat@0.3.0",
       "name": "web-time-compat",
-      "version": "0.2.0",
-      "purl": "pkg:cargo/web-time-compat@0.2.0",
+      "version": "0.3.0",
+      "purl": "pkg:cargo/web-time-compat@0.3.0",
       "scope": "required",
       "description": "Compatibility layer for web-time",
       "licenses": [
@@ -11500,10 +11940,10 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/webpki-roots@1.0.8",
+      "bom-ref": "pkg:cargo/webpki-roots@1.0.10",
       "name": "webpki-roots",
-      "version": "1.0.8",
-      "purl": "pkg:cargo/webpki-roots@1.0.8",
+      "version": "1.0.10",
+      "purl": "pkg:cargo/webpki-roots@1.0.10",
       "scope": "required",
       "description": "Mozilla's CA root certificates for use with webpki",
       "licenses": [
@@ -11683,6 +12123,30 @@
         {
           "type": "vcs",
           "url": "https://github.com/DoumanAsh/xxhash-rust"
+        },
+        {
+          "type": "distribution",
+          "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:cargo/yaml-rust2@0.13.0",
+      "name": "yaml-rust2",
+      "version": "0.13.0",
+      "purl": "pkg:cargo/yaml-rust2@0.13.0",
+      "scope": "required",
+      "description": "A fully YAML 1.2 compliant YAML parser",
+      "licenses": [
+        {
+          "expression": "MIT OR Apache-2.0"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/Ethiraric/yaml-rust2"
         },
         {
           "type": "distribution",
@@ -12004,15 +12468,15 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/zstd-safe@7.2.4",
+      "bom-ref": "pkg:cargo/zstd-safe@8.2.0",
       "name": "zstd-safe",
-      "version": "7.2.4",
-      "purl": "pkg:cargo/zstd-safe@7.2.4",
+      "version": "8.2.0",
+      "purl": "pkg:cargo/zstd-safe@8.2.0",
       "scope": "required",
       "description": "Safe low-level bindings for the zstd compression library.",
       "licenses": [
         {
-          "expression": "MIT OR Apache-2.0"
+          "expression": "BSD-3-Clause"
         }
       ],
       "externalReferences": [
@@ -12028,15 +12492,15 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/zstd-sys@2.0.16+zstd.1.5.7",
+      "bom-ref": "pkg:cargo/zstd-sys@2.1.2+zstd.1.5.7",
       "name": "zstd-sys",
-      "version": "2.0.16+zstd.1.5.7",
-      "purl": "pkg:cargo/zstd-sys@2.0.16+zstd.1.5.7",
+      "version": "2.1.2+zstd.1.5.7",
+      "purl": "pkg:cargo/zstd-sys@2.1.2+zstd.1.5.7",
       "scope": "required",
       "description": "Low-level bindings for the zstd compression library.",
       "licenses": [
         {
-          "expression": "MIT/Apache-2.0"
+          "expression": "BSD-3-Clause"
         }
       ],
       "externalReferences": [
@@ -12052,15 +12516,15 @@
     },
     {
       "type": "library",
-      "bom-ref": "pkg:cargo/zstd@0.13.3",
+      "bom-ref": "pkg:cargo/zstd@0.14.3",
       "name": "zstd",
-      "version": "0.13.3",
-      "purl": "pkg:cargo/zstd@0.13.3",
+      "version": "0.14.3",
+      "purl": "pkg:cargo/zstd@0.14.3",
       "scope": "required",
       "description": "Binding for the zstd compression library.",
       "licenses": [
         {
-          "expression": "MIT"
+          "expression": "BSD-3-Clause"
         }
       ],
       "externalReferences": [
@@ -12071,6 +12535,60 @@
         {
           "type": "distribution",
           "url": "registry+https://github.com/rust-lang/crates.io-index"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519",
+      "name": "rustls",
+      "version": "0.23.46",
+      "purl": "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519",
+      "scope": "required",
+      "properties": [
+        {
+          "name": "foxhole:source-kind",
+          "value": "vendored-modified"
+        },
+        {
+          "name": "foxhole:source-fork-metadata-sha256",
+          "value": "ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
+        },
+        {
+          "name": "foxhole:upstream-cargo-purl",
+          "value": "pkg:cargo/rustls@0.23.46"
+        },
+        {
+          "name": "foxhole:upstream-crate-sha256",
+          "value": "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
+        },
+        {
+          "name": "foxhole:source-patch-sha256",
+          "value": "5deee21f5349fdacb350bc48ac2388a4b3a0fff988aec6b516294b6ae8e5921a"
+        },
+        {
+          "name": "foxhole:vendored-tree-sha256",
+          "value": "8a66f27df4d838ae63946d664677dfda79c55f5327bf6d35f3a465340b641e22"
+        },
+        {
+          "name": "cargo:source-manifest",
+          "value": "vendor/rustls/Cargo.toml"
+        },
+        {
+          "name": "cargo:source-revision",
+          "value": "543efe47cb002af1aa768b9c482a2adc79b323f1"
+        }
+      ],
+      "description": "Rustls is a modern TLS library written in Rust.",
+      "licenses": [
+        {
+          "expression": "Apache-2.0 OR ISC OR MIT"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rustls/rustls"
         }
       ]
     }
@@ -12103,7 +12621,15 @@
       "dependsOn": [
         "pkg:cargo/cfg-if@1.0.4",
         "pkg:cargo/cipher@0.4.4",
-        "pkg:cargo/cpufeatures@0.2.17",
+        "pkg:cargo/cpufeatures@0.2.17"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/aes@0.9.3",
+      "dependsOn": [
+        "pkg:cargo/cipher@0.5.2",
+        "pkg:cargo/cpubits@0.1.1",
+        "pkg:cargo/cpufeatures@0.3.0",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
@@ -12111,6 +12637,16 @@
       "ref": "pkg:cargo/aho-corasick@1.1.4",
       "dependsOn": [
         "pkg:cargo/memchr@2.8.3"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/alloc-no-stdlib@2.0.4",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/alloc-stdlib@0.2.4",
+      "dependsOn": [
+        "pkg:cargo/alloc-no-stdlib@2.0.4"
       ]
     },
     {
@@ -12163,6 +12699,10 @@
       ]
     },
     {
+      "ref": "pkg:cargo/arraydeque@0.5.1",
+      "dependsOn": []
+    },
+    {
       "ref": "pkg:cargo/arrayref@0.3.9",
       "dependsOn": []
     },
@@ -12171,15 +12711,15 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/arti-client@0.44.0",
+      "ref": "pkg:cargo/arti-client@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/fs-mistrust@0.15.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/hostname-validator@1.1.1",
         "pkg:cargo/humantime-serde@1.1.1",
@@ -12188,38 +12728,38 @@
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/tempfile@3.27.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/time@0.3.53",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-chanmgr@0.44.0",
-        "pkg:cargo/tor-circmgr@0.44.0",
-        "pkg:cargo/tor-config-path@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-dircommon@0.44.0",
-        "pkg:cargo/tor-dirmgr@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-guardmgr@0.44.0",
-        "pkg:cargo/tor-hsclient@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-hsservice@0.44.0",
-        "pkg:cargo/tor-keymgr@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-ptmgr@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-chanmgr@0.47.0",
+        "pkg:cargo/tor-circmgr@0.47.0",
+        "pkg:cargo/tor-config-path@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-dircommon@0.47.0",
+        "pkg:cargo/tor-dirmgr@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-guardmgr@0.47.0",
+        "pkg:cargo/tor-hsclient@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-hsservice@0.47.0",
+        "pkg:cargo/tor-keymgr@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-ptmgr@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
@@ -12263,8 +12803,8 @@
     {
       "ref": "pkg:cargo/async-compression@0.4.42",
       "dependsOn": [
-        "pkg:cargo/compression-codecs@0.4.38",
-        "pkg:cargo/compression-core@0.4.32",
+        "pkg:cargo/compression-codecs@0.4.46",
+        "pkg:cargo/compression-core@0.4.34",
         "pkg:cargo/futures-io@0.3.32",
         "pkg:cargo/pin-project-lite@0.2.17"
       ]
@@ -12286,7 +12826,7 @@
         "pkg:cargo/futures-util@0.3.32",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/rustc_version@0.4.1",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
@@ -12404,7 +12944,15 @@
     {
       "ref": "pkg:cargo/block-buffer@0.12.1",
       "dependsOn": [
-        "pkg:cargo/hybrid-array@0.4.13"
+        "pkg:cargo/hybrid-array@0.4.13",
+        "pkg:cargo/zeroize@1.9.0"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/brotli-decompressor@5.0.3",
+      "dependsOn": [
+        "pkg:cargo/alloc-no-stdlib@2.0.4",
+        "pkg:cargo/alloc-stdlib@0.2.4"
       ]
     },
     {
@@ -12438,7 +12986,7 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/caret@0.10.0",
+      "ref": "pkg:cargo/caret@0.11.0",
       "dependsOn": []
     },
     {
@@ -12503,10 +13051,23 @@
       ]
     },
     {
+      "ref": "pkg:cargo/cipher@0.5.2",
+      "dependsOn": [
+        "pkg:cargo/block-buffer@0.12.1",
+        "pkg:cargo/crypto-common@0.2.2",
+        "pkg:cargo/inout@0.2.2",
+        "pkg:cargo/zeroize@1.9.0"
+      ]
+    },
+    {
       "ref": "pkg:cargo/cmake@0.1.58",
       "dependsOn": [
         "pkg:cargo/cc@1.2.66"
       ]
+    },
+    {
+      "ref": "pkg:cargo/cmov@0.5.4",
+      "dependsOn": []
     },
     {
       "ref": "pkg:cargo/coarsetime@0.1.37",
@@ -12522,17 +13083,17 @@
       ]
     },
     {
-      "ref": "pkg:cargo/compression-codecs@0.4.38",
+      "ref": "pkg:cargo/compression-codecs@0.4.46",
       "dependsOn": [
-        "pkg:cargo/compression-core@0.4.32",
+        "pkg:cargo/compression-core@0.4.34",
         "pkg:cargo/flate2@1.1.9",
         "pkg:cargo/liblzma@0.4.7",
-        "pkg:cargo/zstd-safe@7.2.4",
-        "pkg:cargo/zstd@0.13.3"
+        "pkg:cargo/zstd-safe@8.2.0",
+        "pkg:cargo/zstd@0.14.3"
       ]
     },
     {
-      "ref": "pkg:cargo/compression-core@0.4.32",
+      "ref": "pkg:cargo/compression-core@0.4.34",
       "dependsOn": []
     },
     {
@@ -12558,6 +13119,10 @@
       "dependsOn": [
         "pkg:cargo/futures@0.3.32"
       ]
+    },
+    {
+      "ref": "pkg:cargo/cpubits@0.1.1",
+      "dependsOn": []
     },
     {
       "ref": "pkg:cargo/cpufeatures@0.2.17",
@@ -12611,9 +13176,21 @@
       ]
     },
     {
+      "ref": "pkg:cargo/ctr@0.10.1",
+      "dependsOn": [
+        "pkg:cargo/cipher@0.5.2"
+      ]
+    },
+    {
       "ref": "pkg:cargo/ctr@0.9.2",
       "dependsOn": [
         "pkg:cargo/cipher@0.4.4"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/ctutils@0.4.4",
+      "dependsOn": [
+        "pkg:cargo/cmov@0.5.4"
       ]
     },
     {
@@ -12755,7 +13332,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/derive-deftly-macros@1.11.3",
+      "ref": "pkg:cargo/derive-deftly-macros@1.12.1",
       "dependsOn": [
         "pkg:cargo/heck@0.5.0",
         "pkg:cargo/indexmap@2.14.0",
@@ -12771,9 +13348,9 @@
       ]
     },
     {
-      "ref": "pkg:cargo/derive-deftly@1.11.3",
+      "ref": "pkg:cargo/derive-deftly@1.12.1",
       "dependsOn": [
-        "pkg:cargo/derive-deftly-macros@1.11.3",
+        "pkg:cargo/derive-deftly-macros@1.12.1",
         "pkg:cargo/heck@0.5.0"
       ]
     },
@@ -13004,6 +13581,14 @@
       ]
     },
     {
+      "ref": "pkg:cargo/extend@1.2.0",
+      "dependsOn": [
+        "pkg:cargo/proc-macro2@1.0.106",
+        "pkg:cargo/quote@1.0.46",
+        "pkg:cargo/syn@2.0.118"
+      ]
+    },
+    {
       "ref": "pkg:cargo/fallible-iterator@0.3.0",
       "dependsOn": []
     },
@@ -13072,16 +13657,16 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-android@0.0.6",
+      "ref": "pkg:cargo/foxcore-android@1.0.0",
       "dependsOn": [
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-link@0.0.6",
-        "pkg:cargo/foxcore-runtime@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-link@1.0.0",
+        "pkg:cargo/foxcore-runtime@1.0.0",
         "pkg:cargo/jni@0.21.1",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/log@0.4.33",
-        "pkg:cargo/proto-reality@0.0.6",
+        "pkg:cargo/proto-reality@1.0.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/sha2@0.10.9",
@@ -13089,7 +13674,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-api@0.0.6",
+      "ref": "pkg:cargo/foxcore-api@1.0.0",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/ipnet@2.12.0",
@@ -13101,85 +13686,105 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-component@0.0.6",
+      "ref": "pkg:cargo/foxcore-cli@1.0.0",
+      "dependsOn": [
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-dns@1.0.0",
+        "pkg:cargo/foxcore-link@1.0.0",
+        "pkg:cargo/foxcore-runtime@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
+        "pkg:cargo/foxcore-tun@1.0.0",
+        "pkg:cargo/getrandom@0.3.4",
+        "pkg:cargo/libc@0.2.186",
+        "pkg:cargo/serde@1.0.228",
+        "pkg:cargo/serde_json@1.0.150",
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/zeroize@1.9.0"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/foxcore-component@1.0.0",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-relay@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-relay@1.0.0",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-dialer@0.0.6",
+      "ref": "pkg:cargo/foxcore-dialer@1.0.0",
       "dependsOn": [
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-dns@0.0.6",
+      "ref": "pkg:cargo/foxcore-dns@1.0.0",
       "dependsOn": [
         "pkg:cargo/ipnet@2.12.0"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-link@0.0.6",
+      "ref": "pkg:cargo/foxcore-link@1.0.0",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
-        "pkg:cargo/foxcore-api@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/ipnet@2.12.0",
         "pkg:cargo/percent-encoding@2.3.2",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/url@2.5.8"
+        "pkg:cargo/url@2.5.8",
+        "pkg:cargo/yaml-rust2@0.13.0"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-outbound@0.0.6",
+      "ref": "pkg:cargo/foxcore-outbound@1.0.0",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/ipnet@2.12.0",
-        "pkg:cargo/proto-anytls@0.0.6",
-        "pkg:cargo/proto-http@0.0.6",
-        "pkg:cargo/proto-hysteria2@0.0.6",
-        "pkg:cargo/proto-i2p@0.0.6",
-        "pkg:cargo/proto-naive@0.0.6",
-        "pkg:cargo/proto-shadowsocks@0.0.6",
-        "pkg:cargo/proto-shadowtls@0.0.6",
-        "pkg:cargo/proto-socks@0.0.6",
-        "pkg:cargo/proto-tor@0.0.6",
-        "pkg:cargo/proto-trojan@0.0.6",
-        "pkg:cargo/proto-tuic@0.0.6",
-        "pkg:cargo/proto-vless@0.0.6",
-        "pkg:cargo/proto-vmess@0.0.6",
-        "pkg:cargo/proto-wireguard@0.0.6",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/proto-anytls@1.0.0",
+        "pkg:cargo/proto-http@1.0.0",
+        "pkg:cargo/proto-hysteria2@1.0.0",
+        "pkg:cargo/proto-i2p@1.0.0",
+        "pkg:cargo/proto-naive@1.0.0",
+        "pkg:cargo/proto-shadowsocks@1.0.0",
+        "pkg:cargo/proto-shadowtls@1.0.0",
+        "pkg:cargo/proto-socks@1.0.0",
+        "pkg:cargo/proto-tor@1.0.0",
+        "pkg:cargo/proto-trojan@1.0.0",
+        "pkg:cargo/proto-tuic@1.0.0",
+        "pkg:cargo/proto-vless@1.0.0",
+        "pkg:cargo/proto-vmess@1.0.0",
+        "pkg:cargo/proto-wireguard@1.0.0",
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-relay@0.0.6",
+      "ref": "pkg:cargo/foxcore-relay@1.0.0",
       "dependsOn": [
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-route@0.0.6",
+      "ref": "pkg:cargo/foxcore-route@1.0.0",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.18.1",
-        "pkg:cargo/foxcore-api@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
         "pkg:cargo/fst@0.4.7",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
@@ -13188,27 +13793,34 @@
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-runtime@0.0.6",
+      "ref": "pkg:cargo/foxcore-runtime@1.0.0",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-component@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-outbound@0.0.6",
-        "pkg:cargo/foxcore-relay@0.0.6",
-        "pkg:cargo/foxcore-route@0.0.6",
-        "pkg:cargo/foxcore-share@0.0.6",
-        "pkg:cargo/foxcore-trafficmap@0.0.6",
-        "pkg:cargo/foxcore-tun@0.0.6",
+        "pkg:cargo/bytes@1.12.1",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-component@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-dns@1.0.0",
+        "pkg:cargo/foxcore-outbound@1.0.0",
+        "pkg:cargo/foxcore-relay@1.0.0",
+        "pkg:cargo/foxcore-route@1.0.0",
+        "pkg:cargo/foxcore-share@1.0.0",
+        "pkg:cargo/foxcore-trafficmap@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
+        "pkg:cargo/foxcore-tun@1.0.0",
+        "pkg:cargo/getrandom@0.3.4",
+        "pkg:cargo/h2@0.4.18",
+        "pkg:cargo/http@1.4.2",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/url@2.5.8"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-share@0.0.6",
+      "ref": "pkg:cargo/foxcore-share@1.0.0",
       "dependsOn": [
         "pkg:cargo/argon2@0.5.3",
         "pkg:cargo/base64@0.22.1",
@@ -13222,100 +13834,105 @@
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-testkit@0.0.6",
+      "ref": "pkg:cargo/foxcore-testkit@1.0.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-component@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-dns@0.0.6",
-        "pkg:cargo/foxcore-link@0.0.6",
-        "pkg:cargo/foxcore-outbound@0.0.6",
-        "pkg:cargo/foxcore-relay@0.0.6",
-        "pkg:cargo/foxcore-route@0.0.6",
-        "pkg:cargo/foxcore-runtime@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
-        "pkg:cargo/foxcore-tun@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-component@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-dns@1.0.0",
+        "pkg:cargo/foxcore-link@1.0.0",
+        "pkg:cargo/foxcore-outbound@1.0.0",
+        "pkg:cargo/foxcore-relay@1.0.0",
+        "pkg:cargo/foxcore-route@1.0.0",
+        "pkg:cargo/foxcore-runtime@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
+        "pkg:cargo/foxcore-tun@1.0.0",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-trafficmap@0.0.6",
+      "ref": "pkg:cargo/foxcore-trafficmap@1.0.0",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
-        "pkg:cargo/foxcore-api@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-transport@0.0.6",
+      "ref": "pkg:cargo/foxcore-transport@1.0.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/aws-lc-rs@1.18.1",
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dns@1.0.0",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/h2@0.4.18",
+        "pkg:cargo/h3-quinn@0.0.10",
+        "pkg:cargo/h3@0.0.8",
         "pkg:cargo/http@1.4.2",
+        "pkg:cargo/quinn@0.11.12",
         "pkg:cargo/rustls-pki-types@1.15.0",
-        "pkg:cargo/rustls@0.23.45",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-rustls@0.26.4",
         "pkg:cargo/tokio-tungstenite@0.30.0",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
-        "pkg:cargo/webpki-roots@1.0.8",
-        "pkg:cargo/x509-parser@0.18.1"
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/webpki-roots@1.0.10",
+        "pkg:cargo/x509-parser@0.18.1",
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
-      "ref": "pkg:cargo/foxcore-tun@0.0.6",
+      "ref": "pkg:cargo/foxcore-tun@1.0.0",
       "dependsOn": [
         "pkg:cargo/arc-swap@1.9.2",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/etherparse@0.19.0",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-dns@0.0.6",
-        "pkg:cargo/foxcore-outbound@0.0.6",
-        "pkg:cargo/foxcore-relay@0.0.6",
-        "pkg:cargo/foxcore-route@0.0.6",
-        "pkg:cargo/foxcore-trafficmap@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-dns@1.0.0",
+        "pkg:cargo/foxcore-outbound@1.0.0",
+        "pkg:cargo/foxcore-relay@1.0.0",
+        "pkg:cargo/foxcore-route@1.0.0",
+        "pkg:cargo/foxcore-trafficmap@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/log@0.4.33",
         "pkg:cargo/parking_lot@0.12.5",
-        "pkg:cargo/proto-wireguard@0.0.6",
+        "pkg:cargo/proto-wireguard@1.0.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/smoltcp@0.14.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/zerocopy@0.8.54"
       ]
     },
     {
-      "ref": "pkg:cargo/fs-mistrust@0.15.0",
+      "ref": "pkg:cargo/fs-mistrust@0.16.0",
       "dependsOn": [
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/dirs@6.0.0",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/thiserror@2.0.18",
@@ -13328,7 +13945,7 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/fslock-guard@0.8.0",
+      "ref": "pkg:cargo/fslock-guard@0.9.0",
       "dependsOn": [
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/thiserror@2.0.18"
@@ -13378,7 +13995,7 @@
       "dependsOn": [
         "pkg:cargo/futures-io@0.3.32",
         "pkg:cargo/rustls-pki-types@1.15.0",
-        "pkg:cargo/rustls@0.23.45"
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
@@ -13493,8 +14110,30 @@
         "pkg:cargo/indexmap@2.14.0",
         "pkg:cargo/slab@0.4.12",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/tracing@0.1.44"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/h3-quinn@0.0.10",
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.1",
+        "pkg:cargo/futures@0.3.32",
+        "pkg:cargo/h3@0.0.8",
+        "pkg:cargo/quinn@0.11.12",
+        "pkg:cargo/tokio-util@0.7.18",
+        "pkg:cargo/tokio@1.53.3"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/h3@0.0.8",
+      "dependsOn": [
+        "pkg:cargo/bytes@1.12.1",
+        "pkg:cargo/fastrand@2.4.1",
+        "pkg:cargo/futures-util@0.3.32",
+        "pkg:cargo/http@1.4.2",
+        "pkg:cargo/pin-project-lite@0.2.17",
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
@@ -13521,12 +14160,20 @@
     },
     {
       "ref": "pkg:cargo/hashbrown@0.17.1",
-      "dependsOn": []
+      "dependsOn": [
+        "pkg:cargo/foldhash@0.2.0"
+      ]
     },
     {
       "ref": "pkg:cargo/hashlink@0.11.1",
       "dependsOn": [
         "pkg:cargo/hashbrown@0.16.1"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/hashlink@0.12.2",
+      "dependsOn": [
+        "pkg:cargo/hashbrown@0.17.1"
       ]
     },
     {
@@ -13589,7 +14236,8 @@
     {
       "ref": "pkg:cargo/hybrid-array@0.4.13",
       "dependsOn": [
-        "pkg:cargo/typenum@1.20.1"
+        "pkg:cargo/typenum@1.20.1",
+        "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
@@ -13724,6 +14372,12 @@
       ]
     },
     {
+      "ref": "pkg:cargo/inout@0.2.2",
+      "dependsOn": [
+        "pkg:cargo/hybrid-array@0.4.13"
+      ]
+    },
+    {
       "ref": "pkg:cargo/inventory@0.3.24",
       "dependsOn": []
     },
@@ -13734,9 +14388,9 @@
       ]
     },
     {
-      "ref": "pkg:cargo/itertools@0.14.0",
+      "ref": "pkg:cargo/iprange@0.6.7",
       "dependsOn": [
-        "pkg:cargo/either@1.16.0"
+        "pkg:cargo/ipnet@2.12.0"
       ]
     },
     {
@@ -14025,7 +14679,7 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/oneshot-fused-workaround@0.7.0",
+      "ref": "pkg:cargo/oneshot-fused-workaround@0.8.0",
       "dependsOn": [
         "pkg:cargo/futures@0.3.32"
       ]
@@ -14121,32 +14775,32 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/phf@0.13.1",
+      "ref": "pkg:cargo/phf@0.14.0",
       "dependsOn": [
-        "pkg:cargo/phf_macros@0.13.1",
-        "pkg:cargo/phf_shared@0.13.1",
+        "pkg:cargo/phf_macros@0.14.0",
+        "pkg:cargo/phf_shared@0.14.0",
         "pkg:cargo/serde@1.0.228"
       ]
     },
     {
-      "ref": "pkg:cargo/phf_generator@0.13.1",
+      "ref": "pkg:cargo/phf_generator@0.14.0",
       "dependsOn": [
         "pkg:cargo/fastrand@2.4.1",
-        "pkg:cargo/phf_shared@0.13.1"
+        "pkg:cargo/phf_shared@0.14.0"
       ]
     },
     {
-      "ref": "pkg:cargo/phf_macros@0.13.1",
+      "ref": "pkg:cargo/phf_macros@0.14.0",
       "dependsOn": [
-        "pkg:cargo/phf_generator@0.13.1",
-        "pkg:cargo/phf_shared@0.13.1",
+        "pkg:cargo/phf_generator@0.14.0",
+        "pkg:cargo/phf_shared@0.14.0",
         "pkg:cargo/proc-macro2@1.0.106",
         "pkg:cargo/quote@1.0.46",
         "pkg:cargo/syn@2.0.118"
       ]
     },
     {
-      "ref": "pkg:cargo/phf_shared@0.13.1",
+      "ref": "pkg:cargo/phf_shared@0.14.0",
       "dependsOn": [
         "pkg:cargo/siphasher@1.0.3"
       ]
@@ -14205,6 +14859,14 @@
       ]
     },
     {
+      "ref": "pkg:cargo/polyval@0.7.3",
+      "dependsOn": [
+        "pkg:cargo/cpubits@0.1.1",
+        "pkg:cargo/cpufeatures@0.3.0",
+        "pkg:cargo/universal-hash@0.6.1"
+      ]
+    },
+    {
       "ref": "pkg:cargo/postage@0.5.0",
       "dependsOn": [
         "pkg:cargo/atomic@0.5.3",
@@ -14259,110 +14921,110 @@
       ]
     },
     {
-      "ref": "pkg:cargo/proto-anytls@0.0.6",
+      "ref": "pkg:cargo/proto-anytls@1.0.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/md-5@0.10.6",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-http@0.0.6",
+      "ref": "pkg:cargo/proto-http@1.0.0",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-hysteria2@0.0.6",
+      "ref": "pkg:cargo/proto-hysteria2@1.0.0",
       "dependsOn": [
         "pkg:cargo/blake2@0.10.6",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/qpack@0.1.0",
-        "pkg:cargo/quinn-proto@0.11.16",
-        "pkg:cargo/quinn@0.11.11",
+        "pkg:cargo/quinn-proto@0.11.19",
+        "pkg:cargo/quinn@0.11.12",
         "pkg:cargo/rustls-pki-types@1.15.0",
-        "pkg:cargo/rustls@0.23.45",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/zerocopy@0.8.54",
-        "pkg:cargo/zeroize@1.9.0"
+        "pkg:cargo/zeroize@1.9.0",
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-i2p@0.0.6",
+      "ref": "pkg:cargo/proto-i2p@1.0.0",
       "dependsOn": [
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-naive@0.0.6",
+      "ref": "pkg:cargo/proto-naive@1.0.0",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/h2@0.4.18",
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-reality@0.0.6",
+      "ref": "pkg:cargo/proto-reality@1.0.0",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.18.1",
         "pkg:cargo/base64@0.22.1",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/rcgen@0.14.8",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/subtle@2.6.1",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/x509-parser@0.18.1",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-shadowsocks@0.0.6",
+      "ref": "pkg:cargo/proto-shadowsocks@1.0.0",
       "dependsOn": [
         "pkg:cargo/base64@0.22.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/shadowsocks@1.24.0",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-shadowtls@0.0.6",
+      "ref": "pkg:cargo/proto-shadowtls@1.0.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/hmac@0.12.1",
         "pkg:cargo/rand@0.9.4",
         "pkg:cargo/rustls-pki-types@1.15.0",
@@ -14372,70 +15034,70 @@
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/tokio-rustls@0.26.4",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-socks@0.0.6",
+      "ref": "pkg:cargo/proto-socks@1.0.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-tor@0.0.6",
+      "ref": "pkg:cargo/proto-tor@1.0.0",
       "dependsOn": [
-        "pkg:cargo/arti-client@0.44.0",
+        "pkg:cargo/arti-client@0.47.0",
         "pkg:cargo/async-trait@0.1.89",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/futures@0.3.32",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-hsservice@0.44.0",
-        "pkg:cargo/tor-keymgr@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0"
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-hsservice@0.47.0",
+        "pkg:cargo/tor-keymgr@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-trojan@0.0.6",
+      "ref": "pkg:cargo/proto-trojan@1.0.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-tuic@0.0.6",
+      "ref": "pkg:cargo/proto-tuic@1.0.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/log@0.4.33",
-        "pkg:cargo/quinn-proto@0.11.16",
-        "pkg:cargo/quinn@0.11.11",
+        "pkg:cargo/quinn-proto@0.11.19",
+        "pkg:cargo/quinn@0.11.12",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-vless@0.0.6",
+      "ref": "pkg:cargo/proto-vless@1.0.0",
       "dependsOn": [
         "pkg:cargo/aes-gcm@0.10.3",
         "pkg:cargo/aes@0.8.4",
@@ -14444,41 +15106,42 @@
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/chacha20poly1305@0.10.1",
         "pkg:cargo/ctr@0.9.2",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/getrandom@0.3.4",
-        "pkg:cargo/proto-reality@0.0.6",
+        "pkg:cargo/proto-reality@1.0.0",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-vmess@0.0.6",
+      "ref": "pkg:cargo/proto-vmess@1.0.0",
       "dependsOn": [
         "pkg:cargo/aes-gcm@0.10.3",
         "pkg:cargo/aes@0.8.4",
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/chacha20poly1305@0.10.1",
-        "pkg:cargo/foxcore-api@0.0.6",
-        "pkg:cargo/foxcore-dialer@0.0.6",
-        "pkg:cargo/foxcore-transport@0.0.6",
+        "pkg:cargo/foxcore-api@1.0.0",
+        "pkg:cargo/foxcore-dialer@1.0.0",
+        "pkg:cargo/foxcore-transport@1.0.0",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/md-5@0.10.6",
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/sha3@0.10.9",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/proto-wireguard@0.0.6",
+      "ref": "pkg:cargo/proto-wireguard@1.0.0",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.18.1",
         "pkg:cargo/blake2@0.10.6",
+        "pkg:cargo/chacha20@0.9.1",
         "pkg:cargo/chacha20poly1305@0.10.1",
         "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/subtle@2.6.1",
@@ -14492,7 +15155,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/quinn-proto@0.11.16",
+      "ref": "pkg:cargo/quinn-proto@0.11.19",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/lru-slab@0.1.2",
@@ -14500,15 +15163,15 @@
         "pkg:cargo/rand_pcg@0.10.2",
         "pkg:cargo/ring@0.17.14",
         "pkg:cargo/rustc-hash@2.1.3",
-        "pkg:cargo/rustls@0.23.45",
         "pkg:cargo/slab@0.4.12",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tinyvec@1.11.0",
-        "pkg:cargo/tracing@0.1.44"
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
-      "ref": "pkg:cargo/quinn-udp@0.5.15",
+      "ref": "pkg:cargo/quinn-udp@0.5.16",
       "dependsOn": [
         "pkg:cargo/cfg_aliases@0.2.1",
         "pkg:cargo/libc@0.2.186",
@@ -14517,19 +15180,20 @@
       ]
     },
     {
-      "ref": "pkg:cargo/quinn@0.11.11",
+      "ref": "pkg:cargo/quinn@0.11.12",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/cfg_aliases@0.2.1",
+        "pkg:cargo/futures-io@0.3.32",
         "pkg:cargo/pin-project-lite@0.2.17",
-        "pkg:cargo/quinn-proto@0.11.16",
-        "pkg:cargo/quinn-udp@0.5.15",
+        "pkg:cargo/quinn-proto@0.11.19",
+        "pkg:cargo/quinn-udp@0.5.16",
         "pkg:cargo/rustc-hash@2.1.3",
-        "pkg:cargo/rustls@0.23.45",
         "pkg:cargo/socket2@0.6.4",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tokio@1.52.3",
-        "pkg:cargo/tracing@0.1.44"
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/tracing@0.1.44",
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
@@ -14614,6 +15278,10 @@
       ]
     },
     {
+      "ref": "pkg:cargo/rangemap@1.8.0",
+      "dependsOn": []
+    },
+    {
       "ref": "pkg:cargo/rcgen@0.14.8",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.18.1",
@@ -14621,6 +15289,12 @@
         "pkg:cargo/time@0.3.53",
         "pkg:cargo/x509-parser@0.18.1",
         "pkg:cargo/yasna@0.6.0"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/rdrand@0.9.0",
+      "dependsOn": [
+        "pkg:cargo/rand_core@0.10.1"
       ]
     },
     {
@@ -14665,7 +15339,7 @@
       ]
     },
     {
-      "ref": "pkg:cargo/retry-error@0.13.0",
+      "ref": "pkg:cargo/retry-error@0.14.0",
       "dependsOn": [
         "pkg:cargo/humantime@2.4.0"
       ]
@@ -14759,25 +15433,12 @@
       ]
     },
     {
-      "ref": "pkg:cargo/rustls-webpki@0.103.15",
+      "ref": "pkg:cargo/rustls-webpki@0.103.16",
       "dependsOn": [
         "pkg:cargo/aws-lc-rs@1.18.1",
         "pkg:cargo/ring@0.17.14",
         "pkg:cargo/rustls-pki-types@1.15.0",
         "pkg:cargo/untrusted@0.9.0"
-      ]
-    },
-    {
-      "ref": "pkg:cargo/rustls@0.23.45",
-      "dependsOn": [
-        "pkg:cargo/aws-lc-rs@1.18.1",
-        "pkg:cargo/log@0.4.33",
-        "pkg:cargo/once_cell@1.21.4",
-        "pkg:cargo/ring@0.17.14",
-        "pkg:cargo/rustls-pki-types@1.15.0",
-        "pkg:cargo/rustls-webpki@0.103.15",
-        "pkg:cargo/subtle@2.6.1",
-        "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
@@ -14789,7 +15450,7 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/safelog@0.9.0",
+      "ref": "pkg:cargo/safelog@0.10.0",
       "dependsOn": [
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/educe@0.4.23",
@@ -14809,8 +15470,10 @@
       ]
     },
     {
-      "ref": "pkg:cargo/saturating-time@0.4.0",
-      "dependsOn": []
+      "ref": "pkg:cargo/saturating-time@0.5.0",
+      "dependsOn": [
+        "pkg:cargo/web-time-compat@0.3.0"
+      ]
     },
     {
       "ref": "pkg:cargo/schemars@0.9.0",
@@ -14861,7 +15524,7 @@
       "ref": "pkg:cargo/sendfd@0.4.4",
       "dependsOn": [
         "pkg:cargo/libc@0.2.186",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
@@ -15040,7 +15703,7 @@
         "pkg:cargo/spin@0.10.1",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-tfo@0.4.3",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/trait-variant@0.1.2",
         "pkg:cargo/url@2.5.8"
       ]
@@ -15090,13 +15753,12 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/slotmap-careful@0.8.0",
+      "ref": "pkg:cargo/slotmap-careful@0.9.0",
       "dependsOn": [
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/slotmap@1.1.1",
-        "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/void@1.0.2"
+        "pkg:cargo/thiserror@2.0.18"
       ]
     },
     {
@@ -15259,7 +15921,7 @@
       "ref": "pkg:cargo/tempfile@3.27.0",
       "dependsOn": [
         "pkg:cargo/fastrand@2.4.1",
-        "pkg:cargo/getrandom@0.4.3",
+        "pkg:cargo/getrandom@0.3.4",
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/rustix@1.1.4"
       ]
@@ -15349,8 +16011,8 @@
     {
       "ref": "pkg:cargo/tokio-rustls@0.26.4",
       "dependsOn": [
-        "pkg:cargo/rustls@0.23.45",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
@@ -15362,7 +16024,7 @@
         "pkg:cargo/log@0.4.33",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/socket2@0.6.4",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
@@ -15370,7 +16032,7 @@
       "dependsOn": [
         "pkg:cargo/futures-util@0.3.32",
         "pkg:cargo/log@0.4.33",
-        "pkg:cargo/tokio@1.52.3",
+        "pkg:cargo/tokio@1.53.3",
         "pkg:cargo/tungstenite@0.30.0"
       ]
     },
@@ -15383,11 +16045,11 @@
         "pkg:cargo/futures-sink@0.3.32",
         "pkg:cargo/futures-util@0.3.32",
         "pkg:cargo/pin-project-lite@0.2.17",
-        "pkg:cargo/tokio@1.52.3"
+        "pkg:cargo/tokio@1.53.3"
       ]
     },
     {
-      "ref": "pkg:cargo/tokio@1.52.3",
+      "ref": "pkg:cargo/tokio@1.53.3",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
         "pkg:cargo/libc@0.2.186",
@@ -15467,33 +16129,37 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/tor-async-utils@0.44.0",
+      "ref": "pkg:cargo/tor-async-utils@0.47.0",
       "dependsOn": [
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/educe@0.4.23",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/futures@0.3.32",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/postage@0.5.0",
+        "pkg:cargo/slotmap-careful@0.9.0",
         "pkg:cargo/sync_wrapper@1.0.2",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-basic-utils@0.44.0",
+      "ref": "pkg:cargo/tor-basic-utils@0.47.0",
       "dependsOn": [
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
+        "pkg:cargo/educe@0.4.23",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/hex@0.4.3",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/libc@0.2.186",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/rand@0.10.2",
@@ -15503,125 +16169,125 @@
         "pkg:cargo/smallvec@1.15.2",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/weak-table@0.3.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/weak-table@0.4.0",
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-bytes@0.44.0",
+      "ref": "pkg:cargo/tor-bytes@0.47.0",
       "dependsOn": [
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-cell@0.44.0",
+      "ref": "pkg:cargo/tor-cell@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/bitflags@2.13.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/caret@0.10.0",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/caret@0.11.0",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/rand@0.10.2",
         "pkg:cargo/smallvec@1.15.2",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-cert@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-cert@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/void@1.0.2"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-cert@0.44.0",
+      "ref": "pkg:cargo/tor-cert@0.47.0",
       "dependsOn": [
-        "pkg:cargo/caret@0.10.0",
+        "pkg:cargo/caret@0.11.0",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
-        "pkg:cargo/saturating-time@0.4.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-chanmgr@0.44.0",
+      "ref": "pkg:cargo/tor-chanmgr@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/base64ct@1.8.3",
-        "pkg:cargo/caret@0.10.0",
+        "pkg:cargo/caret@0.11.0",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/httparse@1.10.1",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/percent-encoding@2.3.2",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_with@3.21.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-keymgr@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
-        "pkg:cargo/tor-socksproto@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-keymgr@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
+        "pkg:cargo/tor-socksproto@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/url@2.5.8",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-checkable@0.44.0",
+      "ref": "pkg:cargo/tor-checkable@0.47.0",
       "dependsOn": [
         "pkg:cargo/humantime@2.4.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/signature@2.2.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-circmgr@0.44.0",
+      "ref": "pkg:cargo/tor-circmgr@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/downcast-rs@2.0.2",
@@ -15629,64 +16295,65 @@
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/humantime-serde@1.1.1",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/once_cell@1.21.4",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/retry-error@0.13.0",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/retry-error@0.14.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-chanmgr@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-dircommon@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-guardmgr@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-relay-selection@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-chanmgr@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-dircommon@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-guardmgr@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-relay-selection@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/weak-table@0.3.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/weak-table@0.4.0",
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-config-path@0.44.0",
+      "ref": "pkg:cargo/tor-config-path@0.47.0",
       "dependsOn": [
         "pkg:cargo/directories@6.0.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/shellexpand@3.1.2",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-general-addr@0.44.0"
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-general-addr@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-config@0.44.0",
+      "ref": "pkg:cargo/tor-config@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/either@1.16.0",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/figment@0.10.19",
-        "pkg:cargo/fs-mistrust@0.15.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/humantime-serde@1.1.1",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/notify@8.2.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/postage@0.5.0",
@@ -15697,15 +16364,15 @@
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/toml@1.1.3+spec-1.1.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-consdiff@0.44.0",
+      "ref": "pkg:cargo/tor-consdiff@0.47.0",
       "dependsOn": [
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
@@ -15713,13 +16380,13 @@
         "pkg:cargo/imara-diff@0.2.0",
         "pkg:cargo/static_assertions@1.1.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0"
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-dirclient@0.44.0",
+      "ref": "pkg:cargo/tor-dirclient@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-compression@0.4.42",
         "pkg:cargo/base64ct@1.8.3",
@@ -15729,41 +16396,40 @@
         "pkg:cargo/http@1.4.2",
         "pkg:cargo/httparse@1.10.1",
         "pkg:cargo/httpdate@1.0.3",
-        "pkg:cargo/itertools@0.14.0",
-        "pkg:cargo/memchr@2.8.3",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-circmgr@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-circmgr@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-dircommon@0.44.0",
+      "ref": "pkg:cargo/tor-dircommon@0.47.0",
       "dependsOn": [
         "pkg:cargo/base64ct@1.8.3",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/getset@0.1.7",
         "pkg:cargo/humantime-serde@1.1.1",
         "pkg:cargo/humantime@2.4.0",
         "pkg:cargo/serde@1.0.228",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
         "pkg:cargo/tracing@0.1.44"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-dirmgr@0.44.0",
+      "ref": "pkg:cargo/tor-dirmgr@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/base64ct@1.8.3",
@@ -15772,20 +16438,20 @@
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/event-listener@5.4.2",
-        "pkg:cargo/fs-mistrust@0.15.0",
-        "pkg:cargo/fslock-guard@0.8.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
+        "pkg:cargo/fslock-guard@0.9.0",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/hex@0.4.3",
         "pkg:cargo/humantime-serde@1.1.1",
         "pkg:cargo/humantime@2.4.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/memmap2@0.9.11",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
         "pkg:cargo/rusqlite@0.39.0",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/scopeguard@1.2.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
@@ -15794,45 +16460,45 @@
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/time@0.3.53",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-circmgr@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-consdiff@0.44.0",
-        "pkg:cargo/tor-dirclient@0.44.0",
-        "pkg:cargo/tor-dircommon@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-guardmgr@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-circmgr@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-consdiff@0.47.0",
+        "pkg:cargo/tor-dirclient@0.47.0",
+        "pkg:cargo/tor-dircommon@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-guardmgr@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-error@0.44.0",
+      "ref": "pkg:cargo/tor-error@0.47.0",
       "dependsOn": [
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/paste@1.0.15",
-        "pkg:cargo/retry-error@0.13.0",
+        "pkg:cargo/retry-error@0.14.0",
         "pkg:cargo/static_assertions@1.1.0",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-general-addr@0.44.0",
+      "ref": "pkg:cargo/tor-general-addr@0.47.0",
       "dependsOn": [
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/thiserror@2.0.18",
@@ -15840,11 +16506,11 @@
       ]
     },
     {
-      "ref": "pkg:cargo/tor-guardmgr@0.44.0",
+      "ref": "pkg:cargo/tor-guardmgr@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/base64ct@1.8.3",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/dyn-clone@1.0.20",
@@ -15852,167 +16518,168 @@
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/humantime-serde@1.1.1",
         "pkg:cargo/humantime@2.4.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/num_enum@0.7.6",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-dircommon@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-relay-selection@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-dircommon@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-relay-selection@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-hsclient@0.44.0",
+      "ref": "pkg:cargo/tor-hsclient@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/either@1.16.0",
         "pkg:cargo/futures@0.3.32",
-        "pkg:cargo/itertools@0.14.0",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/itertools@0.15.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/retry-error@0.13.0",
-        "pkg:cargo/safelog@0.9.0",
-        "pkg:cargo/slotmap-careful@0.8.0",
+        "pkg:cargo/retry-error@0.14.0",
+        "pkg:cargo/safelog@0.10.0",
+        "pkg:cargo/slotmap-careful@0.9.0",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-circmgr@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-dirclient@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-keymgr@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-circmgr@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-dirclient@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-keymgr@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-hscrypto@0.44.0",
+      "ref": "pkg:cargo/tor-hscrypto@0.47.0",
       "dependsOn": [
-        "pkg:cargo/cipher@0.4.4",
+        "pkg:cargo/cipher@0.5.2",
         "pkg:cargo/data-encoding@2.11.0",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/hex@0.4.3",
         "pkg:cargo/humantime@2.4.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/signature@2.2.0",
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-key-forge@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-key-forge@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0",
+        "pkg:cargo/web-time-compat@0.3.0",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-hsservice@0.44.0",
+      "ref": "pkg:cargo/tor-hsservice@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/base64ct@1.8.3",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/fs-mistrust@0.15.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/growable-bloom-filter@2.1.1",
         "pkg:cargo/hex@0.4.3",
         "pkg:cargo/humantime@2.4.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/k12@0.3.0",
         "pkg:cargo/once_cell@1.21.4",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
         "pkg:cargo/rand_core@0.10.1",
-        "pkg:cargo/retry-error@0.13.0",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/retry-error@0.14.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_with@3.21.0",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-circmgr@0.44.0",
-        "pkg:cargo/tor-config-path@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-dirclient@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-keymgr@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-log-ratelim@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-relay-selection@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-circmgr@0.47.0",
+        "pkg:cargo/tor-config-path@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-dirclient@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-keymgr@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-log-ratelim@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-relay-selection@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-key-forge@0.44.0",
+      "ref": "pkg:cargo/tor-key-forge@0.47.0",
       "dependsOn": [
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/downcast-rs@2.0.2",
         "pkg:cargo/paste@1.0.15",
@@ -16021,84 +16688,85 @@
         "pkg:cargo/signature@2.2.0",
         "pkg:cargo/ssh-key-fork-arti@0.6.7",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-cert@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0"
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-cert@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-keymgr@0.44.0",
+      "ref": "pkg:cargo/tor-keymgr@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/arrayvec@0.7.8",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/data-encoding@2.11.0",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/downcast-rs@2.0.2",
         "pkg:cargo/dyn-clone@1.0.20",
-        "pkg:cargo/fs-mistrust@0.15.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
         "pkg:cargo/glob-match@0.2.1",
         "pkg:cargo/humantime@2.4.0",
         "pkg:cargo/inventory@0.3.24",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/signature@2.2.0",
         "pkg:cargo/ssh-key-fork-arti@0.6.7",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-config-path@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-key-forge@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-persist@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-config-path@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-key-forge@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-persist@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/visibility@0.1.1",
         "pkg:cargo/walkdir@2.5.0",
-        "pkg:cargo/web-time-compat@0.2.0",
+        "pkg:cargo/web-time-compat@0.3.0",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-linkspec@0.44.0",
+      "ref": "pkg:cargo/tor-linkspec@0.47.0",
       "dependsOn": [
         "pkg:cargo/base64ct@1.8.3",
         "pkg:cargo/by_address@1.2.1",
-        "pkg:cargo/caret@0.10.0",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/caret@0.11.0",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/hex@0.4.3",
-        "pkg:cargo/itertools@0.14.0",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/itertools@0.15.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_with@3.21.0",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0"
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-llcrypto@0.44.0",
+      "ref": "pkg:cargo/tor-llcrypto@0.47.0",
       "dependsOn": [
-        "pkg:cargo/aes@0.8.4",
+        "pkg:cargo/aes@0.9.3",
         "pkg:cargo/base64ct@1.8.3",
-        "pkg:cargo/ctr@0.9.2",
+        "pkg:cargo/ctr@0.10.1",
         "pkg:cargo/curve25519-dalek@4.1.3",
         "pkg:cargo/der-parser@10.0.0",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/ed25519-dalek@2.2.0",
@@ -16109,9 +16777,10 @@
         "pkg:cargo/rand_core@0.10.1",
         "pkg:cargo/rand_core@0.6.4",
         "pkg:cargo/rand_jitter@0.6.1",
+        "pkg:cargo/rdrand@0.9.0",
         "pkg:cargo/reseeding_rng@0.10.7",
         "pkg:cargo/rsa@0.9.10",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/sha1@0.10.7",
         "pkg:cargo/sha2@0.10.9",
@@ -16119,65 +16788,66 @@
         "pkg:cargo/signature@2.2.0",
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-memquota-cost@0.44.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-memquota-cost@0.47.0",
         "pkg:cargo/visibility@0.1.1",
         "pkg:cargo/x25519-dalek@2.0.1",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-log-ratelim@0.44.0",
+      "ref": "pkg:cargo/tor-log-ratelim@0.47.0",
       "dependsOn": [
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/humantime@2.4.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/weak-table@0.3.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/weak-table@0.4.0",
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-memquota-cost@0.44.0",
+      "ref": "pkg:cargo/tor-memquota-cost@0.47.0",
       "dependsOn": [
-        "pkg:cargo/derive-deftly@1.11.3",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/derive-deftly@1.12.1",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/void@1.0.2"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-memquota@0.44.0",
+      "ref": "pkg:cargo/tor-memquota@0.47.0",
       "dependsOn": [
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/dyn-clone@1.0.20",
         "pkg:cargo/educe@0.4.23",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/futures@0.3.32",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/serde@1.0.228",
-        "pkg:cargo/slotmap-careful@0.8.0",
+        "pkg:cargo/slotmap-careful@0.9.0",
         "pkg:cargo/static_assertions@1.1.0",
         "pkg:cargo/sysinfo@0.38.4",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-log-ratelim@0.44.0",
-        "pkg:cargo/tor-memquota-cost@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-log-ratelim@0.47.0",
+        "pkg:cargo/tor-memquota-cost@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-netdir@0.44.0",
+      "ref": "pkg:cargo/tor-netdir@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/bitflags@2.13.1",
@@ -16186,48 +16856,51 @@
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/hex@0.4.3",
         "pkg:cargo/humantime@2.4.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/num_enum@0.7.6",
         "pkg:cargo/rand@0.10.2",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/time@0.3.53",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/typed-index-collections@3.5.0",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-netdoc@0.44.0",
+      "ref": "pkg:cargo/tor-netdoc@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/base64ct@1.8.3",
-        "pkg:cargo/cipher@0.4.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/cipher@0.5.2",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/enumset@1.1.13",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/hex@0.4.3",
         "pkg:cargo/hostname-validator@1.1.1",
         "pkg:cargo/humantime@2.4.0",
         "pkg:cargo/ipnet@2.12.0",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/iprange@0.6.7",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/memchr@2.8.3",
         "pkg:cargo/paste@1.0.15",
-        "pkg:cargo/phf@0.13.1",
+        "pkg:cargo/phf@0.14.0",
         "pkg:cargo/rand@0.10.2",
-        "pkg:cargo/saturating-time@0.4.0",
+        "pkg:cargo/rangemap@1.8.0",
+        "pkg:cargo/saturating-time@0.5.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_with@3.21.0",
         "pkg:cargo/signature@2.2.0",
@@ -16237,61 +16910,63 @@
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/time@0.3.53",
         "pkg:cargo/tinystr@0.8.3",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-cert@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-cert@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0",
+        "pkg:cargo/web-time-compat@0.3.0",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-persist@0.44.0",
+      "ref": "pkg:cargo/tor-persist@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
+        "pkg:cargo/extend@1.2.0",
         "pkg:cargo/filetime@0.2.29",
-        "pkg:cargo/fs-mistrust@0.15.0",
-        "pkg:cargo/fslock-guard@0.8.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
+        "pkg:cargo/fslock-guard@0.9.0",
         "pkg:cargo/futures@0.3.32",
-        "pkg:cargo/itertools@0.14.0",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/itertools@0.15.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/sanitize-filename@0.6.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/serde_json@1.0.150",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/time@0.3.53",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-proto@0.44.0",
+      "ref": "pkg:cargo/tor-proto@0.47.0",
       "dependsOn": [
+        "pkg:cargo/aes@0.9.3",
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/asynchronous-codec@0.7.0",
         "pkg:cargo/bitvec@1.1.1",
         "pkg:cargo/bytes@1.12.1",
-        "pkg:cargo/caret@0.10.0",
+        "pkg:cargo/caret@0.11.0",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/cipher@0.4.4",
+        "pkg:cargo/cipher@0.5.2",
         "pkg:cargo/coarsetime@0.1.37",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/ctr@0.10.1",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/digest@0.10.7",
@@ -16301,98 +16976,100 @@
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/hkdf@0.12.4",
         "pkg:cargo/hmac@0.12.1",
-        "pkg:cargo/itertools@0.14.0",
+        "pkg:cargo/itertools@0.15.0",
         "pkg:cargo/nonany@0.3.0",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/pin-project@1.1.13",
+        "pkg:cargo/polyval@0.7.3",
         "pkg:cargo/postage@0.5.0",
         "pkg:cargo/rand@0.10.2",
         "pkg:cargo/rand_core@0.10.1",
-        "pkg:cargo/safelog@0.9.0",
-        "pkg:cargo/slotmap-careful@0.8.0",
+        "pkg:cargo/safelog@0.10.0",
+        "pkg:cargo/slotmap-careful@0.9.0",
         "pkg:cargo/smallvec@1.15.2",
         "pkg:cargo/static_assertions@1.1.0",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-cell@0.44.0",
-        "pkg:cargo/tor-cert@0.44.0",
-        "pkg:cargo/tor-checkable@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-hscrypto@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-llcrypto@0.44.0",
-        "pkg:cargo/tor-log-ratelim@0.44.0",
-        "pkg:cargo/tor-memquota@0.44.0",
-        "pkg:cargo/tor-protover@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
-        "pkg:cargo/tor-rtmock@0.44.0",
-        "pkg:cargo/tor-units@0.44.0",
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-cell@0.47.0",
+        "pkg:cargo/tor-cert@0.47.0",
+        "pkg:cargo/tor-checkable@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-hscrypto@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-llcrypto@0.47.0",
+        "pkg:cargo/tor-log-ratelim@0.47.0",
+        "pkg:cargo/tor-memquota@0.47.0",
+        "pkg:cargo/tor-protover@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
+        "pkg:cargo/tor-rtmock@0.47.0",
+        "pkg:cargo/tor-units@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/typenum@1.20.1",
         "pkg:cargo/visibility@0.1.1",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0",
+        "pkg:cargo/web-time-compat@0.3.0",
         "pkg:cargo/zeroize@1.9.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-protover@0.44.0",
+      "ref": "pkg:cargo/tor-protover@0.47.0",
       "dependsOn": [
-        "pkg:cargo/caret@0.10.0",
+        "pkg:cargo/caret@0.11.0",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/serde_with@3.21.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-bytes@0.44.0"
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-bytes@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-ptmgr@0.44.0",
+      "ref": "pkg:cargo/tor-ptmgr@0.47.0",
       "dependsOn": [
         "pkg:cargo/async-trait@0.1.89",
         "pkg:cargo/cfg-if@1.0.4",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_builder_fork_arti@0.11.2",
-        "pkg:cargo/fs-mistrust@0.15.0",
+        "pkg:cargo/fs-mistrust@0.16.0",
         "pkg:cargo/futures@0.3.32",
-        "pkg:cargo/itertools@0.14.0",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/itertools@0.15.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-async-utils@0.44.0",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-chanmgr@0.44.0",
-        "pkg:cargo/tor-config-path@0.44.0",
-        "pkg:cargo/tor-config@0.44.0",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-proto@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
-        "pkg:cargo/tor-socksproto@0.44.0",
+        "pkg:cargo/tor-async-utils@0.47.0",
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-chanmgr@0.47.0",
+        "pkg:cargo/tor-config-path@0.47.0",
+        "pkg:cargo/tor-config@0.47.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-proto@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
+        "pkg:cargo/tor-socksproto@0.47.0",
         "pkg:cargo/tracing@0.1.44",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-relay-selection@0.44.0",
+      "ref": "pkg:cargo/tor-relay-selection@0.47.0",
       "dependsOn": [
         "pkg:cargo/rand@0.10.2",
         "pkg:cargo/serde@1.0.228",
-        "pkg:cargo/tor-basic-utils@0.44.0",
-        "pkg:cargo/tor-linkspec@0.44.0",
-        "pkg:cargo/tor-netdir@0.44.0",
-        "pkg:cargo/tor-netdoc@0.44.0"
+        "pkg:cargo/tor-basic-utils@0.47.0",
+        "pkg:cargo/tor-linkspec@0.47.0",
+        "pkg:cargo/tor-netdir@0.47.0",
+        "pkg:cargo/tor-netdoc@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-rtcompat@0.44.0",
+      "ref": "pkg:cargo/tor-rtcompat@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/async-trait@0.1.89",
@@ -16411,69 +17088,68 @@
         "pkg:cargo/paste@1.0.15",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/rustls-pki-types@1.15.0",
-        "pkg:cargo/rustls-webpki@0.103.15",
-        "pkg:cargo/rustls@0.23.45",
+        "pkg:cargo/rustls-webpki@0.103.16",
         "pkg:cargo/socket2@0.6.4",
         "pkg:cargo/thiserror@2.0.18",
         "pkg:cargo/tokio-util@0.7.18",
-        "pkg:cargo/tokio@1.52.3",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-general-addr@0.44.0",
+        "pkg:cargo/tokio@1.53.3",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-general-addr@0.47.0",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0",
-        "pkg:cargo/zeroize@1.9.0"
+        "pkg:cargo/web-time-compat@0.3.0",
+        "pkg:cargo/zeroize@1.9.0",
+        "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-rtmock@0.44.0",
+      "ref": "pkg:cargo/tor-rtmock@0.47.0",
       "dependsOn": [
         "pkg:cargo/amplify@4.9.0",
         "pkg:cargo/assert_matches@1.5.0",
         "pkg:cargo/async-trait@0.1.89",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/educe@0.4.23",
         "pkg:cargo/futures@0.3.32",
         "pkg:cargo/humantime@2.4.0",
-        "pkg:cargo/itertools@0.14.0",
-        "pkg:cargo/oneshot-fused-workaround@0.7.0",
+        "pkg:cargo/itertools@0.15.0",
+        "pkg:cargo/oneshot-fused-workaround@0.8.0",
         "pkg:cargo/pin-project@1.1.13",
         "pkg:cargo/priority-queue@2.7.0",
-        "pkg:cargo/slotmap-careful@0.8.0",
+        "pkg:cargo/slotmap-careful@0.9.0",
         "pkg:cargo/strum@0.28.0",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-error@0.44.0",
-        "pkg:cargo/tor-general-addr@0.44.0",
-        "pkg:cargo/tor-rtcompat@0.44.0",
+        "pkg:cargo/tor-error@0.47.0",
+        "pkg:cargo/tor-general-addr@0.47.0",
+        "pkg:cargo/tor-rtcompat@0.47.0",
         "pkg:cargo/tracing-test@0.2.6",
         "pkg:cargo/tracing@0.1.44",
         "pkg:cargo/void@1.0.2",
-        "pkg:cargo/web-time-compat@0.2.0"
+        "pkg:cargo/web-time-compat@0.3.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-socksproto@0.44.0",
+      "ref": "pkg:cargo/tor-socksproto@0.47.0",
       "dependsOn": [
-        "pkg:cargo/amplify@4.9.0",
-        "pkg:cargo/caret@0.10.0",
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/caret@0.11.0",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/educe@0.4.23",
-        "pkg:cargo/safelog@0.9.0",
+        "pkg:cargo/safelog@0.10.0",
         "pkg:cargo/subtle@2.6.1",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-bytes@0.44.0",
-        "pkg:cargo/tor-error@0.44.0"
+        "pkg:cargo/tor-bytes@0.47.0",
+        "pkg:cargo/tor-error@0.47.0"
       ]
     },
     {
-      "ref": "pkg:cargo/tor-units@0.44.0",
+      "ref": "pkg:cargo/tor-units@0.47.0",
       "dependsOn": [
-        "pkg:cargo/derive-deftly@1.11.3",
+        "pkg:cargo/derive-deftly@1.12.1",
         "pkg:cargo/derive_more@2.1.1",
         "pkg:cargo/serde@1.0.228",
         "pkg:cargo/thiserror@2.0.18",
-        "pkg:cargo/tor-memquota@0.44.0"
+        "pkg:cargo/tor-memquota@0.47.0"
       ]
     },
     {
@@ -16594,6 +17270,13 @@
       ]
     },
     {
+      "ref": "pkg:cargo/universal-hash@0.6.1",
+      "dependsOn": [
+        "pkg:cargo/crypto-common@0.2.2",
+        "pkg:cargo/ctutils@0.4.4"
+      ]
+    },
+    {
       "ref": "pkg:cargo/untrusted@0.7.1",
       "dependsOn": []
     },
@@ -16645,15 +17328,18 @@
       ]
     },
     {
-      "ref": "pkg:cargo/weak-table@0.3.2",
+      "ref": "pkg:cargo/weak-table@0.4.0",
+      "dependsOn": [
+        "pkg:cargo/cfg-if@1.0.4",
+        "pkg:cargo/hashbrown@0.16.1"
+      ]
+    },
+    {
+      "ref": "pkg:cargo/web-time-compat@0.3.0",
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/web-time-compat@0.2.0",
-      "dependsOn": []
-    },
-    {
-      "ref": "pkg:cargo/webpki-roots@1.0.8",
+      "ref": "pkg:cargo/webpki-roots@1.0.10",
       "dependsOn": [
         "pkg:cargo/rustls-pki-types@1.15.0"
       ]
@@ -16707,6 +17393,13 @@
     {
       "ref": "pkg:cargo/xxhash-rust@0.8.18",
       "dependsOn": []
+    },
+    {
+      "ref": "pkg:cargo/yaml-rust2@0.13.0",
+      "dependsOn": [
+        "pkg:cargo/arraydeque@0.5.1",
+        "pkg:cargo/hashlink@0.12.2"
+      ]
     },
     {
       "ref": "pkg:cargo/yasna@0.6.0",
@@ -16805,22 +17498,36 @@
       "dependsOn": []
     },
     {
-      "ref": "pkg:cargo/zstd-safe@7.2.4",
+      "ref": "pkg:cargo/zstd-safe@8.2.0",
       "dependsOn": [
-        "pkg:cargo/zstd-sys@2.0.16+zstd.1.5.7"
+        "pkg:cargo/zstd-sys@2.1.2+zstd.1.5.7"
       ]
     },
     {
-      "ref": "pkg:cargo/zstd-sys@2.0.16+zstd.1.5.7",
+      "ref": "pkg:cargo/zstd-sys@2.1.2+zstd.1.5.7",
       "dependsOn": [
         "pkg:cargo/cc@1.2.66",
         "pkg:cargo/pkg-config@0.3.33"
       ]
     },
     {
-      "ref": "pkg:cargo/zstd@0.13.3",
+      "ref": "pkg:cargo/zstd@0.14.3",
       "dependsOn": [
-        "pkg:cargo/zstd-safe@7.2.4"
+        "pkg:cargo/zstd-safe@8.2.0"
+      ]
+    },
+    {
+      "ref": "pkg:generic/foxhole-source-fork/rustls@0.23.46?core_commit=543efe47cb002af1aa768b9c482a2adc79b323f1&source_fork_sha256=ecdc360e6e6569d14a922b51be28fde677ff18c818debdc09cb90f4d0eb7c519",
+      "dependsOn": [
+        "pkg:cargo/aws-lc-rs@1.18.1",
+        "pkg:cargo/brotli-decompressor@5.0.3",
+        "pkg:cargo/log@0.4.33",
+        "pkg:cargo/once_cell@1.21.4",
+        "pkg:cargo/ring@0.17.14",
+        "pkg:cargo/rustls-pki-types@1.15.0",
+        "pkg:cargo/rustls-webpki@0.103.16",
+        "pkg:cargo/subtle@2.6.1",
+        "pkg:cargo/zeroize@1.9.0"
       ]
     }
   ]

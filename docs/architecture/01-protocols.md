@@ -19,7 +19,7 @@ flowchart TD
 
     OB --> L1["protocol codec<br/>proto-*"]
     L1 --> L2["security layer<br/>TLS / REALITY / Noise / QUIC-TLS"]
-    L2 --> L3["stream carrier<br/>raw ws http_upgrade grpc http2"]
+    L2 --> L3["stream carrier<br/>raw ws http_upgrade grpc http2 xhttp"]
     L3 --> DIALER["ProtectedDialer<br/>foxcore-dialer"]
     DIR --> DIALER
     TOR --> DIALER
@@ -73,7 +73,7 @@ L3 helper set before the generation-owned runtime can release the sole TUN owner
 (`crates/foxcore-tun/src/netstack/mod.rs:270-312`;
 `crates/foxcore-tun/src/netstack/actor.rs:291-303`, `:460-554`;
 `crates/foxcore-tun/src/flow/engine.rs:202-223`;
-`crates/foxcore-runtime/src/start.rs:384-407`).
+`crates/foxcore-runtime/src/start.rs:419-434`).
 
 ---
 
@@ -93,7 +93,7 @@ Stream carriers — `StreamTransportConfig`, tagged on `type`
 (`crates/foxcore-api/src/config/transport.rs:11-54`):
 
 ```
-raw  websocket  http_upgrade  grpc  http2
+raw  websocket  http_upgrade  grpc  http2  xhttp (stream-one H2)
 ```
 
 Bounds: ≤16 named outbounds (`crates/foxcore-api/src/config/engine.rs:74-78`), ≤64 selector members
@@ -108,11 +108,11 @@ reserved; `tor` and `i2p` are id-locked in both directions
 
 | Protocol | Carried on | Security layer | Stream carriers | UDP | Terminated at |
 |---|---|---|---|---|---|
-| **VLESS** | TCP | rustls TLS **or** REALITY (exclusive); optional inner ML-KEM768+X25519 "VLESS Encryption" | all 5 | yes — `none`/`xudp`/`packetaddr` | remote VLESS server |
+| **VLESS** | TCP | rustls TLS **or** REALITY (exclusive); optional inner ML-KEM768+X25519 "VLESS Encryption" | all 6 | yes — `none`/`xudp`/`packetaddr` | remote VLESS server |
 | **VLESS + Vision** | TCP only | TLS 1.3 required | raw only | **refused on port 443** | remote VLESS server |
-| **VMess** | TCP | optional rustls TLS; no REALITY | all 5 | yes | remote VMess server |
-| **Trojan** | TCP | TLS **mandatory** | all 5 | yes | remote Trojan server |
-| **Shadowsocks / Outline** | TCP + native UDP | AEAD or AEAD-2022; optional `simple-obfs` http/tls, Outline salt prefix | all 5 (as native `v2ray-plugin`) | conditional | remote SS server |
+| **VMess** | TCP | optional rustls TLS; no REALITY | all 6 | yes | remote VMess server |
+| **Trojan** | TCP | TLS **mandatory** | all 6 | yes | remote Trojan server |
+| **Shadowsocks / Outline** | TCP + native UDP | AEAD or AEAD-2022; optional `simple-obfs` http/tls, Outline salt prefix | configured stream carrier; native `v2ray-plugin` uses WebSocket | conditional | remote SS server |
 | **Hysteria2** | **QUIC/UDP** (quinn) | TLS inside QUIC; optional **Salamander** packet obfs; port hopping | none | conditional on server | remote HY2 server |
 | **TUIC v5** | **QUIC/UDP** (quinn) | TLS inside QUIC, TLS-exporter auth | none | conditional | remote TUIC server |
 | **AnyTLS v2** | TCP | TLS mandatory; own mux + bounded padding above TLS | none by design | yes — UoT v2 | remote AnyTLS server |
@@ -139,7 +139,7 @@ WireGuard is only reachable as `OutboundMode::PacketTunnel`.
 ```mermaid
 flowchart LR
     subgraph tor["Tor — in-process"]
-        A["foxcore-outbound"] --> B["arti-client 0.44.0"]
+        A["foxcore-outbound"] --> B["arti-client 0.47.0"]
         B --> C["ProtectedTcpProvider"]
         C --> D["ProtectedDialer -> guards"]
         B -.->|optional| E["managed PT helper<br/>lyrebird / conjure-client<br/>loopback SOCKS, raw"]
@@ -199,6 +199,8 @@ flowchart TD
     U --> U2["tcp"]
     U --> U3["dot — TLS, insecure + SPKI pin supported"]
     U --> U4["doh — RFC 8484 over HTTP/2"]
+    U --> U5["doq — DNS over QUIC"]
+    U --> U6["doh3 — DNS over HTTP/3"]
 ```
 
 | `type` | Transport | Pool lanes | Note |
@@ -207,10 +209,18 @@ flowchart TD
 | `tcp` | plain TCP/53 | 4 | |
 | `dot` | DNS-over-TLS | 4 | supports `insecure` and `pinned_spki_sha256` |
 | `doh` | DNS-over-HTTPS, **HTTP/2** via the `h2` crate | 1 (H2 already multiplexes) | URL must be HTTPS, no userinfo/fragment, ≤4096 bytes |
+| `doq` | DNS-over-QUIC | 1 (multiplexed) | bounded request streams over the selected outbound datagram session |
+| `doh3` | DNS-over-HTTPS, **HTTP/3** | 1 (multiplexed) | HTTPS URL and bounded request streams over QUIC |
 
-**DoQ and DNS-over-HTTP/3 are not implemented.** Published capability agrees:
-`DnsCapabilities { udp, tcp, dot, doh_http2, fake_ip, private_namespaces_fail_closed: ["onion","i2p"] }`
-(`capabilities.rs:1119-1126`).
+The additional `doq` and `doh3` variants use one multiplexed connection lane and bounded
+request streams. Capabilities advertise `doq: true` and `doh_http3: true`
+(`crates/foxcore-api/src/config/dns.rs:57-76`;
+`crates/foxcore-tun/src/dns/upstream.rs:53-66`;
+`crates/foxcore-android/src/capabilities.rs:1126-1135`). Ordinary DNS supplies an already
+selected outbound datagram session, while bootstrap uses its protected literal-peer socket.
+The QUIC clients do not resolve locally or fall back to Direct when that route is unavailable
+(`crates/foxcore-tun/src/dns/proxy.rs:550-585`;
+`crates/foxcore-transport/src/dns_quic/mod.rs:1-2,139-148`).
 
 `dns.route` ∈ `direct` | `primary` | `tor`. A Tor DNS route with the overlay disabled is
 `PermissionDenied`, and the resolved outbound is re-checked against the overlay gates *after*
@@ -324,8 +334,7 @@ A permanent "this protocol has no UDP" refusal is counted as `udp_unsupported` +
 | Absent | Evidence |
 |---|---|
 | **mkcp / kcp** as a transport | zero implementation; `"kcp" \| "mkcp" => ProfileTransport::Kcp` at `foxcore-link/src/lib.rs:929` is a diagnostic label only, and the importer refuses transports it cannot build (`:1399-1401`) |
-| **xhttp / splithttp** | zero occurrences anywhere in the repo |
-| **DoQ, DNS-over-HTTP/3** | zero occurrences in `foxcore-tun/src/dns/` or `config/dns.rs` |
+| **XHTTP packet-up / stream-up modes and extra settings** | only stream-one over HTTP/2 is implemented; other modes are refused (`crates/foxcore-api/src/config/transport.rs:59-68,106-119`) |
 | **SOCKS-over-TLS** | `SocksConfig` has no `tls` field (`config/outbound.rs:58-73`) |
 | **ShadowsocksR, ShadowTLS v1/v2** | ShadowsocksR has no implementation; ShadowTLS declares v1/v2 unsupported (`capabilities.rs:918-940`) |
 | **Generic ShadowTLS inner protocol** | `ShadowTlsInnerConfig` has exactly one variant; the general `StreamDialer` detour seam does not exist yet (`config/outbound.rs:148-165`) |
@@ -338,7 +347,88 @@ AmneziaWG are `experimental`.
 
 ---
 
+### Bounded connection and frame handling
+
+TCP resolution and connection share `connect_timeout_ms`; Hysteria2/TUIC resolution, TLS and
+protocol authentication share `handshake_timeout_ms`. The protected dialer interleaves address
+families, limits active attempts to two, and closes losing attempts before returning
+(`crates/foxcore-dialer/src/lib.rs:211,233,334`). Hysteria2 owns and closes the connection before
+its first HTTP/3 await (`crates/proto-hysteria2/src/connection.rs:111,117,163`); TUIC retains the same
+close-on-drop ownership (`crates/proto-tuic/src/connection.rs:97`).
+
+Hysteria2 starts with adaptive CUBIC during authentication. The authenticated `Hysteria-CC-RX`
+response selects adaptive control for `auto` or unknown client bandwidth; otherwise Brutal's
+target is the client's configured upload rate capped by the server's nonzero receive limit.
+Malformed, duplicate or overflowing receive-limit fields are refused
+(`crates/proto-hysteria2/src/negotiated.rs:19,47`; `crates/proto-hysteria2/src/connection.rs:121,123`;
+`crates/proto-hysteria2/src/codec.rs:109`).
+
+Quinn's pacing-rate metric alone does not enforce Brutal's send rate. The runtime socket wrapper
+gates actual datagram sends at the loss-compensated rate, charges only successful sends, and
+disables multi-datagram GSO so a batch cannot bypass the budget. Idle time does not accumulate
+a burst. Timer waits are cancellable; adaptive mode clears a prior fixed-rate budget
+(`crates/proto-hysteria2/src/pacing.rs:65,108,127,145,171`;
+`crates/proto-hysteria2/src/negotiated.rs:79`). This is a send-budget contract, not a provider
+throughput or Android battery-life guarantee.
+
+Profiles with no fixed upload bandwidth retain the underlying runtime's ordinary UDP batching;
+they do not install the fixed-rate socket wrapper (`crates/proto-hysteria2/src/pacing.rs:26`;
+`crates/proto-hysteria2/src/connection.rs:93`).
+
+Hysteria2's existing owner-stop and network-replacement paths close the old QUIC connection
+(`crates/proto-hysteria2/src/session.rs:107-145`). Each UDP uplink now also selects that connection's
+closure, deregisters its session and drops its downlink sender. A receiver retained after owner
+close or reconnect therefore receives the existing terminal EOF instead of waiting for its own
+session drop (`crates/proto-hysteria2/src/udp.rs:41-61,65-98`). Three authenticated QUIC regressions
+cover retained-receiver EOF, dropping one session without affecting another, and replacement-session
+traffic after reconnect (`crates/proto-hysteria2/src/udp.rs:444-524`). Framing, TLS and the public
+session interface are unchanged.
+
+WireGuard uses one tunnel owner and sequential endpoint rotation on unanswered initial handshakes;
+it preserves the endpoint during live rekey, retries an authenticated cookie on its original peer,
+and resolves again when the Android network changes. Pinned addresses remain pinned
+(`crates/proto-wireguard/src/tunnel.rs:1009,1022`; `crates/foxcore-tun/src/relay/state.rs:143,190`).
+The address cache currently has no independent DNS TTL refresh.
+
+Trojan's persistent per-direction UDP futures preserve partially read frames and cancel blocked
+writes (`crates/proto-trojan/src/lib.rs:160`). VLESS XUDP drains complete frames before checking
+its bounded incomplete remainder, so a large frame coalesced with the next frame remains valid
+(`crates/proto-vless/src/lib.rs:586`).
+
+Amnezia `random_trailers` is a typed, false-by-default profile field. Enabled mode adds bounded
+handshake tails and randomized zero padding before data AEAD, and accepts tails only when explicitly
+configured (`crates/proto-wireguard/src/amnezia.rs:98`; `crates/proto-wireguard/src/tunnel.rs:594`).
+Optional `content_padding_addition` accepts a uint32 singleton or inclusive N-M range. Nonzero
+CPA overrides RandomTrailers and block alignment, including when its selected addition is zero.
+The sender clamps the addition to its authenticated peer UDP window before allocating; received
+window growth excludes the AEAD tag. The full 0..UINT32_MAX range uses widened arithmetic rather
+than the reference Go sampler's overflow to zero
+(`crates/foxcore-api/src/config/wireguard.rs:87`; `crates/proto-wireguard/src/amnezia.rs:64`;
+`crates/proto-wireguard/src/tunnel.rs:516,815`). The capability document advertises both
+sender-padding fields (`crates/foxcore-android/src/capabilities.rs:986`).
+
+Optional `HeaderProtectionKey` is a shared canonical 32-byte Base64 key. A nonzero key requires
+S1..S4 prefixes of at least 12 bytes; the all-zero key disables header protection. HPK profiles
+may omit J/H fields, using zero junk defaults and headers 1/2/3/4. Declared empty, malformed or
+peer-section keys are refused (`crates/foxcore-api/src/config/wireguard.rs:93,222,484`;
+`crates/foxcore-link/src/lib.rs:2000,2047`). The pinned v3.1 Go peer tests cover IPv4/IPv6,
+keepalives and key mismatches; endpoint roaming, server role and container-link imports remain
+outside this implementation. There is no full AmneziaWG 3.1 or Android device interop claim.
+
 ## 1.8 Inconsistencies found
+
+- The Hysteria2 client previously ignored the authenticated receive limit and treated Quinn's
+  pacing-rate metric as an actual send constraint. Negotiated controller selection and the
+  datagram socket budget now enforce the configured target with loss compensation; fresh
+  Android/native production and provider acceptance remain separate release gates.
+
+- The HY2/TUIC QUIC graph now uses Quinn 0.11.12, quinn-proto 0.11.19 and
+  quinn-udp 0.5.16. The updated proto release fixes upstream stream-limit and Retry
+  handling advisories; this dependency change does not add multipath or alter FoxCore
+  network-switch behavior (`Cargo.toml:72-73`; `Cargo.lock`, the three Quinn entries).
+- Arti resolves to 0.47.0. Its removed `flowctl-cc` flag was replaced by always-on
+  upstream flow/congestion control, preserving the client/onion feature selection
+  (`crates/proto-tor/Cargo.toml:41,48-54`).
 
 The audit found that the old cancellation and DNS descriptions promised stronger behavior than
 the implementation provided. Core 0.0.5 adds transactional epoch revocation, mandatory DNS ingress
@@ -357,3 +447,14 @@ although the runtime pins it to Snowflake and forbids cross-transport fallback; 
 architecture set now match the selector
 (`core/model/src/main/kotlin/com/foxhole/core/model/SettingsEnums.kt:260-270`;
 `core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorBridgeTorrcLines.kt:50-81`).
+
+The local backend audit found per-address timeout starvation, retained QUIC sessions, interrupted
+Trojan UDP frames, a VLESS coalescing refusal and WireGuard address/header classification failures.
+Their regression tests now cover the corrected ownership and framing contracts. Host tests and
+local upstream peers do not replace Android network-handoff or remote I2P acceptance.
+
+The owner-stop cleanup description previously omitted a retained UDP receiver: closing QUIC
+already worked, but the uplink task still owned its downlink sender while waiting only for session
+cancellation or another outgoing datagram. Selecting connection closure now releases that ownership
+(`crates/proto-hysteria2/src/udp.rs:65-98`). This lifecycle correction does not establish a failing
+Android DNS lookup's cause, a WAN performance result or a public resolver guarantee.

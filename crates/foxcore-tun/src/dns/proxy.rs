@@ -15,6 +15,7 @@ use foxcore_dns::{DnsCache, http_query, nxdomain_response, restore_transaction_i
 use foxcore_outbound::{Outbound, OutboundKind, OutboundRegistry};
 use foxcore_route::domain::{BlocklistSource, DomainBlocklist};
 use foxcore_route::ruleset::RuleSetArtifact;
+use foxcore_transport::dns_quic::{DnsQuicProtocol, connect_dns_quic_datagram};
 use foxcore_transport::{BoxDatagramSession, BoxStream, Datagram, wrap_tls};
 
 use crate::metrics::FlowMetrics;
@@ -288,7 +289,21 @@ impl DnsProxy {
                 .ok_or_else(|| invalid("cannot answer a malformed DNS query with NXDOMAIN"));
         }
         let network_epoch = self.current_network_epoch()?;
-        if let Some(response) = self.cached_response(query, false, network_epoch, identity)? {
+        if let Some(response) =
+            self.cached_response(query, false, network_epoch, identity, bypasses_filtering)?
+        {
+            if !bypasses_filtering
+                && let Some((domain, verdict)) = self.blocked_response_alias(query, &response)?
+            {
+                self.refuse(
+                    BlockReason::DnsBlocklist,
+                    &domain,
+                    primary_package,
+                    verdict.category(),
+                );
+                return nxdomain_response(query)
+                    .ok_or_else(|| invalid("cannot answer a malformed DNS query with NXDOMAIN"));
+            }
             return Ok(response);
         }
         if self.config.mode == DnsMode::FakeIp
@@ -329,6 +344,27 @@ impl DnsProxy {
                 .await
             {
                 Ok(Ok(response)) if response.len() <= self.config.max_response_bytes => {
+                    if !bypasses_filtering {
+                        match self.blocked_response_alias(query, &response) {
+                            Ok(Some((domain, verdict))) => {
+                                self.refuse(
+                                    BlockReason::DnsBlocklist,
+                                    &domain,
+                                    primary_package,
+                                    verdict.category(),
+                                );
+                                return nxdomain_response(query).ok_or_else(|| {
+                                    invalid("cannot answer a malformed DNS query with NXDOMAIN")
+                                });
+                            }
+                            Err(error) => {
+                                self.reset_upstream(index);
+                                last_error = Some(error);
+                                continue;
+                            }
+                            Ok(None) => {}
+                        }
+                    }
                     match self.cache_response(query, &response, network_epoch, identity) {
                         Ok(true) => return Ok(response),
                         Ok(false) => {
@@ -357,8 +393,21 @@ impl DnsProxy {
             }
         }
         if self.config.stale_on_error
-            && let Some(response) = self.cached_response(query, true, network_epoch, identity)?
+            && let Some(response) =
+                self.cached_response(query, true, network_epoch, identity, bypasses_filtering)?
         {
+            if !bypasses_filtering
+                && let Some((domain, verdict)) = self.blocked_response_alias(query, &response)?
+            {
+                self.refuse(
+                    BlockReason::DnsBlocklist,
+                    &domain,
+                    primary_package,
+                    verdict.category(),
+                );
+                return nxdomain_response(query)
+                    .ok_or_else(|| invalid("cannot answer a malformed DNS query with NXDOMAIN"));
+            }
             return Ok(response);
         }
         Err(last_error.unwrap_or_else(|| {
@@ -403,11 +452,78 @@ impl DnsProxy {
                     server_name: Some(host.clone()),
                     insecure: *insecure,
                     pinned_spki_sha256: pinned_spki_sha256.clone(),
-                    alpn: Vec::new(),
+                    alpn: vec!["dot".into()],
                     ..TlsConfig::default()
                 };
                 self.exchange_stream(index, destination, Some((tls, host)), query)
                     .await
+            }
+            DnsUpstream::Doq {
+                host,
+                port,
+                server_ip,
+                insecure,
+                pinned_spki_sha256,
+            } => {
+                let destination = Destination::new(
+                    server_ip.map_or_else(|| host.clone(), |ip| ip.to_string()),
+                    *port,
+                );
+                let tls = TlsConfig {
+                    enabled: true,
+                    server_name: Some(host.clone()),
+                    insecure: *insecure,
+                    pinned_spki_sha256: pinned_spki_sha256.clone(),
+                    ..Default::default()
+                };
+                self.exchange_quic(
+                    index,
+                    destination,
+                    &tls,
+                    host,
+                    DnsQuicProtocol::Doq,
+                    None,
+                    query,
+                    name,
+                    package,
+                )
+                .await
+            }
+            DnsUpstream::Doh3 {
+                url,
+                server_ip,
+                insecure,
+                pinned_spki_sha256,
+            } => {
+                let parsed = Url::parse(url.expose()).map_err(|_| invalid("invalid DoH3 URL"))?;
+                let host = parsed
+                    .host_str()
+                    .ok_or_else(|| invalid("DoH3 URL has no host"))?
+                    .trim_matches(['[', ']'])
+                    .to_owned();
+                let destination = Destination::new(
+                    server_ip.map_or_else(|| host.clone(), |ip| ip.to_string()),
+                    parsed.port_or_known_default().unwrap_or(DOH_PORT),
+                );
+                let tls = TlsConfig {
+                    enabled: true,
+                    server_name: Some(host.clone()),
+                    insecure: *insecure,
+                    pinned_spki_sha256: pinned_spki_sha256.clone(),
+                    ..Default::default()
+                };
+                self.exchange_quic(
+                    index,
+                    destination,
+                    &tls,
+                    &host,
+                    DnsQuicProtocol::Doh3,
+                    Some(parsed.as_str()),
+                    query,
+                    name,
+                    package,
+                )
+                .await
             }
             DnsUpstream::Doh {
                 url,
@@ -426,6 +542,71 @@ impl DnsProxy {
                 .await
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn exchange_quic(
+        &self,
+        index: usize,
+        destination: Destination,
+        tls: &TlsConfig,
+        host: &str,
+        protocol: DnsQuicProtocol,
+        endpoint: Option<&str>,
+        query: &[u8],
+        name: Option<&str>,
+        package: Option<&str>,
+    ) -> io::Result<Vec<u8>> {
+        let epoch = self.network_epoch.load(Ordering::Acquire);
+        let mut state = self.upstream_state[index].multiplexed_lock().await;
+        let cached = match (&*state, protocol) {
+            (UpstreamState::Doq(client), DnsQuicProtocol::Doq)
+            | (UpstreamState::Doh3(client), DnsQuicProtocol::Doh3)
+                if !client.is_closed() =>
+            {
+                Some(client.clone())
+            }
+            _ => None,
+        };
+        let client = match cached {
+            Some(client) => client,
+            None => {
+                let session = self
+                    .open_udp_upstream(index, &destination, name, package)
+                    .await?;
+                let client = Arc::new(
+                    connect_dns_quic_datagram(session, destination, tls, host, protocol).await?,
+                );
+                if self.network_epoch.load(Ordering::Acquire) != epoch {
+                    return Err(network_changed_error());
+                }
+                *state = match protocol {
+                    DnsQuicProtocol::Doq => UpstreamState::Doq(client.clone()),
+                    DnsQuicProtocol::Doh3 => UpstreamState::Doh3(client.clone()),
+                };
+                client
+            }
+        };
+        drop(state);
+        let result = match endpoint {
+            Some(url) => {
+                client
+                    .exchange_doh3(url, query, self.config.max_response_bytes)
+                    .await
+            }
+            None => {
+                client
+                    .exchange_doq(query, self.config.max_response_bytes)
+                    .await
+            }
+        };
+        if client.is_closed()
+            && let Some(mut state) = self.upstream_state[index].try_lock()
+            && matches!(&*state, UpstreamState::Doq(cached) | UpstreamState::Doh3(cached) if Arc::ptr_eq(cached, &client))
+        {
+            *state = UpstreamState::Empty;
+        }
+        result
     }
 
     async fn exchange_udp(
@@ -731,16 +912,36 @@ impl DnsProxy {
         stale: bool,
         epoch: u64,
         identity: Option<&foxcore_dns::DnsIdentity>,
+        bypasses_filtering: bool,
     ) -> io::Result<Option<Vec<u8>>> {
         let _barrier = lock(&self.network_barrier);
         if self.network_epoch.load(Ordering::Acquire) != epoch {
             return Err(network_changed_error());
         }
         let response = self.cache.cached_response(query, stale);
-        if let (Some(identity), Some(response)) = (identity, response.as_ref()) {
+        if let (Some(identity), Some(response)) = (identity, response.as_ref())
+            && (bypasses_filtering || self.blocked_response_alias(query, response)?.is_none())
+        {
             self.cache.learn_route_hints(query, response, identity);
         }
         Ok(response)
+    }
+
+    fn blocked_response_alias(
+        &self,
+        query: &[u8],
+        response: &[u8],
+    ) -> io::Result<Option<(String, foxcore_route::domain::BlockVerdict)>> {
+        if self.blocklist.is_empty() {
+            return Ok(None);
+        }
+        let chain = foxcore_dns::response_domain_chain(query, response)
+            .ok_or_else(|| invalid("DNS upstream returned an invalid alias chain"))?;
+        Ok(chain.into_iter().find_map(|domain| {
+            self.blocklist
+                .lookup(&domain)
+                .map(|verdict| (domain, verdict))
+        }))
     }
 
     fn cache_response(

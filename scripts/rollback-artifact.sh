@@ -18,7 +18,9 @@
 # older core can safely read state written by the new one.
 #
 # Usage:
-#   scripts/rollback-artifact.sh record  <out-dir> [--libs <jniLibs-dir>]
+#   scripts/rollback-artifact.sh record <out-dir> [--libs <jniLibs-dir>] \
+#     --capabilities <current-android.json> --capabilities-sha256 <sha256> \
+#     --capabilities-provenance <origin.json> --capabilities-provenance-sha256 <sha256>
 #   scripts/rollback-artifact.sh verify  <artifact-dir>
 #   scripts/rollback-artifact.sh compare <old-artifact> <new-artifact>
 set -uo pipefail
@@ -45,12 +47,17 @@ record() {
     shift || true
     [ -n "$out" ] || usage
     local libs=""
+    local capabilities="" capabilities_sha="" provenance="" provenance_sha=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --libs)
                 shift
                 libs="${1:-}"
                 ;;
+            --capabilities) shift; capabilities="${1:-}" ;;
+            --capabilities-sha256) shift; capabilities_sha="${1:-}" ;;
+            --capabilities-provenance) shift; provenance="${1:-}" ;;
+            --capabilities-provenance-sha256) shift; provenance_sha="${1:-}" ;;
             *)
                 echo "unknown argument: $1" >&2
                 exit 2
@@ -58,6 +65,15 @@ record() {
         esac
         shift
     done
+
+    if [ ! -f "$capabilities" ] || [ ! -f "$provenance" ] ||
+       [[ ! "$capabilities_sha" =~ ^[0-9a-f]{64}$ ]] || [[ ! "$provenance_sha" =~ ^[0-9a-f]{64}$ ]] ||
+       [ "$(sha256 "$capabilities")" != "$capabilities_sha" ] || [ "$(sha256 "$provenance")" != "$provenance_sha" ]; then
+        echo "explicit current Android capabilities and matching provenance hashes required" >&2
+        exit 1
+    fi
+    [[ "$capabilities" = /* ]] || capabilities="$PWD/$capabilities"
+    [[ "$provenance" = /* ]] || provenance="$PWD/$provenance"
 
     mkdir -p "$out/jniLibs"
     cd "$ROOT"
@@ -109,13 +125,15 @@ record() {
         echo "   is still the thing you would have to roll back to." >&2
     fi
 
-    FOXCORE_OUT="$out" FOXCORE_ROOT="$ROOT" python3 - <<'PYTHON'
+    FOXCORE_OUT="$out" FOXCORE_ROOT="$ROOT" FOXCORE_CAPABILITIES="$capabilities" FOXCORE_CAPABILITIES_SHA256="$capabilities_sha" FOXCORE_CAPABILITIES_PROVENANCE="$provenance" FOXCORE_CAPABILITIES_PROVENANCE_SHA256="$provenance_sha" python3 - <<'PYTHON'
 import hashlib
+import importlib.util
 import json
 import os
 import pathlib
 import subprocess
 import sys
+import tomllib
 
 out = pathlib.Path(os.environ["FOXCORE_OUT"])
 root = pathlib.Path(os.environ["FOXCORE_ROOT"])
@@ -152,13 +170,20 @@ for line in lines(fixtures / "ondisk.txt"):
         key, value = line.split(" = ", 1)
         ondisk[key] = value
 
-capabilities = {}
-capabilities_path = fixtures / "capabilities.json"
-if capabilities_path.exists():
-    capabilities = json.loads(capabilities_path.read_text(encoding="utf-8"))
-    (out / "capabilities.json").write_text(
-        json.dumps(capabilities, indent=2) + "\n", encoding="utf-8"
-    )
+spec = importlib.util.spec_from_file_location("current_caps_policy", root / "scripts/verify-lab-release.py")
+policy = importlib.util.module_from_spec(spec);spec.loader.exec_module(policy)
+capabilities_raw = pathlib.Path(os.environ["FOXCORE_CAPABILITIES"]).read_bytes()
+provenance_raw = pathlib.Path(os.environ["FOXCORE_CAPABILITIES_PROVENANCE"]).read_bytes()
+policy.need(policy.digest(capabilities_raw) == os.environ["FOXCORE_CAPABILITIES_SHA256"]
+    and policy.digest(provenance_raw) == os.environ["FOXCORE_CAPABILITIES_PROVENANCE_SHA256"], "explicit capabilities input hashes differ")
+origin = policy.document(provenance_raw)
+source_commit = run("git", "rev-parse", "HEAD")
+compiled_files = {name: digest(root/name) for name in policy.compiled_source_paths(root, source_commit)}
+version = tomllib.loads((root/"Cargo.toml").read_text())["workspace"]["package"]["version"]
+capabilities, origin = policy.current_capabilities(capabilities_raw, provenance_raw,
+    (fixtures/"capabilities.json").read_bytes(), version, origin["producer_commit"], libs, policy.source_fingerprint(compiled_files))
+(out/"capabilities.json").write_bytes(capabilities_raw)
+(out/"capabilities-provenance.json").write_bytes(provenance_raw)
 
 manifest = {
     # 2 dropped `journal_event_tags` and the `journal.*` on-disk constants: the
@@ -168,9 +193,10 @@ manifest = {
     "manifest_version": 2,
     "core_version": capabilities.get("core_version"),
     "git": {
-        "commit": run("git", "rev-parse", "HEAD"),
-        "dirty": bool(run("git", "status", "--porcelain")),
+        "commit": origin["producer_commit"],
+        "dirty": origin["producer_dirty"],
     },
+    "metadata_source": {"commit": source_commit, "dirty": bool(run("git", "status", "--porcelain"))},
     "build_inputs": {
         "rustc": run("rustc", "--version"),
         "cargo": run("cargo", "--version"),
@@ -186,6 +212,8 @@ manifest = {
             None,
         ),
         "cargo_lock_sha256": digest(out / "Cargo.lock"),
+        "current_capabilities_sha256": policy.digest(capabilities_raw),
+        "capabilities_provenance_sha256": policy.digest(provenance_raw),
     },
     "abi": {
         "core_abi_version": ondisk.get("api.CORE_ABI_VERSION"),
