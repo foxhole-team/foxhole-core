@@ -1,0 +1,177 @@
+{
+  "schema": 1,
+  "kind": "owner-approved-core-lab-release",
+  "source_commit": "6b668990ebcf703a6ac95549cac82adaa43880a7",
+  "producer_commit": "543efe47cb002af1aa768b9c482a2adc79b323f1",
+  "version": "1.0.0",
+  "release_tag": "v1.0.0",
+  "release_asset": "foxhole-core-v1.0.0.tar.gz",
+  "staging_tag": "lab-core-v1.0.0-6b66899-20261029-first",
+  "staging_asset": "foxhole-core-v1.0.0.tar.gz",
+  "compiled_inputs_sha256": "2e7b836dc44d51ffa2106779f0b57e832fa9cfb09fbec397c62744cd0d0c5575",
+  "scope_sha256": "74bc319980b95ebd60d70bd3c7fbf0ac271189360ec97e4033f14272dd469a77",
+  "files": {
+    "evidence/scopes/android-release.json": {
+      "sha256": "271eabbf14124f0bdc5d520a686c9c741dcbb9ee4793c19ed1477e631fe885eb",
+      "bytes": 1156,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-share_link.json": {
+      "sha256": "883fb55d460eb1f4ab5ff870f055698f38c2bb7cf32a667007d28c0bb3a85c7f",
+      "bytes": 766,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-shadowtls_server_stream.json": {
+      "sha256": "7494454b4d22f2bda21725e7f6383fb2d420392132fe3d967ad455d21a599559",
+      "bytes": 778,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-socks_codec.json": {
+      "sha256": "176f8b5a3e9b5598ad3a6492626d2ec3ce070a9d08d9af0ba15511c26f12ad30",
+      "bytes": 768,
+      "mode": 420
+    },
+    "evidence/scopes/features.json": {
+      "sha256": "8a0a17f03eb402e7b6bc301e7a394cf481249d13955d2200c1f0d18467692c88",
+      "bytes": 925,
+      "mode": 420
+    },
+    "evidence/scopes/gate.json": {
+      "sha256": "96e8d2f055e56a7a403bf007ab6e651ea39ce3b525d44aab8caaea2a7de008ed",
+      "bytes": 959,
+      "mode": 420
+    },
+    "evidence/scopes/miri.json": {
+      "sha256": "b84ee61034ca6345ababa74fd886f5d288481839ae2c966e77a19497416c2a6f",
+      "bytes": 913,
+      "mode": 420
+    },
+    "evidence/scopes/supply-chain.json": {
+      "sha256": "43f8fcf85f4ceb469aee5413bce0f7e01eee50691742326487aae20567779908",
+      "bytes": 993,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-flow_key_from_packet.json": {
+      "sha256": "c86fbcbf40a8d13bf13d5d9710672be477810a635162d10343db3270d7225a94",
+      "bytes": 777,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-harness.json": {
+      "sha256": "d4edf8d77130e15d8c6e7e19d52a376323beb4ca68ff87a357d5f7ff2c8f840a",
+      "bytes": 899,
+      "mode": 420
+    },
+    "evidence/scopes/sentinel-native.json": {
+      "sha256": "21a4d1992b62f21124f951a86a3f1ff8dcb8641ae56f094a108b35c3f7cc4f89",
+      "bytes": 901,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-dns_message.json": {
+      "sha256": "1a27a6dc87cac1fbd5f3906964dea5be3bf5b79a510c17d72bd3bc436dee4b89",
+      "bytes": 767,
+      "mode": 420
+    },
+    "evidence/scopes/abi.json": {
+      "sha256": "2f357abdb4af805ba3b2f6942aecea3832d1bf49789e2cb53802609ff0fe0217",
+      "bytes": 1144,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-wireguard_message.json": {
+      "sha256": "b73a1ebc5d9b6cd137a7a9be7f738572ec8cece32aa1823bd4a17bb26c5204f8",
+      "bytes": 774,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-reality_records.json": {
+      "sha256": "af0206efffdc15dbcce19e47025cc861c7ee441cf29b9583d6445003749cf035",
+      "bytes": 771,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-http_codec.json": {
+      "sha256": "df196dbc0c971f3b296d8c78dde96f031698507d43a6102f76ad44ba3ab512f7",
+      "bytes": 767,
+      "mode": 420
+    },
+    "evidence/scopes/fuzz-netstack_packet.json": {
+      "sha256": "3774e7eb752cbcac0a50e7ed8cd2fce78769915ab49a109119c7d83083fc9462",
+      "bytes": 772,
+      "mode": 420
+    },
+    "payload/capabilities.json": {
+      "sha256": "6d94aa3cc13d03f1aa466a2097f354c1fdb58d83b33eb08aabae048e348ed4d1",
+      "bytes": 14447,
+      "mode": 420
+    },
+    "payload/Cargo.lock": {
+      "sha256": "43690445bcf071ede05303be52b2b3c78b544a8e1c7e485379fa44c2c1c6bafe",
+      "bytes": 172327,
+      "mode": 420
+    },
+    "payload/abi-gate.log": {
+      "sha256": "f7cf4052bde32569360f9ec1d63fdbc9b76caeae1792d65cb4320e236bda7413",
+      "bytes": 7421,
+      "mode": 420
+    },
+    "payload/MANIFEST.json": {
+      "sha256": "8f60c92ad8a34aca57e6ba2250cc5e3c790b1e3170d66c7e2cecd6c5af4fb899",
+      "bytes": 5205,
+      "mode": 420
+    },
+    "payload/capabilities-provenance.json": {
+      "sha256": "a7f240b12b641e9863061d753270145625554bbcce16e2c2ad93afdbd371d369",
+      "bytes": 1556,
+      "mode": 420
+    },
+    "payload/tools/linux-x86_64/foxcore-dns-compile": {
+      "sha256": "e2c575ef3a6d090b712b7521ed71df7ef70928dcb0248c9ed798a9e52c38fd13",
+      "bytes": 513448,
+      "mode": 493
+    },
+    "payload/sbom/foxcore-aarch64-linux-android.cdx.json": {
+      "sha256": "f314c76ce892b1a9d8edf6f3cd7f338094c538a970da0173482de76eaff071d5",
+      "bytes": 488335,
+      "mode": 420
+    },
+    "payload/sbom/workspace-all-targets.cdx.json": {
+      "sha256": "9b99717711f027afddeb1834f20c4d8f69ea04e1bf6e373f062ba8173567825b",
+      "bytes": 575615,
+      "mode": 420
+    },
+    "payload/jniLibs/armeabi-v7a/libfoxhole_native.so": {
+      "sha256": "ec24f71411ccf1bf6fd88ec899731e139882b1feea887135cbab219e565e6357",
+      "bytes": 18003644,
+      "mode": 420
+    },
+    "payload/jniLibs/x86/libfoxhole_native.so": {
+      "sha256": "7e91a0d378213b9b3902422998994e951252df81c9d6c19d1e1c40b33f5b525c",
+      "bytes": 27378912,
+      "mode": 420
+    },
+    "payload/jniLibs/arm64-v8a/libfoxhole_native.so": {
+      "sha256": "8395e0db3df2de99dc468c4d35caffb7a8c5d91a0416aff26201341a94d0ad67",
+      "bytes": 24961616,
+      "mode": 420
+    },
+    "payload/jniLibs/x86_64/libfoxhole_native.so": {
+      "sha256": "6382b76f11138e752fd4478c75f9eb3ffa6fd5005c1978fd02f8750e88a43724",
+      "bytes": 28400120,
+      "mode": 420
+    },
+    "metadata/LAB-GATE.json": {
+      "sha256": "403e33bcc3c35258993f81c89311c296e94cf29516dc5d2bddf2b7e046d6ac47",
+      "bytes": 5911,
+      "mode": 420
+    },
+    "metadata/compiled-inputs.json": {
+      "sha256": "2e7b836dc44d51ffa2106779f0b57e832fa9cfb09fbec397c62744cd0d0c5575",
+      "bytes": 60021,
+      "mode": 420
+    },
+    "metadata/compiler-producer.json": {
+      "sha256": "de5d2ae53d6551cb5e815429e7330c5c265969872f3377f878019630e6fa500d",
+      "bytes": 341,
+      "mode": 420
+    }
+  },
+  "archive_sha256": "5ef1ef855fcdbeb26bf20ae9979502bd36959f59ceec2d7ece019670ecd7e4ad",
+  "archive_bytes": 49011981
+}
