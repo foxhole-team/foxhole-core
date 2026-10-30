@@ -1,7 +1,6 @@
 use std::io;
 use std::net::{IpAddr, SocketAddr};
 use std::os::fd::AsRawFd;
-use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -69,37 +68,19 @@ pub(crate) fn resolve(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
     let handle = tokio::runtime::Handle::try_current().map_err(|_| io::ErrorKind::NotConnected)?;
     // ProtectedDialer invokes this only on its bounded blocking pool, never on an async worker.
     handle.block_on(async {
-        tokio::time::timeout(Duration::from_secs(5), async {
-            let mut result = Vec::new();
-            for server in ["1.1.1.1:53", "[2606:4700:4700::1111]:53"] {
-                let server: SocketAddr = server.parse().map_err(|_| io::ErrorKind::InvalidInput)?;
-                for kind in [1, 28] {
-                    if let Ok(Ok(addresses)) =
-                        tokio::time::timeout(Duration::from_secs(2), exchange(host, kind, server))
-                            .await
-                    {
-                        for address in addresses {
-                            if !result.contains(&address) {
-                                result.push(address);
-                            }
-                        }
-                    }
-                }
-                if !result.is_empty() {
-                    break;
-                }
-            }
-            if result.is_empty() {
-                Err(io::ErrorKind::NotFound.into())
-            } else {
-                Ok(result
-                    .into_iter()
-                    .map(|ip| SocketAddr::new(ip, port))
-                    .collect())
-            }
+        let servers = ["1.1.1.1:53", "[2606:4700:4700::1111]:53"].map(|server| {
+            server
+                .parse::<SocketAddr>()
+                .expect("literal bootstrap resolver")
+        });
+        let addresses = crate::bootstrap_budget::collect_addresses(|server, kind| {
+            exchange(host, kind, servers[server])
         })
-        .await
-        .map_err(|_| io::ErrorKind::TimedOut)?
+        .await?;
+        Ok(addresses
+            .into_iter()
+            .map(|ip| SocketAddr::new(ip, port))
+            .collect())
     })
 }
 

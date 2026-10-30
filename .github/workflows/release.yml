@@ -67,7 +67,10 @@ jobs:
           selection="$RUNNER_TEMP/lab-selection.json"
           tag="$(jq -r .release_tag "$selection")"
           asset="$(jq -r .release_asset "$selection")"
-          printf 'Exact owner-approved LAB artifact. Source %s; compiled producer %s; handoff %s.\n' "$GITHUB_SHA" "$(jq -r .producer_commit "$selection")" "$HANDOFF_COMMIT" > "$RUNNER_TEMP/release-notes.txt"
+          python3 scripts/render-release-notes.py --tag "$tag" --source "$GITHUB_SHA" \
+            --producer "$(jq -r .producer_commit "$selection")" --handoff "$HANDOFF_COMMIT" \
+            --asset "$asset" --archive-sha256 "$(jq -r .archive_sha256 "$selection")" \
+            --output "$RUNNER_TEMP/release-notes.txt"
           gh release create "$tag" "release/$asset" release/SHA256SUMS --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "FoxHole Core $tag" --notes-file "$RUNNER_TEMP/release-notes.txt" --latest
           [[ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$tag" --jq .object.sha)" == "$GITHUB_SHA" ]]
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '[.assets[].name] | sort' | jq -e --arg asset "$asset" '(["SHA256SUMS", $asset] | sort) as $expected | . == $expected'

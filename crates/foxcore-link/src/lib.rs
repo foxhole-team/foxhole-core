@@ -762,10 +762,7 @@ pub fn import_subscription_partial(value: &str) -> Result<SubscriptionImport, Li
         return clash::import_yaml(&text);
     }
     if text.trim_start().starts_with('{') {
-        return structured::import_json(&text).map(|profiles| SubscriptionImport {
-            profiles,
-            rejected: Vec::new(),
-        });
+        return structured::import_json_partial(&text);
     }
 
     let mut profiles = Vec::new();

@@ -603,7 +603,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-api"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64",
  "ipnet",
@@ -616,14 +616,14 @@ dependencies = [
 
 [[package]]
 name = "foxcore-dialer"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-dns"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "ipnet",
 ]
@@ -646,7 +646,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-link"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -662,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-outbound"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "base64",
@@ -678,14 +678,14 @@ dependencies = [
 
 [[package]]
 name = "foxcore-relay"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-route"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aws-lc-rs",
  "foxcore-api",
@@ -698,7 +698,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-trafficmap"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "foxcore-api",
@@ -710,7 +710,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-transport"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -738,7 +738,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-tun"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "arc-swap",
  "bytes",
@@ -1490,7 +1490,7 @@ dependencies = [
 
 [[package]]
 name = "proto-http"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "base64",
  "bytes",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "proto-reality"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowtls"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1538,7 +1538,7 @@ dependencies = [
 
 [[package]]
 name = "proto-socks"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1551,7 +1551,7 @@ dependencies = [
 
 [[package]]
 name = "proto-wireguard"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aws-lc-rs",
  "blake2",

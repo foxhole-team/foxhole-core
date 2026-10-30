@@ -1,6 +1,8 @@
 mod args;
 #[cfg(target_os = "linux")]
 mod bootstrap;
+#[cfg(any(target_os = "linux", test))]
+mod bootstrap_budget;
 #[cfg(target_os = "linux")]
 mod bridge;
 mod config;

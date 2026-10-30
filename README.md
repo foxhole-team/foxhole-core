@@ -52,9 +52,10 @@ TUN → flow engine → routing policy → outbound
 ```
 
 > [!WARNING]
-> **Release channel:** Stable. Device and interoperability acceptance remains
-> specific to each release artifact. Protocol maturity is listed in the table below; independently
-> verified interoperability is documented in [`interop.md`](docs/interop.md).
+> **Release channel:** Stable; 1.0.1 is the current release candidate. Protocols retain
+> their individual `beta` or `experimental` maturity. Independent device/peer interoperability
+> is **not verified for the new 1.0.1 artifacts**; record exact binary identities and results in
+> [`interop.md`](docs/interop.md). Earlier tests keep their original source/artifact scope.
 >
 > **TLS fingerprint:** a Reality connection sends a browser-faithful
 > ClientHello — nine profiles, seven transcribed from uTLS and two from
@@ -73,7 +74,7 @@ TUN → flow engine → routing policy → outbound
 | [SECURITY.md](SECURITY.md) | vulnerability reporting and security scope |
 | [threat-model.md](docs/threat-model.md) | threat model and security boundaries |
 | [abi.md](docs/abi.md) | FFI contract: handles, threads, panic boundaries, error codes and limits |
-| [interop.md](docs/interop.md) | independently verified interoperability |
+| [interop.md](docs/interop.md) | artifact-bound interoperability status and pending evidence |
 | [fingerprints/](fingerprints/) | provenance of REALITY ClientHello fingerprints |
 
 FoxHole VPN is a separate consumer of the same Core ABI. Its connection-data updater checks
@@ -460,7 +461,7 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-The 1.0.0 release candidate requires the `android4` delivery profile:
+The 1.0.1 release candidate requires the `android4` delivery profile:
 
 ```text
 arm64-v8a
@@ -493,14 +494,15 @@ and immutable LAB handoff, checks the selected archive and required evidence, th
 those exact bytes without rebuilding. The handoff binds the delivery source and compiled
 producer separately; documentation-only changes do not change a native producer identity.
 
-Each release archive contains the gated JNI libraries, their rollback manifest,
+Each `foxhole-core-v<version>.tar.gz` release archive contains the four gated JNI libraries,
+the Linux x86_64 DNS compiler, their producer records, the rollback manifest,
 the committed CycloneDX SBOMs and `Cargo.lock`. The release also contains
 `SHA256SUMS` and keyless Sigstore provenance bound to this repository, workflow
 and release commit:
 
 ```bash
 sha256sum -c SHA256SUMS
-gh attestation verify foxcore-android-v<version>.tar.gz \
+gh attestation verify foxhole-core-v<version>.tar.gz \
   --repo foxhole-team/foxhole-core
 ```
 

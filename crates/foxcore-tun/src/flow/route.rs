@@ -13,7 +13,8 @@ use foxcore_route::RouteTable;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 
-use foxcore_trafficmap::{FlowRoute, LiveFlow};
+use crate::dns::DnsQueryLease;
+use foxcore_trafficmap::{FlowHandle, FlowLane, FlowRoute, LiveFlow};
 
 #[cfg(feature = "wireguard")]
 use crate::TunDevice;
@@ -84,6 +85,35 @@ pub(crate) fn outbound_allowed(outbound: &Outbound, routes: &RouteTable) -> bool
     }
 }
 
+fn track_dns_query(
+    engine: &FlowEngine,
+    current: &FlowPolicySnapshot,
+    context: &FlowContext,
+    cancel: &CancellationToken,
+    bytes: usize,
+) -> (FlowHandle, DnsQueryLease) {
+    let lane = match current.dns_config.route {
+        foxcore_api::DnsRoute::Direct => FlowLane::Direct,
+        foxcore_api::DnsRoute::Primary => FlowLane::Vpn,
+        foxcore_api::DnsRoute::Tor => FlowLane::Tor,
+    };
+    let tracked = engine.connections.open(
+        context.transport,
+        context.destination.host.clone(),
+        context.destination.port,
+        FlowRoute::new(lane, "dns"),
+        context.packages.clone(),
+        context.uid,
+    );
+    tracked.flow().add_up(bytes as u64);
+    let lease = DnsQueryLease::new(
+        current.revocation.clone(),
+        tracked.flow().revocation(),
+        cancel.clone(),
+    );
+    (tracked, lease)
+}
+
 pub(crate) async fn serve_dns_tcp(
     stream: &mut TcpFlow,
     engine: &FlowEngine,
@@ -130,19 +160,30 @@ pub(crate) async fn serve_dns_tcp(
                 IpTransport::Tcp,
             )
             .await;
-        drop(current);
         if !admitted {
             metrics.attribution_error();
             metrics.block_flow();
             engine.emit_block(BlockReason::Unattributed, context.transport, &context);
             return;
         }
+        if current.routes.kill_switch() {
+            stream.reset();
+            return;
+        }
+        let (tracked, lease) = track_dns_query(engine, &current, &context, &cancel, query.len());
         let response = tokio::select! {
-            _ = cancel.cancelled() => return,
-            response = exchange_dns(policy, &context, &query, metrics) => {
-                response.or_else(|| servfail_response(&query))
-            }
+            biased;
+            _ = lease.cancelled() => None,
+            response = exchange_dns_leased(policy, &current, &context, &query, metrics, &lease) => Some(response),
         };
+        if lease.is_revoked() || response.is_none() {
+            if !cancel.is_cancelled() {
+                metrics.revoke_flow();
+            }
+            stream.reset();
+            return;
+        }
+        let response = response.flatten().or_else(|| servfail_response(&query));
         let Some(response) = response else {
             metrics.flow_error();
             return;
@@ -152,16 +193,25 @@ pub(crate) async fn serve_dns_tcp(
             return;
         };
         let write = tokio::select! {
-            _ = cancel.cancelled() => return,
+            biased;
+            _ = lease.cancelled() => None,
             write = async {
                 stream.write_u16(response_len).await?;
                 stream.write_all(&response).await?;
                 stream.flush().await
-            } => write,
+            } => Some(write),
         };
-        if write.is_err() {
+        if lease.is_revoked() || write.is_none() {
+            if !cancel.is_cancelled() {
+                metrics.revoke_flow();
+            }
+            stream.reset();
             return;
         }
+        if write.is_some_and(|result| result.is_err()) {
+            return;
+        }
+        tracked.flow().add_down(response.len() as u64);
         metrics.add_down(response.len() as u64);
     }
 }
@@ -202,19 +252,28 @@ pub(crate) async fn serve_dns_udp(
                 IpTransport::Udp,
             )
             .await;
-        drop(current);
         if !admitted {
             metrics.attribution_error();
             metrics.block_flow();
             engine.emit_block(BlockReason::Unattributed, context.transport, &context);
             continue;
         }
+        if current.routes.kill_switch() {
+            return;
+        }
+        let (tracked, lease) = track_dns_query(engine, &current, &context, &cancel, query.len());
         let response = tokio::select! {
-            _ = cancel.cancelled() => return,
-            response = exchange_dns(policy, &context, query, metrics) => {
-                response.or_else(|| servfail_response(query))
-            }
+            biased;
+            _ = lease.cancelled() => None,
+            response = exchange_dns_leased(policy, &current, &context, query, metrics, &lease) => Some(response),
         };
+        if lease.is_revoked() || response.is_none() {
+            if !cancel.is_cancelled() {
+                metrics.revoke_flow();
+            }
+            return;
+        }
+        let response = response.flatten().or_else(|| servfail_response(query));
         let Some(response) = response else {
             metrics.flow_error();
             continue;
@@ -235,24 +294,50 @@ pub(crate) async fn serve_dns_udp(
             response
         };
         let write = tokio::select! {
-            _ = cancel.cancelled() => return,
-            write = stream.write_all(&response) => write,
+            biased;
+            _ = lease.cancelled() => None,
+            write = stream.write_all(&response) => Some(write),
         };
-        if write.is_err() {
+        if lease.is_revoked() || write.is_none() {
+            if !cancel.is_cancelled() {
+                metrics.revoke_flow();
+            }
             return;
         }
+        if write.is_some_and(|result| result.is_err()) {
+            return;
+        }
+        tracked.flow().add_down(response.len() as u64);
         metrics.add_down(response.len() as u64);
     }
 }
 
+#[cfg(test)]
 pub(super) async fn exchange_dns(
     policy: &FlowPolicyStore,
     context: &FlowContext,
     query: &[u8],
     metrics: &FlowMetrics,
 ) -> Option<Vec<u8>> {
+    let current = policy.current.load_full();
+    let lease = DnsQueryLease::new(
+        current.revocation.clone(),
+        CancellationToken::new(),
+        CancellationToken::new(),
+    );
+    exchange_dns_leased(policy, &current, context, query, metrics, &lease).await
+}
+
+async fn exchange_dns_leased(
+    policy: &FlowPolicyStore,
+    current: &FlowPolicySnapshot,
+    context: &FlowContext,
+    query: &[u8],
+    metrics: &FlowMetrics,
+    lease: &DnsQueryLease,
+) -> Option<Vec<u8>> {
+    lease.check().ok()?;
     DnsCache::question(query)?;
-    let current = policy.current.load();
     // Report DNS policy refusals through the same audit surface as other flows.
     let unattributed = (current.routes.requires_uid() && context.uid.is_none())
         || (current.routes.requires_package() && context.packages.is_empty());
@@ -282,13 +367,13 @@ pub(super) async fn exchange_dns(
         return None;
     }
     let proxy = current.dns_proxy.clone()?;
-    drop(current);
     proxy
-        .exchange_for_identity(
+        .exchange_for_identity_leased(
             query,
             context.uid,
             context.package.as_deref(),
             context.packages.as_slice(),
+            lease,
         )
         .await
         .ok()

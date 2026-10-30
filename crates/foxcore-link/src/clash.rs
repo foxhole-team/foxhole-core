@@ -506,10 +506,14 @@ pub(crate) fn import_yaml(value: &str) -> Result<SubscriptionImport, LinkError> 
             });
             continue;
         }
-        let link = share_link(node, &kind)?;
-        result
-            .profiles
-            .push(crate::import_link(&link).map_err(|_| invalid())?);
+        match share_link(node, &kind).and_then(|link| crate::import_link(&link)) {
+            Ok(profile) => result.profiles.push(profile),
+            Err(_) => result.rejected.push(RejectedLine {
+                index: index + 1,
+                scheme: Some(kind),
+                reason: "invalid or unsupported protocol parameters".into(),
+            }),
+        }
     }
     if result.profiles.is_empty() {
         return Err(invalid());
@@ -579,6 +583,19 @@ mod tests {
                 .to_string();
             assert!(!error.contains("sensitive-fixture"));
         }
+    }
+
+    #[test]
+    fn regression_partial_clash_keeps_valid_nodes_after_known_protocol_parameter_refusal() {
+        let body = format!(
+            "{NODES}\n - {{type: ss, server: 1.1.1.1, port: 8388, cipher: aes-256-gcm, password: sensitive-node-secret, plugin: obfs}}\n"
+        );
+        let imported = import_subscription_partial(&body).unwrap();
+        assert_eq!(imported.profiles.len(), 2);
+        assert_eq!(imported.rejected.len(), 1);
+        assert_eq!(imported.rejected[0].index, 3);
+        assert!(!format!("{:?}", imported.rejected).contains("sensitive-node-secret"));
+        assert!(import_subscription(&body).is_err());
     }
 
     #[test]

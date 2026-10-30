@@ -52,9 +52,10 @@ TUN → flow engine → routing policy → outbound
 ```
 
 > [!WARNING]
-> **Канал выпуска:** Stable. Проверки устройств и совместимости относятся
-> к конкретной сборке. Зрелость отдельных протоколов указана в таблице ниже; фактически
-> проверенную совместимость см. в [`interop.md`](interop.md).
+> **Канал выпуска:** Stable; текущий кандидат — 1.0.1. Протоколы сохраняют свою
+> зрелость `beta` или `experimental`. Независимая совместимость новых артефактов 1.0.1
+> с устройствами и пирами **не подтверждена**; точные binary SHA и результаты заносятся в
+> [`interop.md`](interop.md). Прежние проверки сохраняют исходную область источников и артефактов.
 >
 > **TLS-отпечаток:** соединение Reality отправляет браузерный ClientHello —
 > девять профилей: семь транскрибированы из uTLS, ещё два — из first-party
@@ -72,7 +73,7 @@ TUN → flow engine → routing policy → outbound
 | [SECURITY.md](../SECURITY.md) | сообщение об уязвимости и security scope |
 | [threat-model.md](threat-model.md) | модель угроз и границы безопасности |
 | [abi.md](abi.md) | FFI-контракт: handles, потоки, паники, коды ошибок и лимиты |
-| [interop.md](interop.md) | фактически проверенная совместимость с независимыми пирами |
+| [interop.md](interop.md) | статус совместимости конкретных артефактов и ожидаемые проверки |
 | [fingerprints/](../fingerprints/) | происхождение REALITY ClientHello fingerprints |
 
 FoxHole VPN — отдельный потребитель того же ABI Core. Проверка данных подключения сравнивает
@@ -509,7 +510,7 @@ Capabilities включают:
 - опциональные функции;
 - неподдерживаемые расширения.
 
-Кандидат релиза 1.0.0 требует профиль поставки `android4`:
+Кандидат релиза 1.0.1 требует профиль поставки `android4`:
 
 ```text
 arm64-v8a
@@ -544,14 +545,15 @@ x86_64
 пересборки. Handoff отдельно связывает исходники поставки и фактический нативный
 producer; правки документации не меняют идентичность нативного producer.
 
-Архив каждого релиза содержит прошедшие гейт JNI-библиотеки,
+Архив `foxhole-core-v<version>.tar.gz` содержит четыре прошедшие гейт JNI-библиотеки,
+Linux x86_64 DNS-компилятор и записи их producer,
 их rollback-манифест, зафиксированные CycloneDX SBOM и `Cargo.lock`. Релиз
 также содержит `SHA256SUMS` и keyless Sigstore provenance, привязанный к этому
 репозиторию, workflow и релизному коммиту:
 
 ```bash
 sha256sum -c SHA256SUMS
-gh attestation verify foxcore-android-v<версия>.tar.gz \
+gh attestation verify foxhole-core-v<version>.tar.gz \
   --repo foxhole-team/foxhole-core
 ```
 

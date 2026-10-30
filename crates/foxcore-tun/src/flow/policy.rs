@@ -20,6 +20,44 @@ use tokio_util::sync::CancellationToken;
 use crate::FlowMetrics;
 use crate::dns::DnsProxy;
 
+/// Only this typed source denotes an expected-revision CAS failure.
+#[derive(Debug)]
+pub struct PolicyRevisionConflict {
+    pub expected: u64,
+    pub current: u64,
+}
+impl std::fmt::Display for PolicyRevisionConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "policy revision mismatch: expected {}, current {}",
+            self.expected, self.current
+        )
+    }
+}
+impl std::error::Error for PolicyRevisionConflict {}
+
+/// A rejected DNS update that nevertheless armed the independent emergency gate.
+#[derive(Debug)]
+pub struct PolicyEmergencyBlock {
+    pub revision: u64,
+    cause: io::Error,
+}
+impl std::fmt::Display for PolicyEmergencyBlock {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}; emergency kill switch applied at revision {}",
+            self.cause, self.revision
+        )
+    }
+}
+impl std::error::Error for PolicyEmergencyBlock {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.cause)
+    }
+}
+
 impl FlowPolicyStore {
     pub fn new(
         generation: u64,
@@ -164,15 +202,46 @@ impl FlowPolicyStore {
         if expected_revision.is_some_and(|expected| expected != current.revision) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
-                format!(
-                    "policy revision mismatch: expected {}, current {}",
-                    expected_revision.unwrap_or_default(),
-                    current.revision
-                ),
+                PolicyRevisionConflict {
+                    expected: expected_revision.unwrap_or_default(),
+                    current: current.revision,
+                },
             ));
         }
-        let artifacts =
-            active_rule_set_artifacts(&dns_config, &mutable.rule_sets, &mutable.trusted_rule_sets)?;
+        let artifacts = match active_rule_set_artifacts(
+            &dns_config,
+            &mutable.rule_sets,
+            &mutable.trusted_rule_sets,
+        ) {
+            Ok(artifacts) => artifacts,
+            Err(error) => {
+                if routes.kill_switch() && !current.routes.kill_switch() {
+                    let revision = current.revision.saturating_add(1);
+                    self.current.store(Arc::new(FlowPolicySnapshot {
+                        revision,
+                        routes: current.routes.with_emergency_block(),
+                        dns_config: current.dns_config.clone(),
+                        dns: current.dns.clone(),
+                        dns_proxy: current.dns_proxy.clone(),
+                        revocation: CancellationToken::new(),
+                    }));
+                    current.revocation.cancel();
+                    if let Some(proxy) = &current.dns_proxy {
+                        // The emergency snapshot retains the admitted DNS policy,
+                        // not its idle sockets or late-response cache epoch.
+                        proxy.network_changed();
+                    }
+                    return Err(io::Error::new(
+                        error.kind(),
+                        PolicyEmergencyBlock {
+                            revision,
+                            cause: error,
+                        },
+                    ));
+                }
+                return Err(error);
+            }
+        };
         let revision = current.revision.saturating_add(1);
         let dns = Arc::new(current.dns.fork_for_policy(dns_config.cache_size));
         let dns_proxy = DnsProxy::new_with_gates_and_rule_sets(
@@ -206,6 +275,9 @@ impl FlowPolicyStore {
         // the revoke and the new policy becoming visible.
         if kill_switch {
             current.revocation.cancel();
+            if let Some(proxy) = &current.dns_proxy {
+                proxy.network_changed();
+            }
         }
         Ok(revision)
     }

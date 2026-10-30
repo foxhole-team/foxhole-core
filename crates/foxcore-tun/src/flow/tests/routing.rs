@@ -438,3 +438,181 @@ fn explicit_dns_continuation_does_not_reset_original_expiry() {
         "handoff extended the original TTL"
     );
 }
+
+#[test]
+fn regression_expired_categorized_feed_cannot_prevent_emergency_kill_switch() {
+    use foxcore_api::{DnsCategory, TrafficPolicyConfig};
+    use foxcore_route::ruleset::{RuleSetVerificationPolicy, verify_rule_set};
+    let (_, mut original) = signed_rule_set();
+    original.artifact = foxcore_route::ruleset::compile_rule_set_artifact(
+        b"owned-category-fixture",
+        &["example.com".into()],
+        &["safe.example.com".into()],
+        Some(DnsCategory::Telemetry),
+    )
+    .unwrap()
+    .bytes;
+    let key = EcdsaKeyPair::generate(&ECDSA_P256_SHA256_ASN1_SIGNING).unwrap();
+    let public = key.public_key().as_ref().to_vec();
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let name = "foxhole-dns-categories-normal-medium";
+    let bundle = |generated: u64, expires: u64| {
+        let mut manifest = serde_json::to_vec(&json!({
+            "schema":3,"name":name,"format":RULE_SET_FORMAT,"sequence":7,
+            "generated_at_unix":generated,"expires_at_unix":expires,"key_sha256":hex(&Sha256::digest(&public)),
+            "categories":["telemetry"],"tagged_input_sha256":hex(&original.artifact[40..72]),
+            "tiers":{"trackers":"normal","malicious":"medium"},
+            "sources":[{"id":"owned-fixture","repo":"https://example.invalid/owned-fixture",
+                "commit":"2222222222222222222222222222222222222222","license":"CC0-1.0",
+                "inputs":[{"path":"fixture.txt","sha256":hex(&[7u8;32])}],"categories":["telemetry"]}],
+            "artifact":{"file":"dns-categories.fhds","size":original.artifact.len(),
+                "sha256":hex(&Sha256::digest(&original.artifact)),"block_entries":1,"allow_entries":1,
+                "category_entries":{"malicious":0,"telemetry":1,"trackers":0,"ads":0}},
+            "compatibility":{"core_schema":1,"category_schema":1}
+        })).unwrap();
+        manifest.push(b'\n');
+        let signature = key
+            .sign(&SystemRandom::new(), &manifest)
+            .unwrap()
+            .as_ref()
+            .to_vec();
+        RuleSetBundle {
+            name: name.into(),
+            manifest,
+            signature,
+            artifact: original.artifact.clone(),
+        }
+    };
+    let fresh = bundle(now - 60, now + 3600);
+    let expired = bundle(1000, 2000);
+    // This simulates a previously verified schema-3 feed aging out, without
+    // relaxing current-time verification or sleeping on the wall clock.
+    let historical = verify_rule_set(
+        &expired.manifest,
+        &expired.signature,
+        &public,
+        &expired.artifact,
+        RuleSetVerificationPolicy::new(name, 7, 1500),
+    )
+    .unwrap();
+    let dns = DnsConfig {
+        mode: foxcore_api::DnsMode::FakeIp,
+        rule_sets: vec![DnsRuleSetConfig {
+            name: name.into(),
+            public_key: STANDARD.encode(&public),
+            minimum_sequence: 7,
+            required: true,
+            enabled_categories: Some(vec![DnsCategory::Telemetry]),
+        }],
+        ..Default::default()
+    };
+    let direct = Arc::new(Outbound::direct(ProtectedDialer::host()));
+    let policy = FlowPolicyStore::new_with_rule_sets(
+        1,
+        RouteTable::compile(Vec::new(), RouteAction::Direct),
+        dns.clone(),
+        Arc::new(OutboundRegistry::single(direct.clone())),
+        direct,
+        Arc::new(FlowMetrics::default()),
+        EventSink::none(),
+        vec![fresh],
+    )
+    .unwrap();
+    policy
+        .reload
+        .lock()
+        .unwrap()
+        .rule_sets
+        .insert(name.into(), historical);
+    let before = policy.current.load_full();
+    let expected = before.revision;
+    let query = dns_query(991);
+    let promised = synthetic_address(&before.dns, &query, &dns);
+    let cached = before
+        .dns
+        .fake_response(&query, dns.fake_ipv4_pool, dns.fake_ipv6_pool, 300)
+        .unwrap();
+    assert!(before.dns.cache_response(&query, &cached, true));
+    assert!(before.dns.cached_response(&query, false).is_some());
+    let armed = RouteTable::compile_with_traffic(
+        Vec::new(),
+        RouteAction::Direct,
+        TrafficPolicyConfig {
+            kill_switch: true,
+            ..Default::default()
+        },
+        false,
+        false,
+    );
+    let error = policy
+        .reload(Some(expected), armed, dns.clone())
+        .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        error
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<PolicyEmergencyBlock>()
+            .unwrap()
+            .revision,
+        expected + 1
+    );
+    assert!(policy.gates().kill_switch());
+    assert!(
+        before.revocation.is_cancelled(),
+        "existing flows must be revoked even when DNS reload is refused"
+    );
+    assert_eq!(policy.revision(), expected + 1);
+    let after = policy.current.load_full();
+    assert!(
+        Arc::ptr_eq(&before.dns, &after.dns),
+        "invalid DNS must not be installed"
+    );
+    assert_eq!(after.dns_config, before.dns_config);
+    assert!(after.dns.cached_response(&query, false).is_none());
+    assert_eq!(
+        after.dns.fake_domain(promised).as_deref(),
+        Some("example.com")
+    );
+    assert!(
+        after.routes.tor_enabled(),
+        "only emergency gate, not unvalidated requested routes, is applied"
+    );
+    let context = context_for(
+        1,
+        IpTransport::Tcp,
+        SocketAddr::from(([10, 77, 0, 2], 50000)),
+        SocketAddr::from(([1, 1, 1, 1], 443)),
+        &after.dns,
+    );
+    assert_eq!(
+        after.routes.decide(&context),
+        &RouteAction::Block,
+        "new connects must fail closed"
+    );
+    let stale = policy
+        .reload(
+            Some(expected),
+            RouteTable::compile(Vec::new(), RouteAction::Direct),
+            dns.clone(),
+        )
+        .unwrap_err();
+    assert_eq!(stale.kind(), io::ErrorKind::WouldBlock);
+    assert!(policy.gates().kill_switch());
+    assert!(
+        policy
+            .reload(
+                Some(expected + 1),
+                RouteTable::compile(Vec::new(), RouteAction::Direct),
+                dns
+            )
+            .is_err()
+    );
+    assert!(
+        policy.gates().kill_switch(),
+        "invalid resume must not clear emergency state"
+    );
+}

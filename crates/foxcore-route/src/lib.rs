@@ -170,6 +170,14 @@ impl RouteTable {
         self.kill_switch
     }
 
+    /// Arms only the emergency deny gate while retaining the last admitted rules.
+    /// It cannot relax a policy or accept a failed DNS/configuration update.
+    pub fn with_emergency_block(&self) -> Self {
+        let mut blocked = self.clone();
+        blocked.kill_switch = true;
+        blocked
+    }
+
     pub fn requires_uid(&self) -> bool {
         self.requires_uid
     }

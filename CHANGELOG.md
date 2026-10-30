@@ -1,6 +1,13 @@
 # Changelog
 
-## 1.0.0 Stable (unreleased)
+## 1.0.1 — 2026-10-30
+
+- Fix kill switch activation with expired DNS data and cancel DNS queries when their policy or app access is revoked.
+- Fix partial Clash/SIP008 imports, DNS reload errors and CLI bootstrap timeouts.
+
+## 1.0.0 Stable
+
+Published release. The historical entries below do not qualify 1.0.1 binaries.
 
 - Document public-beta OpenWrt controls and the shared first-setup agreement in Guard and VPN, without changing the JNI/native contract.
 - Document VPN router socket approval through physical Wi-Fi binding with the exact service, driver, ticket and generation owner.

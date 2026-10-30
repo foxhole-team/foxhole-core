@@ -24,6 +24,18 @@ fn bounded_message(message: &str) -> String {
         + "…"
 }
 
+fn policy_reload_error(error: io::Error) -> PolicyError {
+    let refusal = if error
+        .get_ref()
+        .is_some_and(|source| source.is::<foxcore_tun::PolicyRevisionConflict>())
+    {
+        PolicyRefusal::RevisionConflict
+    } else {
+        PolicyRefusal::Invalid
+    };
+    PolicyError::new(refusal, error.to_string())
+}
+
 impl CoreRuntime {
     pub fn generation(&self) -> u64 {
         self.generation
@@ -625,9 +637,7 @@ impl CoreRuntime {
         let revision = self
             .policy
             .reload(config.expected_revision, routes, config.dns)
-            .map_err(|error| {
-                PolicyError::new(PolicyRefusal::RevisionConflict, error.to_string())
-            })?;
+            .map_err(policy_reload_error)?;
         // Applied only after the swap succeeded, and never retroactively: a
         // hold already up survives, because the flag decides what happens at
         // the *next* interruption, not whether the last one was real.
@@ -1096,6 +1106,56 @@ impl CoreRuntime {
             if let Err(thread) = join_within(watch.thread, JOIN_GRACE) {
                 quarantine_worker(thread);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod reload_error_tests {
+    use super::*;
+
+    #[test]
+    fn regression_reload_only_typed_cas_failure_maps_to_revision_conflict() {
+        let conflict = io::Error::new(
+            io::ErrorKind::WouldBlock,
+            foxcore_tun::PolicyRevisionConflict {
+                expected: 3,
+                current: 4,
+            },
+        );
+        assert_eq!(policy_reload_error(conflict).code(), 7);
+        assert_eq!(
+            policy_reload_error(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "expired categorized feed"
+            ))
+            .code(),
+            1
+        );
+        assert_eq!(
+            policy_reload_error(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "non-CAS DNS refusal"
+            ))
+            .code(),
+            1
+        );
+    }
+
+    #[test]
+    fn regression_policy_refusal_abi_values_are_unchanged() {
+        for (refusal, code) in [
+            (PolicyRefusal::Invalid, 1),
+            (PolicyRefusal::UnknownOutbound, 2),
+            (PolicyRefusal::TorUnavailable, 3),
+            (PolicyRefusal::I2pUnavailable, 4),
+            (PolicyRefusal::OverlayRequiresFakeIp, 5),
+            (PolicyRefusal::IdentityUnavailable, 6),
+            (PolicyRefusal::RevisionConflict, 7),
+            (PolicyRefusal::PacketTunnelRejectsFakeIp, 8),
+            (PolicyRefusal::PacketTunnelRejectsPrimaryDns, 9),
+        ] {
+            assert_eq!(PolicyError::new(refusal, "fixture").code(), code);
         }
     }
 }

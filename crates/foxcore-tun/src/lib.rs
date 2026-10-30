@@ -28,7 +28,10 @@ pub use device::{
     TunDevice, TunFdOwner, live_devices, open_exclusive_named_fd, open_named_fd,
     wait_for_devices_released,
 };
-pub use flow::{FlowEngine, FlowEngineContext, FlowPolicyStore, PolicyGates};
+pub use flow::{
+    FlowEngine, FlowEngineContext, FlowPolicyStore, PolicyEmergencyBlock, PolicyGates,
+    PolicyRevisionConflict,
+};
 /// Compatibility alias; new code should use [`TrafficMap`].
 pub use foxcore_trafficmap::TrafficMap as ConnectionTracker;
 pub use foxcore_trafficmap::{

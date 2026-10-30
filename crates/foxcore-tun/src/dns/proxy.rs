@@ -171,6 +171,7 @@ impl DnsProxy {
     /// Android shared UIDs can name several packages. Filtering is bypassed
     /// only if every attributed package is explicitly allowed; selecting the
     /// first package would let one allowed neighbour disable filtering for all.
+    #[cfg(test)]
     pub(crate) async fn exchange_for_identity(
         &self,
         query: &[u8],
@@ -181,6 +182,25 @@ impl DnsProxy {
         let identity = uid.map(|uid| foxcore_dns::DnsIdentity::new(uid, packages.to_vec()));
         self.exchange_attributed(query, primary_package, packages, identity.as_ref())
             .await
+    }
+
+    pub(crate) async fn exchange_for_identity_leased(
+        &self,
+        query: &[u8],
+        uid: Option<u32>,
+        primary_package: Option<&str>,
+        packages: &[String],
+        lease: &DnsQueryLease,
+    ) -> io::Result<Vec<u8>> {
+        let identity = uid.map(|uid| foxcore_dns::DnsIdentity::new(uid, packages.to_vec()));
+        tokio::select! {
+            biased;
+            _ = lease.cancelled() => Err(io::Error::new(io::ErrorKind::Interrupted, "DNS query admission was revoked")),
+            response = self.exchange_attributed_leased(query, primary_package, packages, identity.as_ref(), lease) => {
+                lease.check()?;
+                response
+            }
+        }
     }
 
     /// Records a refused name once, in both channels the app reads: the counter
@@ -226,6 +246,7 @@ impl DnsProxy {
     }
 
     #[cfg(test)]
+    #[cfg(test)]
     pub(crate) async fn exchange(
         &self,
         query: &[u8],
@@ -234,6 +255,7 @@ impl DnsProxy {
         self.exchange_attributed(query, package, &[], None).await
     }
 
+    #[cfg(test)]
     async fn exchange_attributed(
         &self,
         query: &[u8],
@@ -241,6 +263,20 @@ impl DnsProxy {
         packages: &[String],
         identity: Option<&foxcore_dns::DnsIdentity>,
     ) -> io::Result<Vec<u8>> {
+        let lease = DnsQueryLease::uncancelled();
+        self.exchange_attributed_leased(query, primary_package, packages, identity, &lease)
+            .await
+    }
+
+    async fn exchange_attributed_leased(
+        &self,
+        query: &[u8],
+        primary_package: Option<&str>,
+        packages: &[String],
+        identity: Option<&foxcore_dns::DnsIdentity>,
+        lease: &DnsQueryLease,
+    ) -> io::Result<Vec<u8>> {
+        lease.check()?;
         if query.len() < 12 || query.len() > u16::MAX as usize {
             return Err(invalid("DNS query length must be in 12..=65535"));
         }
@@ -338,12 +374,14 @@ impl DnsProxy {
 
         let mut last_error = None;
         for (index, upstream) in self.config.upstreams.iter().enumerate() {
+            lease.check()?;
             let exchange =
                 self.exchange_upstream(index, upstream, query, Some(name), primary_package);
             match tokio::time::timeout(Duration::from_millis(self.config.timeout_ms), exchange)
                 .await
             {
                 Ok(Ok(response)) if response.len() <= self.config.max_response_bytes => {
+                    lease.check()?;
                     if !bypasses_filtering {
                         match self.blocked_response_alias(query, &response) {
                             Ok(Some((domain, verdict))) => {
@@ -623,21 +661,18 @@ impl DnsProxy {
                 .await?;
             return exchange_datagram(&session, destination, query).await;
         };
-        if !matches!(*state, UpstreamState::Udp(_)) {
-            let session = self
-                .open_udp_upstream(index, &destination, name, package)
-                .await?;
-            *state = UpstreamState::Udp(session);
-        }
-        let result = match &*state {
-            UpstreamState::Udp(session) => exchange_datagram(session, destination, query).await,
-            // Initialized immediately above, but the release profile aborts on
-            // panic and this runs per DNS query: a wrong invariant would cost
-            // the whole process instead of one lookup.
-            _ => Err(other("DNS UDP upstream state was replaced concurrently")),
+        // Own the in-flight session, rather than leaving it in the pool. If
+        // cancellation drops this future, a late answer cannot enter a later query.
+        let session = match std::mem::replace(&mut *state, UpstreamState::Empty) {
+            UpstreamState::Udp(session) => session,
+            _ => {
+                self.open_udp_upstream(index, &destination, name, package)
+                    .await?
+            }
         };
-        if result.is_err() {
-            *state = UpstreamState::Empty;
+        let result = exchange_datagram(&session, destination, query).await;
+        if result.is_ok() {
+            *state = UpstreamState::Udp(session);
         }
         result
     }
@@ -682,21 +717,20 @@ impl DnsProxy {
             return exchange_length_prefixed(&mut stream, query, self.config.max_response_bytes)
                 .await;
         };
-        if !matches!(*state, UpstreamState::Stream(_)) {
-            let mut stream = self.connect_stream(destination).await?;
-            if let Some((tls, server_name)) = tls {
-                stream = wrap_tls(stream, &tls, server_name).await?;
+        let mut stream = match std::mem::replace(&mut *state, UpstreamState::Empty) {
+            UpstreamState::Stream(stream) => stream,
+            _ => {
+                let mut stream = self.connect_stream(destination).await?;
+                if let Some((tls, server_name)) = tls {
+                    stream = wrap_tls(stream, &tls, server_name).await?;
+                }
+                stream
             }
-            *state = UpstreamState::Stream(stream);
-        }
-        let result = match &mut *state {
-            UpstreamState::Stream(stream) => {
-                exchange_length_prefixed(stream, query, self.config.max_response_bytes).await
-            }
-            _ => Err(other("DNS stream upstream state was replaced concurrently")),
         };
-        if result.is_err() {
-            *state = UpstreamState::Empty;
+        let result =
+            exchange_length_prefixed(&mut stream, query, self.config.max_response_bytes).await;
+        if result.is_ok() {
+            *state = UpstreamState::Stream(stream);
         }
         result
     }
