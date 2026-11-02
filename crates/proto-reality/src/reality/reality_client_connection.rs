@@ -14,6 +14,7 @@ use super::common::{
     MAX_TLS_PLAINTEXT_LEN, PLAINTEXT_READ_BUF_CAPACITY, TLS_MAX_RECORD_SIZE,
     TLS_RECORD_HEADER_SIZE,
 };
+use super::auth_payload::pack_auth_payload;
 use super::hello_profile::{
     CHROME_ALPN_PROTOCOLS, EchGreaseParams, GreaseValues, HelloProfileData, HelloSession,
     RealityHelloProfile, TLS_1_3,
@@ -289,6 +290,7 @@ fn build_client_hello(
     config: &RealityClientConfig,
     profile: &HelloProfileData<'_>,
 ) -> io::Result<(Vec<u8>, ClientKeyExchange, [u8; 32])> {
+    profile.validate()?;
     let mut rng = rand::rng();
 
     let groups = profile.key_share_groups();
@@ -322,13 +324,16 @@ fn build_client_hello(
         .map_err(|_| io::Error::other("System time error"))?
         .as_secs();
 
-    let mut session_id_plaintext = [0u8; 16];
-    session_id_plaintext[0] = 1;
-    session_id_plaintext[1] = 8;
-    session_id_plaintext[2] = 0;
-    session_id_plaintext[3] = 0;
-    session_id_plaintext[4..8].copy_from_slice(&(timestamp as u32).to_be_bytes());
-    session_id_plaintext[8..16].copy_from_slice(&config.short_id);
+    let executed_shares: Vec<_> = key_shares
+        .iter()
+        .map(|(group, share)| (group.id(), share.len()))
+        .collect();
+    let session_id_plaintext = pack_auth_payload(
+        profile.name,
+        &executed_shares,
+        timestamp as u32,
+        &config.short_id,
+    )?;
 
     let mut session_id_for_hello = [0u8; HELLO_SESSION_ID_LEN];
     session_id_for_hello[0..16].copy_from_slice(&session_id_plaintext);
@@ -339,7 +344,10 @@ fn build_client_hello(
         server_name: &config.server_name,
         alpn_protocols: CHROME_ALPN_PROTOCOLS,
         key_shares: &key_shares,
-        grease: GreaseValues::random(&mut rng),
+        grease: if profile.extensions.iter().any(|slot| matches!(slot,
+            super::hello_profile::ExtensionSlotData::SignatureAlgorithmsGrease(_))) {
+            GreaseValues::random_with_signature(&mut rng)
+        } else { GreaseValues::random(&mut rng) },
         ech_grease: EchGreaseParams::with_shape(
             random_x25519_public_key()?,
             profile.ech_grease,

@@ -906,7 +906,7 @@ impl State<ClientConnectionData> for ExpectServerDone<'_> {
             }
 
             #[cfg(feature = "chrome-hello")]
-            if st.config.chrome_151 && !super::chrome_hello::signature_allowed(sig.scheme) {
+            if st.config.chrome_profile.is_some() && !super::chrome_hello::signature_allowed(sig.scheme) {
                 return Err(cx.common.send_fatal_alert(
                     AlertDescription::IllegalParameter,
                     PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,

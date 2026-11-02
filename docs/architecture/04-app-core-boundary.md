@@ -17,13 +17,13 @@ matching Core revision pin before packaging
 
 ```mermaid
 flowchart TD
-    subgraph kt["Kotlin / Java — FoxHole Guard"]
+    subgraph kt["Kotlin / Java - FoxHole Guard"]
         P["profile in SQLCipher"] --> A["RuntimeConfigAssembler"]
         A --> T["FoxCoreConfigTranslator"]
         T --> S["FoxCoreNativeSessionStarter"]
         S --> J["FoxholeNativeEngine.java<br/>System.loadLibrary(foxhole_native)"]
     end
-    subgraph rs["Rust — libfoxhole_native.so"]
+    subgraph rs["Rust - libfoxhole_native.so"]
         J -->|JNI| AN["foxcore-android"]
         AN --> RU["foxcore-runtime<br/>CoreRuntime"]
         RU --> DP["data plane:<br/>tun / route / dns / outbound"]
@@ -34,8 +34,8 @@ flowchart TD
 
 | Fact | Value |
 |---|---|
-| Library | `libfoxhole_native.so` — `crate-type = ["cdylib"]`, lib name `foxhole_native` |
-| Load site | `core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java:51-53` — the only one |
+| Library | `libfoxhole_native.so` - `crate-type = ["cdylib"]`, lib name `foxhole_native` |
+| Load site | `core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java:51-53` - the only one |
 | Shipped Engine seam | **36 Rust exports / 35 Java declarations** (`FoxholeNativeEngine.java:48-163`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
 | Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` expose the product-reachable subset; link import and continuity stop at Java compatibility declarations |
 | Cross-repository gate | The app compares every shipped Engine export with Java declarations and production Kotlin references (`scripts/verify-foxcore-jni-seam.sh`), then executes product-reachable calls against the packaged `.so` on Android (`FoxCoreNativeSeamAndroidTest.kt`). |
@@ -137,9 +137,9 @@ Sub-translators, all in `core/runtime/src/main/kotlin/com/foxhole/core/runtime/`
 
 | File | Entry | Produces |
 |---|---|---|
-| `FoxCoreTunTranslator.kt:11` | `translateFoxCoreTun` | `FoxCoreTunPlan` — mtu, v4/v6 + prefix, routes, advertised DNS, app include/exclude |
+| `FoxCoreTunTranslator.kt:11` | `translateFoxCoreTun` | `FoxCoreTunPlan` - mtu, v4/v6 + prefix, routes, advertised DNS, app include/exclude |
 | `FoxCoreTunTranslator.kt:54` | `translateFoxCoreControlProxy` | `runtime.control_proxy` |
-| `FoxCoreOutboundTranslator.kt:23` | `translate` | `FoxCoreOutboundPlan` — primary, named, packet-tunnel flag, overlays |
+| `FoxCoreOutboundTranslator.kt:23` | `translate` | `FoxCoreOutboundPlan` - primary, named, packet-tunnel flag, overlays |
 | `FoxCoreProxyOutboundTranslator.kt:8` | `translateFoxCoreProxyOutbound` | per-protocol outbound object |
 | `FoxCoreWireGuardTranslator.kt:27` | `translateFoxCoreWireGuard` | `type:"wireguard"` |
 | `FoxCoreTorTranslator.kt:13,65` | `translateOverlay` / `translateOutbound` | named `tor` outbound |
@@ -180,7 +180,7 @@ their shape, and emits those values without reopening transport selection
 
 ### The engine config the core accepts
 
-`EngineConfig` — `crates/foxcore-api/src/config/engine.rs:9-30`, `deny_unknown_fields`, ≤1 MiB:
+`EngineConfig` - `crates/foxcore-api/src/config/engine.rs:9-30`, `deny_unknown_fields`, ≤1 MiB:
 
 | Field | Type | Constraint |
 |---|---|---|
@@ -193,7 +193,7 @@ their shape, and emits those values without reopening transport selection
 | `routes` | `Vec<RouteRule>` | ≤4096 incl. `traffic.applications` |
 | `traffic` | `TrafficPolicyConfig` | the reloadable half |
 
-There is **no `inbounds`, no `log`, no `route`** key in `EngineConfig` — those belong to the
+There is **no `inbounds`, no `log`, no `route`** key in `EngineConfig` - those belong to the
 intermediate document only.
 
 `PolicyConfig`, the reload document (`config/policy.rs:11-22`, ≤256 KiB):
@@ -205,7 +205,7 @@ intermediate document only.
 
 | Item | Direction | Type | Ownership / bound |
 |---|---|---|---|
-| TUN fd | Java → Rust | **`jint`**, a raw int — not a `ParcelFileDescriptor` | Kotlin does `dup(...).detachFd()`; **Rust owns it on every path including failure** and Kotlin must not close it. Validated: `S_IFCHR`, `O_RDWR`, and on Android `TUNGETIFF ⇒ IFF_TUN` |
+| TUN fd | Java → Rust | **`jint`**, a raw int - not a `ParcelFileDescriptor` | Kotlin does `dup(...).detachFd()`; **Rust owns it on every path including failure** and Kotlin must not close it. Validated: `S_IFCHR`, `O_RDWR`, and on Android `TUNGETIFF ⇒ IFF_TUN` |
 | Engine config | Java → Rust | `JString` UTF-8 JSON | ≤1 MiB, `deny_unknown_fields` |
 | Policy config | Java → Rust | `JString` UTF-8 JSON | ≤256 KiB |
 | Network handle | Java → Rust | `jlong` from `Network.getNetworkHandle()` | negative rejected; drives `android_setsocknetwork` / `android_getaddrinfofornetwork` |
@@ -217,7 +217,7 @@ intermediate document only.
 | DNS rule set | Java → Rust | `JByteArray` ×3 + name `JString` | manifest ≤64 KiB, signature ≤256 B, artifact ≤64 MiB; name ASCII ≤128 B |
 | Fingerprint tables | Java → Rust | `JByteArray` | ≤4 MiB; **never throws**, returns a code |
 | Errors | Rust → Java | two channels | `IllegalStateException` for lifecycle/config (message walks the whole `source()` chain); numeric codes for anything switchable |
-| **Logs** | — | **none** | There is no Java log callback. Rust writes to logcat directly (tag `FoxCore`), capped at `warn` because debug/trace records interpolate `NetworkTuple` — the user's connection list |
+| **Logs** | - | **none** | There is no Java log callback. Rust writes to logcat directly (tag `FoxCore`), capped at `warn` because debug/trace records interpolate `NetworkTuple` - the user's connection list |
 
 An ordinary `nativeStartWithNetwork` failure throws `IllegalStateException` before returning `0`;
 the pending exception is the startup diagnostic channel. Its message may contain a complete source
@@ -247,7 +247,7 @@ sequenceDiagram
     Note over R,H: per-app attribution needs API 29 or later,<br/>package cache 5 min / 1024 entries
 ```
 
-Host contract: `RuntimeServiceHost` —
+Host contract: `RuntimeServiceHost` -
 `core/runtime/src/main/kotlin/com/foxhole/core/runtime/RuntimeNativeSupport.kt:12-34`; implementation
 `app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeVpnService.kt:67,485-504`.
 
@@ -269,7 +269,7 @@ panic becomes `IllegalStateException("panic inside FoxCore JNI boundary")` or a 
 
 Header: `crates/foxcore-android/include/foxhole_core.h`.
 
-### `FoxholeNativeEngine` — 36 Rust exports
+### `FoxholeNativeEngine` - 36 Rust exports
 
 ```mermaid
 flowchart LR
@@ -283,7 +283,7 @@ flowchart LR
         L7["nativeRetain/ReleaseDnsContinuation"]
         L8["nativeStartOnNetworkWithDnsContinuity"]
     end
-    subgraph obs["Observation — all pull-based"]
+    subgraph obs["Observation - all pull-based"]
         O1["nativeStats"]
         O2["nativeTrafficMap / nativeConnections"]
         O3["nativeDrainTrafficEvents"]
@@ -303,7 +303,7 @@ flowchart LR
         P2["nativeStart/Stop/StatusLanProxy"]
         P3["nativeStart/Stop/ListLoopbackInbound"]
     end
-    subgraph imp["Link import — compatibility-only declarations"]
+    subgraph imp["Link import - compatibility-only declarations"]
         K1["nativeImportLink"]
         K2["nativeImportSubscription"]
     end
@@ -326,7 +326,7 @@ Key signatures:
 | `nativeStop` / `nativeForceKill` | `(J)I` | `0` stopped, `1` already, `2` timed out, `3` unknown handle, `-1` panic |
 | `nativeReloadPolicy` | `(JLjava/lang/String;)J` | > 0 revision, `0` not running, `-1..-9` refusal |
 | `nativeRevokeFlows` | `(JLjava/lang/String;)I` | count ≥ 0, or `-1` panic / `-2` no engine / `-3` bad target. Target JSON tagged on `kind`: `all\|lane\|uid\|package\|outbound\|flow` |
-| `nativeLastStopDiagnostics` | `()Ljava/lang/String;` | **no handle** — the caller has just been told its stop timed out. `{phase, engine_ms, shutdown_ms, generation}` |
+| `nativeLastStopDiagnostics` | `()Ljava/lang/String;` | **no handle** - the caller has just been told its stop timed out. `{phase, engine_ms, shutdown_ms, generation}` |
 
 Release libraries also retain 19 component/share exports: ten `FoxholeNativeShares_*` and nine
 `FoxholeNativeComponents_*`. v0.0.1 shipped them, and the frozen ABI-v1 fixture requires them
@@ -350,13 +350,13 @@ sequenceDiagram
     Note over S: onCreate already ran installTlsFingerprintTables(), before any dial
     U->>S: ACTION_CONNECT
     S->>S: resolve gate/settings/profile, validate Private DNS mode
-    S->>S: beginRuntimeTransition("connect") — new generation
+    S->>S: beginRuntimeTransition("connect") - new generation
     S->>S: Tor ordering step 1: defer in-tunnel Tor out of the first config
     S->>S: make-before-break: retire the old worker,<br/>it releases the FoxCore lease but KEEPS its master TUN open
     S->>S: build session -> assembler -> translator
     S->>S: publish CONNECTING, register network callbacks, wake lock,<br/>start notification-health + child watchdogs
     S->>R: startFailClosed(session)
-    R->>N: preflight — nativeAbiVersion + nativeCapabilities
+    R->>N: preflight - nativeAbiVersion + nativeCapabilities
     R->>S: currentUnderlyingNetwork()
     Note over R: null, or a handle of 0 or less, is a HARD failure
     R->>O: establish TUN
@@ -372,14 +372,14 @@ sequenceDiagram
     Note over N: signed bytes are verified before the resolver can answer its first query
     N-->>R: handle, or no engine + exception
     R-->>S: started
-    S->>N: nativeNetworkChangedWithHandle — post-handoff network reset
+    S->>N: nativeNetworkChangedWithHandle - post-handoff network reset
     S->>S: validation probes: runtime proxy, early UDP literal,<br/>pre-DNS, endpoint pre-IP, VPN-bound DNS, IP refresh, grace retry
     S->>S: publish CONNECTED, start traffic sampler
     S->>S: Tor ordering step 2: reload(profileId) so Tor engages<br/>only after the VPN proved itself
 ```
 
 **The real order is: host registered by construction → establish TUN (Android) → dup fd → start
-engine.** `protect()` is never called before the engine exists — it is a Rust→Java upcall made per
+engine.** `protect()` is never called before the engine exists - it is a Rust→Java upcall made per
 outbound socket.
 
 Direct bridged Tor-only validation is one authenticated runtime-proxy request with an 80 s call cap
@@ -559,7 +559,7 @@ instead of wrapping to an immediate timeout.
 | Local guard heal | bounded self-heal; deliberately survives an error teardown |
 | Native stop reaper (Rust) | 40 attempts × `STOP_TIMEOUT` |
 
-`CoreRuntime::start` acquires a **process-wide worker lease** — only one data-plane worker per
+`CoreRuntime::start` acquires a **process-wide worker lease** - only one data-plane worker per
 process (`crates/foxcore-runtime/src/start.rs:174`).
 
 ---
@@ -724,10 +724,10 @@ native exceptions retain the nullable read contract (`FoxCoreRuntime.kt:847-853`
 
 ```mermaid
 flowchart LR
-    subgraph R["foxcore-link (Rust) — compatibility-only JNI"]
+    subgraph R["foxcore-link (Rust) - compatibility-only JNI"]
         R1["vless vmess hysteria2 hy2 trojan ss<br/>wg wireguard socks socks4 socks5<br/>http https naive naive+https anytls"]
     end
-    subgraph K["core/importer (Kotlin) — production path"]
+    subgraph K["core/importer (Kotlin) - production path"]
         K1["vless trojan naive naive+https ss outline<br/>vmess hy2 hysteria2 tuic anytls wireguard wg"]
     end
     R1 -.->|compatibility-only JNI, no repository call| D1["socks* , http(s)"]

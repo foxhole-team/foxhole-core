@@ -72,6 +72,7 @@ impl VlessOutbound {
                     short_id: decode_short_id(reality.short_id.expose())?,
                     server_name: reality.server_name.clone(),
                     hello: match reality.fingerprint {
+                        RealityFingerprint::Chrome156 => RealityHelloProfile::Chrome156.into(),
                         RealityFingerprint::Chrome151 => RealityHelloProfile::Chrome151.into(),
                         RealityFingerprint::Chrome133 => RealityHelloProfile::Chrome133.into(),
                         RealityFingerprint::Chrome131 => RealityHelloProfile::Chrome131.into(),

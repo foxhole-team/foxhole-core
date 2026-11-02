@@ -7,6 +7,7 @@ use super::hello_profile::{
 use super::reality_tls13_messages::INITIAL_RECORD_VERSION;
 
 const VECTORS: &[(RealityHelloProfile, &str)] = &[
+    (RealityHelloProfile::Chrome156, include_str!("../../../../fingerprints/chrome_156.json")),
     (
         RealityHelloProfile::Chrome151,
         include_str!("../../../../fingerprints/chrome_151.json"),
@@ -71,6 +72,7 @@ fn fingerprint(json: &str) -> Value {
 fn slot_code_point(slot: &ExtensionSlot) -> Option<u16> {
     match slot {
         ExtensionSlot::Constant { extension_type, .. } => Some(*extension_type),
+        ExtensionSlot::SignatureAlgorithmsGrease(_) => Some(ext::SIGNATURE_ALGORITHMS),
         ExtensionSlot::Grease { .. } => None,
         ExtensionSlot::ServerName => Some(ext::SERVER_NAME),
         ExtensionSlot::SupportedGroups(_) => Some(ext::SUPPORTED_GROUPS),
@@ -366,4 +368,14 @@ fn find_versions(profile: &HelloProfile) -> &'static [VersionSlot] {
             _ => None,
         })
         .expect("profile has supported_versions")
+}
+
+#[test]
+fn chrome156_signature_grease_is_compiled_and_legacy151_stays_constant() {
+    use super::hello_profile::{CHROME_151, CHROME_156};
+    assert!(CHROME_156.extensions.iter().any(|slot| matches!(slot, ExtensionSlot::SignatureAlgorithmsGrease(_))));
+    assert!(!CHROME_151.extensions.iter().any(|slot| matches!(slot, ExtensionSlot::SignatureAlgorithmsGrease(_))));
+    let vector = table(include_str!("../../../../fingerprints/chrome_156.json"));
+    assert_eq!(vector["fingerprint"]["signature_algorithms"][0][0], "GREASE");
+    assert!(!CHROME_156.extensions.iter().any(|slot| slot_code_point(slot) == Some(0xca34)));
 }

@@ -79,7 +79,7 @@ L3 helper set before the generation-owned runtime can release the sole TUN owner
 
 ## 1.2 Config identifiers
 
-`OutboundConfig` is internally tagged on `type`, `rename_all = "snake_case"` —
+`OutboundConfig` is internally tagged on `type`, `rename_all = "snake_case"` -
 `crates/foxcore-api/src/config/outbound.rs:9-33`. Fifteen variants:
 
 ```
@@ -89,7 +89,7 @@ anytls      (explicit rename, outbound.rs:29-30)
 shadowtls   (explicit rename, outbound.rs:31-32)
 ```
 
-Stream carriers — `StreamTransportConfig`, tagged on `type`
+Stream carriers - `StreamTransportConfig`, tagged on `type`
 (`crates/foxcore-api/src/config/transport.rs:11-54`):
 
 ```
@@ -108,26 +108,26 @@ reserved; `tor` and `i2p` are id-locked in both directions
 
 | Protocol | Carried on | Security layer | Stream carriers | UDP | Terminated at |
 |---|---|---|---|---|---|
-| **VLESS** | TCP | rustls TLS **or** REALITY (exclusive); optional inner ML-KEM768+X25519 "VLESS Encryption" | all 6 | yes — `none`/`xudp`/`packetaddr` | remote VLESS server |
+| **VLESS** | TCP | rustls TLS **or** REALITY (exclusive); optional inner ML-KEM768+X25519 "VLESS Encryption" | all 6 | yes - `none`/`xudp`/`packetaddr` | remote VLESS server |
 | **VLESS + Vision** | TCP only | TLS 1.3 required | raw only | **refused on port 443** | remote VLESS server |
 | **VMess** | TCP | optional rustls TLS; no REALITY | all 6 | yes | remote VMess server |
 | **Trojan** | TCP | TLS **mandatory** | all 6 | yes | remote Trojan server |
 | **Shadowsocks / Outline** | TCP + native UDP | AEAD or AEAD-2022; optional `simple-obfs` http/tls, Outline salt prefix | configured stream carrier; native `v2ray-plugin` uses WebSocket | conditional | remote SS server |
 | **Hysteria2** | **QUIC/UDP** (quinn) | TLS inside QUIC; optional **Salamander** packet obfs; port hopping | none | conditional on server | remote HY2 server |
 | **TUIC v5** | **QUIC/UDP** (quinn) | TLS inside QUIC, TLS-exporter auth | none | conditional | remote TUIC server |
-| **AnyTLS v2** | TCP | TLS mandatory; own mux + bounded padding above TLS | none by design | yes — UoT v2 | remote AnyTLS server |
-| **ShadowTLS v3** | TCP | TLS 1.3 only, server proof + chained HMAC; inner protocol **hardcoded to Shadowsocks** | none | conditional — UoT v2 | ShadowTLS server → its inner SS |
+| **AnyTLS v2** | TCP | TLS mandatory; own mux + bounded padding above TLS | none by design | yes - UoT v2 | remote AnyTLS server |
+| **ShadowTLS v3** | TCP | TLS 1.3 only, server proof + chained HMAC; inner protocol **hardcoded to Shadowsocks** | none | conditional - UoT v2 | ShadowTLS server → its inner SS |
 | **Naive** | TCP | TLS mandatory, ALPN `h2`, HTTP/2 CONNECT + padding | none | **no** | remote naive server |
 | **HTTP** | TCP | optional TLS | none | **no** | remote HTTP proxy |
-| **SOCKS5** | TCP (+UDP) | **none** — no `tls` field exists | none | yes — UDP ASSOCIATE | remote/LAN/loopback proxy |
-| **WireGuard / AmneziaWG** | **UDP** | Noise IKpsk2; AmneziaWG adds junk/header obfs only | n/a — L3 packet tunnel | yes (carries all IP) | remote WG peer |
+| **SOCKS5** | TCP (+UDP) | **none** - no `tls` field exists | none | yes - UDP ASSOCIATE | remote/LAN/loopback proxy |
+| **WireGuard / AmneziaWG** | **UDP** | Noise IKpsk2; AmneziaWG adds junk/header obfs only | n/a - L3 packet tunnel | yes (carries all IP) | remote WG peer |
 | **Tor** | TCP guards | Arti's own crypto; bridges + managed pluggable transports | n/a | **no** | Tor network, in-process |
 | **I2P** | TCP to `127.0.0.1` | none (plain SOCKS5, optional RFC 1929) | n/a | **no** | **external i2pd process** |
-| **Selector** | — | inherits from active member | inherits | inherits | up to 64 members |
+| **Selector** | - | inherits from active member | inherits | inherits | up to 64 members |
 | **Direct** | TCP/UDP | none | n/a | yes | destination, protected socket |
 
 Only VLESS, VMess, Trojan and Shadowsocks carry a `transport` field. Every other config has no such
-field at all — the carriers simply do not apply (`crates/foxcore-android/src/capabilities.rs:441-658`).
+field at all - the carriers simply do not apply (`crates/foxcore-android/src/capabilities.rs:441-658`).
 
 REALITY and WireGuard are not standalone outbounds: REALITY is a security layer used only by VLESS;
 WireGuard is only reachable as `OutboundMode::PacketTunnel`.
@@ -138,7 +138,7 @@ WireGuard is only reachable as `OutboundMode::PacketTunnel`.
 
 ```mermaid
 flowchart LR
-    subgraph tor["Tor — in-process"]
+    subgraph tor["Tor - in-process"]
         A["foxcore-outbound"] --> B["arti-client 0.47.0"]
         B --> C["ProtectedTcpProvider"]
         C --> D["ProtectedDialer -> guards"]
@@ -149,7 +149,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph i2p["I2P — out of process"]
+    subgraph i2p["I2P - out of process"]
         G["foxcore-outbound"] --> H["SOCKS5 to 127.0.0.1:port"]
         H --> I["i2pd, separate process"]
         I --> J["I2P network"]
@@ -159,9 +159,9 @@ flowchart LR
 | | Tor | I2P |
 |---|---|---|
 | `implementation` string | `in_process_arti` (`capabilities.rs:1058`) | `external_i2pd_socks5_loopback` (`:1081`) |
-| Process ownership | core owns it | **not owned** — `unsupported: ["udp","process_ownership","clearnet"]` (`:1090`) |
-| Listener | onion service only, gated on feature; only `BEGIN` on the configured port | **none** — `connect_datagram` returns `Unsupported` |
-| Constraint re-check | — | endpoint must be loopback, destination must end `.i2p`, re-checked at construction |
+| Process ownership | core owns it | **not owned** - `unsupported: ["udp","process_ownership","clearnet"]` (`:1090`) |
+| Listener | onion service only, gated on feature; only `BEGIN` on the configured port | **none** - `connect_datagram` returns `Unsupported` |
+| Constraint re-check | - | endpoint must be loopback, destination must end `.i2p`, re-checked at construction |
 | Cargo feature | **not a default feature** (`foxcore-outbound/Cargo.toml:32`) | default |
 
 On the client side, `i2pd` ships as `libi2pd.so` in `jniLibs` (Android only executes from
@@ -197,10 +197,10 @@ flowchart TD
     G4 --> F["synthetic answer or full-pool refusal"]
     U --> U1["udp"]
     U --> U2["tcp"]
-    U --> U3["dot — TLS, insecure + SPKI pin supported"]
-    U --> U4["doh — RFC 8484 over HTTP/2"]
-    U --> U5["doq — DNS over QUIC"]
-    U --> U6["doh3 — DNS over HTTP/3"]
+    U --> U3["dot - TLS, insecure + SPKI pin supported"]
+    U --> U4["doh - RFC 8484 over HTTP/2"]
+    U --> U5["doq - DNS over QUIC"]
+    U --> U6["doh3 - DNS over HTTP/3"]
 ```
 
 | `type` | Transport | Pool lanes | Note |
@@ -285,12 +285,12 @@ stateDiagram-v2
 
 | Path | Mechanism | Cite |
 |---|---|---|
-| **Global kill switch** | stage 0 of routing, ahead of every allowance — including explicitly allowed apps, `.onion`/`.i2p` auto-routes and locally answered ICMP echo | `config/policy.rs:63-67`; `foxcore-route/src/lib.rs:185-190`; LAN ingress `foxcore-runtime/src/lan.rs:73-76` |
-| **`.onion` / `.i2p`** | refused rather than forwarded when fake-IP is off — "private overlay DNS is never forwarded to an upstream resolver". Tor/I2P routing *requires* `dns.mode='fake_ip'` or the profile is rejected at load | `foxcore-tun/src/dns/proxy.rs:248-268`, `:308-322`; `config/engine.rs:232-249` |
+| **Global kill switch** | stage 0 of routing, ahead of every allowance - including explicitly allowed apps, `.onion`/`.i2p` auto-routes and locally answered ICMP echo | `config/policy.rs:63-67`; `foxcore-route/src/lib.rs:185-190`; LAN ingress `foxcore-runtime/src/lan.rs:73-76` |
+| **`.onion` / `.i2p`** | refused rather than forwarded when fake-IP is off - "private overlay DNS is never forwarded to an upstream resolver". Tor/I2P routing *requires* `dns.mode='fake_ip'` or the profile is rejected at load | `foxcore-tun/src/dns/proxy.rs:248-268`, `:308-322`; `config/engine.rs:232-249` |
 | **Overlay switched off** | `gated()` turns a Tor/I2P action into `Block` immediately; `.onion`/`.i2p` hosts are force-routed to the overlay lane *before* the route table and return `None` ⇒ Block if the lane is gated or absent | `foxcore-route/src/lib.rs:301-315`; `foxcore-tun/src/flow/select.rs:344-358`, `:379-389` |
-| **Failed outbound build** | becomes a `DeferredOutbound` under the same id; the engine still starts and flows get `BlockReason::LaneUnavailable` — "never answered by another lane" | `foxcore-runtime/src/registry.rs:86-97`; `flow/select.rs:337-343` |
+| **Failed outbound build** | becomes a `DeferredOutbound` under the same id; the engine still starts and flows get `BlockReason::LaneUnavailable` - "never answered by another lane" | `foxcore-runtime/src/registry.rs:86-97`; `flow/select.rs:337-343` |
 | **L3 packet-tunnel primary** | a WireGuard primary has no stream semantics, so the registry's `default` is a flagged direct socket that every consumer refuses: flow engine, DNS interceptor, LAN proxy, and two config-load rules | `foxcore-outbound/src/lib.rs:207-219`; `flow/select.rs:396-397`; `dns/proxy.rs:671-690`; `foxcore-runtime/src/lan.rs:80-92`; `foxcore-api/src/config/engine.rs:193-218` |
-| **Network moved, no protected socket** | `socket = None` is the fail-closed state — packets dropped and counted, never queued; a bounded run of receive errors closes the tunnel until a rebind | `foxcore-tun/src/relay/engine.rs:149-152`, `:253-260`, `:289-317` |
+| **Network moved, no protected socket** | `socket = None` is the fail-closed state - packets dropped and counted, never queued; a bounded run of receive errors closes the tunnel until a rebind | `foxcore-tun/src/relay/engine.rs:149-152`, `:253-260`, `:289-317` |
 | **Continuity hold** | turning off a continuity flag holds the lane blocked and raises `ConfirmationRequired`. There is deliberately no third outcome where packets keep moving; the removed `stop_engine_leaving_network_open` value is now *rejected* under `deny_unknown_fields` | `config/policy.rs:96-119`, `:139-146`, `:188-230` |
 | **Shared UID / quarantine** | an Android shared UID resolving to a mixed decision fails closed to Block; quarantined and unknown apps never reach the network | `foxcore-route/src/lib.rs:289-297`, `:206-212` |
 | **Protected socket refused** | `protect(fd)` returning false is a hard `PermissionDenied`, not a fallback | `foxcore-dialer/src/lib.rs:314-321` |
@@ -311,7 +311,7 @@ entry that actually carries that identity.
 
 | Refusal | Why |
 |---|---|
-| **ECH is all-or-nothing** — no `optional` mode | on rejection rustls has verified the cert against the ECH *public name*, so "continuing" means talking to the cover domain while the profile believes it reached its proxy (`config/tls.rs:39-68`) |
+| **ECH is all-or-nothing** - no `optional` mode | on rejection rustls has verified the cert against the ECH *public name*, so "continuing" means talking to the cover domain while the profile believes it reached its proxy (`config/tls.rs:39-68`) |
 | ECH refused at config time for **hysteria2, tuic, shadowtls** | QUIC reports no ECH status so acceptance cannot be enforced; ShadowTLS v3 rewrites the session id ECH seals as AAD (`config/tls.rs:82-98`; `capabilities.rs:1101`) |
 | **PQ downgrade guard** | `curve_preferences` *replaces* the provider list, so omitting `X25519MLKEM768` used to silently drop it. It is now prepended unless `allow_classical_only_key_exchange` is set (`foxcore-transport/src/tls.rs:468-486`) |
 | **REALITY** refuses TLS 1.2 selection, HelloRetryRequest, certificate compression, session resumption; never performs Xray's crawler fallback | `capabilities.rs:746-770`; `proto-reality/src/lib.rs:3-7` |
@@ -319,7 +319,7 @@ entry that actually carries that identity.
 | **TUIC** `zero_rtt_handshake` is representable but rejected at validation | `config/outbound.rs:381-387` |
 | **Naive** padding is required; a server that does not negotiate it is refused | `proto-naive/src/lib.rs:3-8` |
 | **Selector** probe URL must be plain `http://`; only stream proxies may join, so failover cannot change privacy class | `config/selector.rs:90-96`, `:26-31` |
-| **Tor upstream** (Tor-over-VPN) must be a stream proxy — direct, I2P, nested Tor, WireGuard and selector refused | `foxcore-outbound/src/lib.rs:970-980` |
+| **Tor upstream** (Tor-over-VPN) must be a stream proxy - direct, I2P, nested Tor, WireGuard and selector refused | `foxcore-outbound/src/lib.rs:970-980` |
 | **`http_upgrade`** fails closed unless the server answers `101`; never downgrades to a plain stream | `foxcore-transport/src/httpupgrade.rs:23-26` |
 | **WebSocket** text frames and oversized messages fail closed (64 KiB duplex, 2 MiB max message) | `foxcore-transport/src/websocket.rs:24-28` |
 

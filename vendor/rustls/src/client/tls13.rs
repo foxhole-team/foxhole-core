@@ -317,7 +317,7 @@ pub(super) fn initial_key_share(
         });
 
     #[cfg(feature = "chrome-hello")]
-    let group = if config.chrome_151 {
+    let group = if config.chrome_profile.is_some() {
         config.provider.kx_groups[0]
     } else {
         group
@@ -1185,7 +1185,7 @@ impl State<ClientConnectionData> for ExpectCertificateVerify<'_> {
             .map_err(|err| cx.common.send_cert_verify_error_alert(err))?;
 
         #[cfg(feature = "chrome-hello")]
-        if self.config.chrome_151 && !super::chrome_hello::signature_allowed(cert_verify.scheme) {
+        if self.config.chrome_profile.is_some() && !super::chrome_hello::signature_allowed(cert_verify.scheme) {
             return Err(cx.common.send_fatal_alert(
                 AlertDescription::IllegalParameter,
                 PeerMisbehaved::SignedHandshakeWithUnadvertisedSigScheme,

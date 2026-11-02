@@ -166,7 +166,7 @@ impl ConfigBuilder<ClientConfig, WantsClientCert> {
         ClientConfig {
             provider: self.provider,
             #[cfg(feature = "chrome-hello")]
-            chrome_151: false,
+            chrome_profile: None,
             alpn_protocols: Vec::new(),
             check_selected_alpn: true,
             resumption: Resumption::default(),

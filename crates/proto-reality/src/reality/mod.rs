@@ -5,10 +5,12 @@
 //! configuration code are intentionally not included. See the workspace
 //! `THIRD_PARTY_NOTICES.md` and this crate's `LICENSE-MIT`.
 
+mod auth_payload;
 mod common;
 #[cfg(test)]
 mod fingerprint_vector;
 mod hello_profile;
+mod signature_grease;
 #[cfg(test)]
 mod parrot_fingerprints;
 mod randomized_hello;

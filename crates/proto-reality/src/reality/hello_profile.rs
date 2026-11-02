@@ -58,6 +58,7 @@ use super::reality_key_exchange::NamedGroup;
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum RealityHelloProfile {
     #[default]
+    Chrome156,
     Chrome151,
     Chrome133,
     Chrome131,
@@ -72,6 +73,7 @@ pub enum RealityHelloProfile {
 impl RealityHelloProfile {
     pub fn table(self) -> &'static HelloProfile {
         match self {
+            Self::Chrome156 => &CHROME_156,
             Self::Chrome151 => &CHROME_151,
             Self::Chrome133 => &CHROME_133,
             Self::Chrome131 => &CHROME_131,
@@ -85,6 +87,7 @@ impl RealityHelloProfile {
     }
 
     pub const ALL: &'static [Self] = &[
+        Self::Chrome156,
         Self::Chrome151,
         Self::Chrome133,
         Self::Chrome131,
@@ -113,6 +116,7 @@ pub enum GreaseSlot {
     Version,
     Extension1,
     Extension2,
+    Signature,
 }
 
 impl GreaseSlot {
@@ -123,6 +127,7 @@ impl GreaseSlot {
             Self::Version => 2,
             Self::Extension1 => 3,
             Self::Extension2 => 4,
+            Self::Signature => 5,
         }
     }
 }
@@ -131,6 +136,7 @@ impl GreaseSlot {
 #[derive(Clone, Copy, Debug)]
 pub struct GreaseValues {
     seed: [u8; 5],
+    signature_seed: u8,
 }
 
 impl GreaseValues {
@@ -150,14 +156,28 @@ impl GreaseValues {
         {
             seed[GreaseSlot::Extension2.index()] ^= 0x10;
         }
-        Self { seed }
+        Self { seed, signature_seed: 0 }
+    }
+
+    pub fn random_with_signature(rng: &mut impl RngCore) -> Self {
+        let mut values = Self::random(rng);
+        let mut seed = [0];
+        rng.fill_bytes(&mut seed);
+        values.signature_seed = seed[0];
+        values
+    }
+
+    pub const fn with_signature_seed(mut self, seed: u8) -> Self {
+        self.signature_seed = seed;
+        self
     }
 
     /// `0xωaωa`: the high nibble varies, the low nibble is always `a`, and the
     /// byte is repeated. The repetition is part of the shape — a value that is
     /// merely "reserved-looking" but not of this form is not GREASE.
     pub const fn value(&self, slot: GreaseSlot) -> u16 {
-        let byte = (self.seed[slot.index()] & 0xf0) | 0x0a;
+        let seed = match slot { GreaseSlot::Signature => self.signature_seed, _ => self.seed[slot.index()] };
+        let byte = (seed & 0xf0) | 0x0a;
         u16::from_be_bytes([byte, byte])
     }
 }
@@ -244,6 +264,7 @@ pub enum ExtensionSlotData<'a> {
     KeyShare(&'a [KeyShareSlot]),
     Alpn,
     SupportedVersions(&'a [VersionSlot]),
+    SignatureAlgorithmsGrease(&'a [u8]),
     EchGrease,
     /// RFC 7685. Emits nothing unless the finished hello lands in the window
     /// BoringSSL pads; see [`boring_padding`].
@@ -418,6 +439,18 @@ impl HelloProfileData<'_> {
                     "sends a {} key share without listing the group in supported_groups",
                     group.name()
                 ));
+            }
+        }
+
+        if matches!(self.name, "chrome_151" | "chrome_156") {
+            let group_lists = self.extensions.iter().filter(|slot| matches!(slot,
+                ExtensionSlotData::SupportedGroups(_))).count();
+            let fixed_groups = self.extensions.iter().filter(|slot| matches!(slot,
+                ExtensionSlotData::SupportedGroups(entries) if *entries == CHROME_SUPPORTED_GROUPS)).count();
+            let fixed_shares = self.extensions.iter().filter(|slot| matches!(slot,
+                ExtensionSlotData::KeyShare(entries) if *entries == CHROME_KEY_SHARES)).count();
+            if group_lists != 1 || fixed_groups != 1 || fixed_shares != 1 || self.reuse_classical_key_share {
+                return refuse("cannot change the compiled hybrid compatibility shape".to_owned());
             }
         }
 
@@ -608,6 +641,10 @@ impl ExtensionSlotData<'_> {
                 body,
             } => write_extension(out, *extension_type, body),
             Self::Grease { slot, body } => write_extension(out, session.grease.value(*slot), body),
+            Self::SignatureAlgorithmsGrease(encoded) => {
+                let body = super::signature_grease::vector(encoded, session.grease.value(GreaseSlot::Signature))?;
+                write_extension(out, ext::SIGNATURE_ALGORITHMS, &body)
+            }
             Self::ServerName => {
                 let name = session.server_name.as_bytes();
                 let name_len = u16::try_from(name.len()).map_err(|_| {
@@ -912,6 +949,9 @@ const CHROME_SUPPORTED_VERSIONS: &[VersionSlot] = &[
 
 macro_rules! chrome_extensions {
     ($application_settings:expr, $signature_algorithms:expr) => {
+        chrome_extensions!($application_settings, $signature_algorithms, false)
+    };
+    ($application_settings:expr, $signature_algorithms:expr, $signature_grease:expr) => {
         &[
             ExtensionSlot::Grease {
                 slot: GreaseSlot::Extension1,
@@ -940,9 +980,10 @@ macro_rules! chrome_extensions {
                 extension_type: ext::STATUS_REQUEST,
                 body: STATUS_REQUEST_BODY,
             },
-            ExtensionSlot::Constant {
-                extension_type: ext::SIGNATURE_ALGORITHMS,
-                body: $signature_algorithms,
+            if $signature_grease {
+                ExtensionSlot::SignatureAlgorithmsGrease($signature_algorithms)
+            } else {
+                ExtensionSlot::Constant { extension_type: ext::SIGNATURE_ALGORITHMS, body: $signature_algorithms }
             },
             ExtensionSlot::Constant {
                 extension_type: ext::SIGNED_CERTIFICATE_TIMESTAMP,
@@ -971,6 +1012,17 @@ macro_rules! chrome_extensions {
         ]
     };
 }
+
+/// Chromium156 source-derived shape with no supplied Trust Anchor IDs.
+/// This does not claim the default RootStore-dependent Chrome wire image.
+pub static CHROME_156: HelloProfile = HelloProfile {
+    name: "chrome_156",
+    cipher_suites: CHROME_CIPHER_SUITES,
+    extensions: chrome_extensions!(ext::APPLICATION_SETTINGS, CHROME_151_SIGNATURE_ALGORITHMS, true),
+    permute_extensions: true,
+    ech_grease: CHROME_ECH_GREASE,
+    reuse_classical_key_share: false,
+};
 
 pub static CHROME_151: HelloProfile = HelloProfile {
     name: "chrome_151",

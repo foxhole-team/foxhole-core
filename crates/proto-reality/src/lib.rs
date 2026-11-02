@@ -345,7 +345,7 @@ mod tests {
             public_key,
             short_id: [1, 2, 3, 4, 5, 6, 7, 8],
             server_name: "example.com".to_owned(),
-            hello: RealityHelloProfile::Chrome133.into(),
+            hello: RealityHelloProfile::Chrome156.into(),
         })
         .unwrap()
         .complete_for_test()

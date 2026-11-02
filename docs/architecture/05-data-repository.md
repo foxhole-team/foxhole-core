@@ -1,4 +1,4 @@
-# 5. Data repository — FoxHole DB
+# 5. Data repository - FoxHole DB
 
 Repo: `foxhole-team/foxhole-db` (public).
 Five independent feeds, one signing key, one publication set.
@@ -62,7 +62,7 @@ descriptors are bound inside the canonical manifest. The exact 43-file set is th
 
 ```mermaid
 flowchart LR
-    subgraph dns["DNS — the only compiled artifact"]
+    subgraph dns["DNS - the only compiled artifact"]
         d1["clone AdGuardSDNSFilter<br/>pin commit"] --> d2["Filters/filter.txt"]
         d2 --> d3["foxcore-dns-compile<br/>cargo -p foxcore-route"]
         d3 --> d4[".fhds<br/>80-byte header + 2 FST maps"]
@@ -72,7 +72,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph rest["The other four — transcode and hash"]
+    subgraph rest["The other four - transcode and hash"]
         r1["fetch upstream"] --> r2["normalise<br/>jq --sort-keys / python / csv"]
         r2 --> r3["artifact bytes"]
         r3 --> r4["manifest: size + sha256<br/>+ generated_at + min_app_version"]
@@ -109,7 +109,7 @@ flowchart LR
 
 | Fact | Value |
 |---|---|
-| Algorithm | ECDSA P-256 / SHA-256 — **not** Ed25519 |
+| Algorithm | ECDSA P-256 / SHA-256 - **not** Ed25519 |
 | Public key, committed | `foxhole-db/manifest.public.pem` |
 | Key DER SHA-256 | `3acd123f1fd03f8aee97b2e71029ba1f6efdd9c17703419d7cda78a790198d69` |
 | Bound into DNS manifest | `manifest.json` → `key_sha256` (same value) |
@@ -123,11 +123,11 @@ other build work. Caller-supplied key files remain owned by the caller
 
 The `.sig` files are produced only into `public/`; they are never committed. `feeds.yml:35` asserts
 `test ! -e manifest.json.sig` on the tree. The committed root snapshots therefore **cannot** be
-signature-checked locally — by design.
+signature-checked locally - by design.
 
 ---
 
-## 5.5 `verify-feeds.sh` — the publication gate
+## 5.5 `verify-feeds.sh` - the publication gate
 
 `./verify-feeds.sh <dir>`; no secrets needed, uses the committed public key.
 
@@ -146,7 +146,7 @@ flowchart TD
     C6 --> C7["typed bounded epochs<br/>generated_at within 45 days and at most one day ahead"]
     C7 --> C8["per artifact: size then sha256"]
     C8 --> G["fingerprints: re-derive every profile digest :206-229"]
-    G -->|any failure| STOP["exit 1 — must not be published"]
+    G -->|any failure| STOP["exit 1 - must not be published"]
     G -->|all pass| CAT["verify four canonical categorized variants<br/>signature, freshness, provenance, hash and header"]
     CAT -->|pass| OK["publishable"]
     CAT -->|fail| STOP

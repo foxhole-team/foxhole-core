@@ -722,6 +722,7 @@ pub(crate) fn capabilities_json() -> &'static str {
                         // literal" — the names below say what the table now
                         // actually contains.
                         "reality_chrome_static",
+                        "reality_chrome_156",
                         "reality_chrome_151",
                         "reality_chrome_133",
                         "reality_chrome_131",
@@ -750,6 +751,8 @@ pub(crate) fn capabilities_json() -> &'static str {
                         "vision_udp443",
                         "websocket_early_data",
                         "reality_other_fingerprints",
+                        "chrome_156_default_platform_fidelity",
+                        "chrome_156_trust_anchor_ids",
                         "reality_mldsa65",
                         "reality_crawler_fallback",
                         // The hello offers TLS 1.2 suites and versions because
@@ -1107,6 +1110,7 @@ pub(crate) fn capabilities_json() -> &'static str {
                 ech_from_https_rr: false,
                 ech_refused_by: &["hysteria2", "tuic", "shadowtls"],
                 reality_fingerprints_implemented: &[
+                    "chrome_156",
                     "chrome_151",
                     "chrome_133",
                     "chrome_131",
@@ -1218,9 +1222,9 @@ pub(crate) fn capabilities_json() -> &'static str {
                     FeatureMaturity {
                         id: "tls.reality_fingerprints",
                         maturity: maturity::EXPERIMENTAL,
-                        note: "profiles are transcribed from uTLS, not from a first-party \
-                               capture, and have not been checked against a live REALITY \
-                               server or a live censor — see fingerprints/*.json",
+                        note: "profiles have uTLS, historical capture or source-derived provenance; \
+                               Chrome156 supplies no Trust Anchor IDs; no live REALITY server \
+                               or censor claim — see fingerprints/*.json",
                     },
                     FeatureMaturity {
                         id: "routing.fail_closed",

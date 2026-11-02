@@ -288,6 +288,23 @@ def check_capture_derived(text: str, common: str, failures: list) -> list[str]:
 
 
 
+SOURCE_DERIVED = {"chrome_156"}
+
+
+def check_source_derived(failures):
+    """Keep the pinned no-TAI156 contract separate from captured151/uTLS155."""
+    old = json.loads((REPO / "fingerprints/chrome_151.json").read_text())
+    value = json.loads((REPO / "fingerprints/chrome_156.json").read_text())
+    expected = json.loads(json.dumps(old["fingerprint"]))
+    expected["signature_algorithms"].insert(0, ["GREASE", "per_connection_signature_algorithm"])
+    digest = hashlib.sha256(json.dumps(expected, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")).hexdigest()
+    if value.get("name") != "chrome_156" or value.get("fingerprint") != expected or value.get("fingerprint_sha256") != digest:
+        failures.append("chrome_156: pinned source-derived no-TAI signature GREASE contract changed")
+    provenance = value.get("provenance", {})
+    if provenance.get("verified_against_live_browser") is not False or provenance.get("boringssl_revision") != "2ea3200c3a3ec176613ab7a0b9a4ffc6db846120":
+        failures.append("chrome_156: source provenance is not the reviewed156 configuration")
+
+
 def check_chrome_151_reference(text: str, committed: dict, failures: list) -> None:
     """Check the reviewed 155 table against unchanged captured 151 plus two deltas.
 
@@ -625,13 +642,14 @@ def main() -> int:
         for name, symbol in PROFILES.items():
             compare(name, symbol, specs[name], failures)
         exempt = check_capture_derived(text, common, failures)
+        check_source_derived(failures)
     except (OSError, ValueError, KeyError, TypeError, SystemExit) as error:
         print(f"could not read or parse fingerprint reference: {error}", file=sys.stderr)
         return 2
     print(f"uTLS source: {args.source if args.source else revision}")
 
     committed_files = {path.stem for path in (REPO / "fingerprints").glob("*.json")}
-    unaccounted = committed_files - set(PROFILES) - set(CAPTURE_DERIVED)
+    unaccounted = committed_files - set(PROFILES) - set(CAPTURE_DERIVED) - SOURCE_DERIVED
     for name in sorted(unaccounted):
         failures.append(
             f"{name}: committed under fingerprints/ but named neither in "

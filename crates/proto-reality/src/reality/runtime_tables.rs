@@ -214,6 +214,7 @@ enum OwnedExtension {
     KeyShare(Vec<KeyShareSlot>),
     Alpn,
     SupportedVersions(Vec<VersionSlot>),
+    SignatureAlgorithmsGrease(Vec<u8>),
     EchGrease,
     Padding,
 }
@@ -234,6 +235,7 @@ impl OwnedExtension {
             Self::KeyShare(shares) => ExtensionSlotData::KeyShare(shares),
             Self::Alpn => ExtensionSlotData::Alpn,
             Self::SupportedVersions(versions) => ExtensionSlotData::SupportedVersions(versions),
+            Self::SignatureAlgorithmsGrease(schemes) => ExtensionSlotData::SignatureAlgorithmsGrease(schemes),
             Self::EchGrease => ExtensionSlotData::EchGrease,
             Self::Padding => ExtensionSlotData::Padding,
         }
@@ -310,11 +312,15 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<Owne
     let groups = build_groups(name, field("supported_groups")?)?;
     let key_shares = build_key_shares(name, field("key_shares")?)?;
     let versions = build_versions(name, field("supported_versions")?)?;
-    let signature_algorithms = length_prefixed(code_points(
-        name,
-        "signature_algorithms",
-        field("signature_algorithms")?,
-    )?);
+    let signatures = field("signature_algorithms")?;
+    let entries = entries(name, "signature_algorithms", signatures)?;
+    let signature_grease = entries.first().and_then(Value::as_array)
+        .and_then(|pair| pair.first()).and_then(Value::as_str) == Some("GREASE");
+    if signature_grease != (profile == RealityHelloProfile::Chrome156) {
+        return Err(refuse(&format!("profile {name} cannot change compiled signature GREASE behavior")));
+    }
+    let values = if signature_grease { Value::Array(entries[1..].to_vec()) } else { signatures.clone() };
+    let signature_algorithms = length_prefixed(code_points(name, "signature_algorithms", &values)?);
 
     let extensions = build_extensions(
         name,
@@ -323,7 +329,12 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<Owne
         &key_shares,
         &versions,
         &signature_algorithms,
+        signature_grease,
     )?;
+
+    if signature_grease && !extensions.iter().any(|slot| matches!(slot, OwnedExtension::SignatureAlgorithmsGrease(_))) {
+        return Err(refuse("chrome_156 requires its compiled signature GREASE extension"));
+    }
 
     let has_ech_slot = extensions
         .iter()
@@ -357,6 +368,7 @@ fn build_profile(profile: RealityHelloProfile, table: &Value) -> io::Result<Owne
             None | Some(Value::Null)
         ),
     };
+    // Includes the compiled modern hybrid shape; a feed cannot select another auth version.
     built.with_profile(|profile| profile.validate())?;
     Ok(built)
 }
@@ -401,6 +413,18 @@ fn build_groups(name: &str, value: &Value) -> io::Result<Vec<GroupSlot>> {
 }
 
 fn build_key_shares(name: &str, value: &Value) -> io::Result<Vec<KeyShareSlot>> {
+    if matches!(name, "chrome_151" | "chrome_156") {
+        let shares = entries(name, "key_shares", value)?;
+        if shares.len() != 3
+            || shares[1].get("bytes").and_then(Value::as_u64) != Some(1216)
+            || shares[1].get("layout").and_then(Value::as_str)
+                != Some("ml_kem_encapsulation_key || x25519_public")
+            || shares[2].get("bytes").and_then(Value::as_u64) != Some(32)
+            || shares[2].get("layout").and_then(Value::as_str) != Some("x25519_public")
+        {
+            return Err(refuse("cannot change the compiled hybrid share sizes or layout"));
+        }
+    }
     entries(name, "key_shares", value)?
         .iter()
         .map(|entry| match entry.get("value").and_then(Value::as_str) {
@@ -441,6 +465,7 @@ fn build_extensions(
     key_shares: &[KeyShareSlot],
     versions: &[VersionSlot],
     signature_algorithms: &[u8],
+    signature_grease: bool,
 ) -> io::Result<Vec<OwnedExtension>> {
     let entries = entries(name, "extension_order", value)?;
     let mut grease_seen = 0_usize;
@@ -479,6 +504,9 @@ fn build_extensions(
         }
 
         let extension_type = hex16(name, declared)?;
+        if name == "chrome_156" && extension_type == 0xca34 {
+            return Err(refuse("chrome_156 does not supply Trust Anchor IDs"));
+        }
         let slot = match (extension_type, body) {
             (ext::SERVER_NAME, "per_connection") => OwnedExtension::ServerName,
             (ext::SUPPORTED_GROUPS, "table") => OwnedExtension::SupportedGroups(groups.to_vec()),
@@ -487,6 +515,8 @@ fn build_extensions(
             (ext::SUPPORTED_VERSIONS, "table") => {
                 OwnedExtension::SupportedVersions(versions.to_vec())
             }
+            (ext::SIGNATURE_ALGORITHMS, "table") if signature_grease =>
+                OwnedExtension::SignatureAlgorithmsGrease(signature_algorithms.to_vec()),
             (ext::SIGNATURE_ALGORITHMS, "table") => OwnedExtension::Constant {
                 extension_type,
                 body: signature_algorithms.to_vec(),
@@ -824,6 +854,24 @@ mod tests {
             .unwrap_or_else(|| panic!("no committed vector for {name}"));
         edit(&mut entry["fingerprint"]);
         rehash(document)
+    }
+
+    #[test]
+    fn modern_tables_cannot_change_the_auth_compatibility_shape() {
+        for name in ["chrome_151", "chrome_156"] {
+            for edit in 0..6 {
+                let document = edited(name, |fingerprint| match edit {
+                    0 => { fingerprint["key_shares"].as_array_mut().unwrap().remove(1); }
+                    1 => { fingerprint["key_shares"].as_array_mut().unwrap().swap(1, 2); }
+                    2 => { fingerprint["supported_groups"].as_array_mut().unwrap().remove(1); }
+                    3 => fingerprint["key_shares"][1]["bytes"] = Value::from(1184),
+                    4 => fingerprint["key_shares"][1]["layout"] = Value::from("x25519_public"),
+                    5 => fingerprint["key_share_reuse"] = Value::Bool(true),
+                    _ => unreachable!(),
+                });
+                assert!(parse(&document).is_err(), "{name} edit={edit}");
+            }
+        }
     }
 
     fn a_covered_profile() -> (RealityHelloProfile, &'static str) {

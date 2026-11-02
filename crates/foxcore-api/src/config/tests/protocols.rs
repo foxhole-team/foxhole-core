@@ -481,7 +481,7 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
     };
     let reality = vless.reality.as_ref().expect("Reality must be present");
     assert_eq!(reality.handshake_timeout_ms, 15_000);
-    assert_eq!(reality.fingerprint, RealityFingerprint::Chrome151);
+    assert_eq!(reality.fingerprint, RealityFingerprint::Chrome156);
     let debug = format!("{parsed:?}");
     assert!(!debug.contains(reality.public_key.expose()));
     assert!(!debug.contains(reality.short_id.expose()));
@@ -526,11 +526,12 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
         };
         vless.reality.as_ref().unwrap().fingerprint
     };
-    assert_eq!(fingerprint("\"chrome\""), RealityFingerprint::Chrome151);
+    assert_eq!(fingerprint("\"chrome\""), RealityFingerprint::Chrome156);
+    assert_eq!(fingerprint("\"chrome_156\""), RealityFingerprint::Chrome156);
     assert_eq!(fingerprint("\"chrome_151\""), RealityFingerprint::Chrome151);
     assert_eq!(fingerprint("\"chrome_133\""), RealityFingerprint::Chrome133);
     assert_eq!(fingerprint("\"chrome_131\""), RealityFingerprint::Chrome131);
-    assert_eq!(RealityFingerprint::default(), RealityFingerprint::Chrome151);
+    assert_eq!(RealityFingerprint::default(), RealityFingerprint::Chrome156);
 
     for (value, expected) in [
         ("\"edge\"", RealityFingerprint::Edge85),
@@ -539,7 +540,7 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
         ("\"safari_26_3\"", RealityFingerprint::Safari263),
         ("\"ios\"", RealityFingerprint::Ios14),
         ("\"ios_14\"", RealityFingerprint::Ios14),
-        ("\"qq\"", RealityFingerprint::Qq111),
+        ("\"qq\"", RealityFingerprint::Chrome156),
         ("\"qq_11_1\"", RealityFingerprint::Qq111),
         ("\"firefox\"", RealityFingerprint::Firefox153),
         ("\"firefox_153\"", RealityFingerprint::Firefox153),
@@ -548,6 +549,14 @@ fn validates_vless_reality_as_a_fail_closed_security_layer() {
     ] {
         assert_eq!(fingerprint(value), expected, "fingerprint {value}");
     }
+    assert_eq!(
+        serde_json::to_string(&RealityFingerprint::Qq111).unwrap(),
+        "\"qq_11_1\""
+    );
+    assert_eq!(
+        serde_json::to_string(&RealityFingerprint::Chrome156).unwrap(),
+        "\"chrome_156\""
+    );
 
     // Configs never substitute unknown parrots; `360` and `android` are refused
     // here and by the link importer.

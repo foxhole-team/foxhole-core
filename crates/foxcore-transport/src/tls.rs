@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
-use foxcore_api::{CurveGroup, EchConfig, TlsConfig, TlsVersion};
+use foxcore_api::{CurveGroup, EchConfig, TlsConfig, TlsFingerprint, TlsVersion};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::client::{EchGreaseConfig, EchMode, EchStatus};
@@ -296,7 +296,7 @@ fn build_client_config_with_roots(
         {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Chrome151 cannot drop ECH or TLS version requirements",
+                if tls.fingerprint == Some(TlsFingerprint::Chrome156) { "Chrome156 cannot drop ECH or TLS version requirements" } else { "Chrome151 cannot drop ECH or TLS version requirements" },
             ));
         }
         let groups = [
@@ -308,7 +308,7 @@ fn build_client_config_with_roots(
         if !tls.curve_preferences.is_empty() && tls.curve_preferences != groups {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
-                "Chrome151 cannot drop curve preferences",
+                if tls.fingerprint == Some(TlsFingerprint::Chrome156) { "Chrome156 cannot drop curve preferences" } else { "Chrome151 cannot drop curve preferences" },
             ));
         }
     }
@@ -379,10 +379,12 @@ fn build_client_config_with_roots(
             .collect(),
     };
 
-    if tls.fingerprint.is_some() {
-        config
-            .enable_chrome_151()
-            .map_err(|error| io::Error::other(format!("TLS Chrome151: {error}")))?;
+    match tls.fingerprint {
+        Some(TlsFingerprint::Chrome151) => config.enable_chrome_151()
+            .map_err(|error| io::Error::other(format!("TLS Chrome151: {error}")))?,
+        Some(TlsFingerprint::Chrome156) => config.enable_chrome_156()
+            .map_err(|error| io::Error::other(format!("TLS Chrome156: {error}")))?,
+        None => {}
     }
     Ok(Arc::new(config))
 }

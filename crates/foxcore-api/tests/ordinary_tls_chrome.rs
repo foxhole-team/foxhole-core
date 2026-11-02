@@ -40,3 +40,11 @@ fn unimplemented_fingerprints_are_rejected_instead_of_dropped() {
         );
     }
 }
+
+#[test]
+fn chrome156_is_explicit_and_legacy151_remains_represented() {
+    for name in ["chrome_156", "chrome_151"] {
+        let tls: TlsConfig = serde_json::from_value(json!({"enabled":true,"fingerprint":name})).unwrap();
+        assert_eq!(serde_json::to_value(tls).unwrap()["fingerprint"], name);
+    }
+}

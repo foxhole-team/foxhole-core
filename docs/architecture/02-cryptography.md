@@ -42,10 +42,10 @@ The BoringSSL-derived primitives needed here already arrive through `aws-lc-rs`.
 
 | Protocol | Authentication | Key exchange | Data AEAD |
 |---|---|---|---|
-| **VLESS** | plaintext UUID (16 B) in the header | none of its own — from the layer below | from the layer below |
+| **VLESS** | plaintext UUID (16 B) in the header | none of its own - from the layer below | from the layer below |
 | **VLESS Encryption** | suite `mlkem768x25519plus` | X25519 to the server long-term key **or** ML-KEM-768 encapsulation; PFS hop yields `mlkem_ss ‖ x25519_ss` (64 B) | AES-256-GCM or ChaCha20-Poly1305; keys via BLAKE3 `derive_key` |
-| **VMess** | `cmdKey = MD5(uuid ‖ magic)`; AuthID = AES-128-ECB over `be64(secs) ‖ 3 rand ‖ be32(CRC32)`; header sealed AES-128-GCM | none — pre-shared UUID | AES-128-GCM or ChaCha20-Poly1305; length masking via SHAKE128 |
-| **Trojan** | **SHA-224(password)**, lowercase hex, 56 ASCII bytes | none — from TLS/REALITY below | from TLS below |
+| **VMess** | `cmdKey = MD5(uuid ‖ magic)`; AuthID = AES-128-ECB over `be64(secs) ‖ 3 rand ‖ be32(CRC32)`; header sealed AES-128-GCM | none - pre-shared UUID | AES-128-GCM or ChaCha20-Poly1305; length masking via SHAKE128 |
+| **Trojan** | **SHA-224(password)**, lowercase hex, 56 ASCII bytes | none - from TLS/REALITY below | from TLS below |
 | **Shadowsocks / SS-2022** | pre-shared key; method string → `CipherKind` | TCP subkey = `HKDF(key, salt)` | AEAD or AEAD-2022 (`2022-blake3-*`) |
 | **Hysteria2** | HTTP/3 `POST /auth`, header `hysteria-auth: <password>` inside TLS; success is `:status 233` | TLS 1.3 inside QUIC | QUIC AEAD; optional Salamander XOR keystream = `BLAKE2b-256(key ‖ salt)` below QUIC |
 | **TUIC v5** | UUID + **TLS exporter** token: `export_keying_material(32, label = uuid, context = password)`; zeroized after send | TLS 1.3 inside QUIC | QUIC AEAD |
@@ -60,7 +60,7 @@ The BoringSSL-derived primitives needed here already arrive through `aws-lc-rs`.
 | **Tor** | delegated to `arti-client` 0.47.0 | delegated | delegated |
 | **I2P** | none in-crate; optional RFC 1929 to the local i2pd | none | none |
 
-Note that `SocksConfig` has no TLS field at all — a SOCKS5 outbound carries its credentials in
+Note that `SocksConfig` has no TLS field at all - a SOCKS5 outbound carries its credentials in
 plaintext. It exists for loopback and LAN use.
 
 ---
@@ -71,17 +71,17 @@ The handwritten REALITY and VLESS Encryption paths use **ML-KEM-768**. REALITY o
 
 ```mermaid
 flowchart TD
-    subgraph a["A. rustls path — generic TLS and QUIC"]
+    subgraph a["A. rustls path - generic TLS and QUIC"]
         A1["aws_lc_rs default_provider"] --> A2["group order:<br/>X25519MLKEM768, X25519,<br/>secp256r1, secp384r1"]
         A2 --> A3["a curve_preferences list that omits<br/>the hybrid gets it PREPENDED"]
         A3 --> A4["dropping it requires<br/>allow_classical_only_key_exchange"]
     end
-    subgraph b["B. REALITY path — hand-written hello"]
+    subgraph b["B. REALITY path - hand-written hello"]
         B1["own X25519MLKEM768, code point 0x11ec"] --> B2["client share ek(1184) + x25519(32) = 1216 B"]
         B2 --> B3["server share ct(1088) + x25519(32) = 1120 B"]
         B3 --> B4["secret mlkem_ss(32) + x25519_ss(32) = 64 B"]
     end
-    subgraph c["C. VLESS Encryption — inner layer"]
+    subgraph c["C. VLESS Encryption - inner layer"]
         C1["ML-KEM-768 via aws-lc-rs"] --> C2["suite mlkem768x25519plus"]
         C2 --> C3["mlkem1024x448plus refused by name"]
     end
@@ -110,7 +110,7 @@ eight classical schemes and the list length grows `0x0010 → 0x0016`
 (`hello_profile.rs:788-815`). None is implemented: the certificate verifier accepts only Ed25519
 (`reality_client_verify.rs:217-225`), and `reality_mldsa65` is declared unsupported in the
 capability document. There is **no Kyber, Dilithium or ML-DSA verification code anywhere in either
-repository** — every hit is a table entry or a comment.
+repository** - every hit is a table entry or a comment.
 
 ---
 
@@ -125,7 +125,7 @@ sequenceDiagram
     participant S as REALITY server
 
     Note over C: config: server X25519 public_key[32], short_id[8], server_name, hello profile
-    C->>C: 1. generate key shares — standalone X25519 pair (the one REALITY uses),<br/>optional ML-KEM-768 decap key + 2nd X25519, optional P-256
+    C->>C: 1. generate key shares - standalone X25519 pair (the one REALITY uses),<br/>optional ML-KEM-768 decap key + 2nd X25519, optional P-256
     C->>C: 2. draw client_random[32]
     C->>C: 3. shared_secret = X25519(client_x25519_priv, config.public_key)
     C->>C: 4. auth_key = HKDF-SHA256(salt = client_random[0..20],<br/>ikm = shared_secret, info = "REALITY") -> 32 B
@@ -161,23 +161,23 @@ records plus buffered application plaintext share one 64 KiB budget; a blocked n
 backpressures the application rather than growing two independent queues
 (`reality_client_connection.rs:931-936`; `reality_reader_writer.rs:65-70`).
 
-`server_name` is the SNI written into the parroted hello and must be an ASCII DNS name — IP literals
+`server_name` is the SNI written into the parroted hello and must be an ASCII DNS name - IP literals
 are rejected. There is **no client-side "dest" or fallback-target concept**; that is server-side
 REALITY. This client only writes the SNI and refuses anything that is not a REALITY-signed
 certificate.
 
 ---
 
-## 2.5 TLS fingerprinting — two disjoint mechanisms
+## 2.5 TLS fingerprinting - two disjoint mechanisms
 
 ```mermaid
 flowchart TD
-    subgraph A["Generic TLS path — pinned FoxHole rustls fork"]
+    subgraph A["Generic TLS path - pinned FoxHole rustls fork"]
         A1["VLESS/VMess/Trojan/SS/AnyTLS/Naive/HTTP over TLS<br/>+ QUIC for Hysteria2 and TUIC"]
         A1 --> A2["TLS settings plus optional<br/>chrome_151 ClientHello"]
         A2 --> A3["Explicit h2/http/1.1 profile;<br/>incompatible ECH, groups or versions refused"]
     end
-    subgraph B["REALITY path — hand-written bytes"]
+    subgraph B["REALITY path - hand-written bytes"]
         B1["proto-reality writes the hello itself,<br/>rustls is not involved"]
         B1 --> B2["9 profile tables + a ported<br/>randomized generator"]
         B2 --> B3["spoofs cipher list and order, extension set<br/>and order, GREASE, groups, key shares,<br/>versions, sigalgs, ALPN, ALPS code point,<br/>padding, ECH-GREASE shape"]
@@ -202,7 +202,7 @@ weaken certificate verification.
 modern table chosen per process) and `randomized` (a fresh generated hello per connection). Seven
 tables are transcribed from uTLS; `chrome_151` and `firefox_153` come from first-party captures.
 
-**Refused rather than substituted**: `360` and `android` — both TLS 1.2 parrots that send no
+**Refused rather than substituted**: `360` and `android` - both TLS 1.2 parrots that send no
 `key_share`, and REALITY derives its auth key from the client's X25519 share, so no REALITY
 handshake is possible with that hello (`capabilities.rs:1117`).
 
@@ -216,7 +216,7 @@ Only tables travel; the generator is compiled in. `install_fingerprint_tables`
 (`runtime_tables.rs:39-70`) bounds the document; parsing requires schema 1, rejects duplicate names
 and skips names this build does not implement (`:93-142`). Every `fingerprint_sha256` is re-derived
 over canonical ASCII JSON (`:154-169`). Any failure refuses the whole document. See
-[03 — Updates and data delivery](03-updates-and-data-delivery.md).
+[03 - Updates and data delivery](03-updates-and-data-delivery.md).
 
 ---
 
@@ -277,22 +277,22 @@ flowchart TD
 | DNS rule-set signing key | per-source, from config; base64 SPKI or raw P-256 point, 1..4096 B; `ECDSA_P256_SHA256_ASN1` | `config/dns.rs:102-134`; `foxcore-route/src/ruleset.rs:13`, `:248-295` |
 | Per-fingerprint-table digest | `fingerprint_sha256`, re-derived in the core before install | `runtime_tables.rs:137`, `:154-169` |
 | Threat-intel source digest | `sourceSha256: 6052636f…4864e` | `app/src/main/assets/sentinel/threat-intel.source.json:7` |
-| Third-party app identity | `KnownAppConfig.signing_digest` — hex SHA-256 of another app's signing cert, so a repackaged app fails closed | `config/policy.rs:212-217`; `AndroidApplicationIdentityResolver.kt:84-99` |
+| Third-party app identity | `KnownAppConfig.signing_digest` - hex SHA-256 of another app's signing cert, so a repackaged app fails closed | `config/policy.rs:212-217`; `AndroidApplicationIdentityResolver.kt:84-99` |
 | Gradle dependencies | per-artifact SHA-256 | `gradle/verification-metadata.xml` |
-| Release APK certificate | `e59de2486084c38f3c77e9df0eb5eff9a4559f3c68024f1208e0e9c04b0df665` | `config/release-cert-sha256.txt` — **build-time check only** |
+| Release APK certificate | `e59de2486084c38f3c77e9df0eb5eff9a4559f3c68024f1208e0e9c04b0df665` | `config/release-cert-sha256.txt` - **build-time check only** |
 | FoxCore revision | exact release commit in `config/foxcore-revision.txt` | local Gradle checks the sibling Git HEAD and refuses release mismatches (`app/build.gradle.kts:184-230`) |
 
 **Not pinned:**
 
-- **Tor directory authorities** — arti owns them; no key material in either repo.
-- **APK signing certificate at runtime** — there is no literal. `AppUpdateApkVerifier` requires the
+- **Tor directory authorities** - arti owns them; no key material in either repo.
+- **APK signing certificate at runtime** - there is no literal. `AppUpdateApkVerifier` requires the
   candidate's `apkContentsSigners` digest set to equal the **currently installed app's**, fail-closed
   on an empty set (`AppUpdateApkVerifier.kt:49-80`). `signingCertificateHistory` is deliberately not
   used, so a rotated-away key is refused.
 - **No OkHttp `CertificatePinner`** anywhere. Transport hardening is
   `android:usesCleartextTraffic="false"` plus the public-HTTPS URL policy.
 - **No Ed25519, minisign or PGP** update signing. The only Ed25519 in the tree is REALITY's *server*
-  certificate key, which is authenticated by HMAC-SHA512 under the derived `auth_key` — not pinned.
+  certificate key, which is authenticated by HMAC-SHA512 under the derived `auth_key` - not pinned.
 
 The Rust lockfile pins the transitive RNG dependency `chacha20` to 0.10.2, replacing
 the yanked 0.10.1 release, and `event-listener` to 5.4.2, which fixes
@@ -419,3 +419,13 @@ cleanup remain separate
 - Manual About export previously used the journal reader that could clean or migrate files and
   create a missing encryption key. It now uses an explicit read-only existing-key path; tests
   use synthetic keys and do not establish device AndroidKeyStore provider behavior.
+
+### Chromium156 source-derived configuration
+
+Core source/dev1.0.2 adds `chrome_156` alongside historical `chrome_151`.
+The source-derived156 configuration has per-connection signature-algorithm
+GREASE and supplies no Trust Anchor IDs. It is not a captured/default-platform
+Chrome promise. Bare Chrome/default imports select156; explicit151 and the
+recognized legacy fallback remain151. Signature verification, ALPN constraints,
+legacy session/record conventions and insecure-consent defaults are retained.
+See [browser TLS profiles](../BROWSER-TLS-PROFILES.md) for exact scope and sources.

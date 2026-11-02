@@ -169,7 +169,7 @@ def compiled_source_paths(repo, source):
     need(COMPILED_FIXED <= set(tracked), 'fixed compiled inputs missing from intended checkout')
     selected = COMPILED_FIXED | {name for name in tracked if name.startswith(COMPILED_ROOTS)}
     need(all(any(name.startswith(root) for name in selected) for root in COMPILED_ROOTS), 'compiled source roots incomplete')
-    need(sum(name.startswith('fingerprints/') for name in selected) == 9, 'fingerprint input inventory differs')
+    need(sum(name.startswith('fingerprints/') for name in selected) == 10, 'fingerprint input inventory differs')
     need(all(tracked[name] in (('100644', 'blob'), ('100755', 'blob')) for name in selected), 'nonregular compiled source input')
     return selected
 

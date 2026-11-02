@@ -1,3 +1,15 @@
+<h1 align="center">🦀 FoxHole Core</h1>
+
+<div align="center">
+
+**FoxHole Core** is the Rust networking core of the FoxHole ecosystem.
+It processes TCP/UDP flows, applies routing and DNS policy, and connects the
+selected outbound. FoxHole Guard and FoxHole VPN use its C/JNI interface on
+Android; the OpenWrt client uses the Linux CLI. Available features depend on
+the build and integration.
+
+</div>
+
 <p align="center">
     <img
       src="media/fhg.gif"
@@ -11,7 +23,7 @@
   <a href="README.md">
     <img src="https://img.shields.io/badge/🇬🇧-English-ff7a00?style=flat-square">
   </a>
-  <a href="docs/README.ru.md">
+  <a href="./docs/README.ru.md">
     <img src="https://img.shields.io/badge/🇷🇺-Русский-ff7a00?style=flat-square">
   </a>
 </p>
@@ -20,74 +32,33 @@
   <a href="https://github.com/foxhole-team/foxhole-core/releases">
     <img src="https://img.shields.io/github/v/release/foxhole-team/foxhole-core?label=version&style=flat-square" alt="Version">
   </a>
+  <img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Status: beta">
 </p>
-
-# 🦀 FoxHole Core
 
 ![Rust](https://img.shields.io/badge/core-Rust-000000?logo=rust&logoColor=white&style=flat-square)
 ![Android](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white&style=flat-square)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-007ec6?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0.html)
 ![❤️ We support I2P](https://img.shields.io/badge/❤️_We_support-I2P-7B1FA2?style=flat-square)
 
-**FoxHole Core** is the native Rust networking core of FoxHole Guard. It executes
-the network data plane of the Android system VPN tunnel: receives the TUN
-interface from the application, processes TCP/UDP flows, applies routing and DNS
-policy, selects an outbound, and establishes protected network connections.
-
-```text
-FoxHole Guard / Android
-        ↓
-VpnService + TUN + policy
-        ↓
-      C/JNI ABI
-        ↓
-    FoxHole Core
-        ↓
-TUN → flow engine → routing policy → outbound
-                              ├─ VPN / Named Outbound
-                              ├─ Tor / Arti
-                              ├─ I2P → loopback SOCKS5 → i2pd
-                              ├─ Direct → protected socket
-                              └─ Block
-```
-
-> [!WARNING]
-> **Release channel:** Stable; 1.0.1 is the current release candidate. Protocols retain
-> their individual `beta` or `experimental` maturity. Independent device/peer interoperability
-> is **not verified for the new 1.0.1 artifacts**; record exact binary identities and results in
-> [`interop.md`](docs/interop.md). Earlier tests keep their original source/artifact scope.
->
-> **TLS fingerprint:** a Reality connection sends a browser-faithful
-> ClientHello — nine profiles, seven transcribed from uTLS and two from
-> first-party captures, matching real Chromium on
-> the human-readable part of JA4.
-> REALITY keeps its compiled Fox-owned ClientHello generator. Generic TCP TLS
-> separately supports an explicit `chrome_151` profile through the pinned rustls
-> fork; incompatible TLS settings are refused. These two mechanisms are described
-> in [TLS fingerprinting](docs/architecture/02-cryptography.md#25-tls-fingerprinting--two-disjoint-mechanisms).
-
-### Documentation
-
-| Document | Purpose |
+| Build variant | Contents |
 | --- | --- |
-| [Architecture](docs/architecture/README.md) | cross-repository architecture, trust boundaries and release data flow |
-| [SECURITY.md](SECURITY.md) | vulnerability reporting and security scope |
-| [threat-model.md](docs/threat-model.md) | threat model and security boundaries |
-| [abi.md](docs/abi.md) | FFI contract: handles, threads, panic boundaries, error codes and limits |
-| [interop.md](docs/interop.md) | artifact-bound interoperability status and pending evidence |
-| [fingerprints/](fingerprints/) | provenance of REALITY ClientHello fingerprints |
+| Android JNI | Default `shipped` profile, including Tor, the I2P adapter and experimental onion-service publishing |
+| Linux CLI | Hysteria2 by default; other VPN protocols are selected at build time. Tor and I2P are not included in the CLI |
+| Specific client | Exposes only its available features; a Core capability does not imply a corresponding app UI feature |
 
-FoxHole VPN is a separate consumer of the same Core ABI. Its connection-data updater checks
-the signed FoxHole DB REALITY table feed against the pinned compiled baseline and applies
-changed tables only after a user action. It downloads data for known profiles, not native code
-or other Guard feeds. Native acceptance affects future handshakes in that application's process
-without reconnecting the tunnel; see [VPN client architecture](docs/architecture/06-vpn-client.md).
+<p align="center"><a href="#quickstart">Get started</a> · <a href="#features">Features</a> · <a href="#details">Details</a> · <a href="#whats-new">What's new</a></p>
 
-[FoxHole OpenWRT Client](https://github.com/foxhole-team/foxhole-openwrt-client) is the
-public-beta router package using the same Core. The prepared package is `1.0.0-r4`;
-router compatibility and installation mode are selected during setup.
+<a id="whats-new"></a>
 
----
+## 🆕 What's new - 1.0.2
+
+- Updated browser TLS profiles.
+- Fixed VLESS + REALITY compatibility.
+- Added automatic selection of a compatible TLS profile when importing REALITY configurations with the legacy QQ profile.
+- Added consistency checks for shared Guard and VPN code.
+- Clarified documentation of core capabilities.
+
+<a id="features"></a>
 
 ## ⚙️ Core capabilities
 
@@ -119,9 +90,11 @@ Flow tables are bounded by default to 1024 TCP and 512 UDP entries. A flow excee
 | SIP008 JSON | Version 1 Shadowsocks server lists |
 | Outline JSON | One Shadowsocks access-key object; `ss://` links also work |
 
-URI schemes include `vless`, `vmess`, `hysteria2` / `hy2`, `trojan`, `ss`,
-`wg` / `wireguard`, `socks` / `socks4` / `socks5`, `http` / `https`,
-`naive` / `naive+https`, and `anytls`, subject to the protocol modules in the build.
+Supported URI schemes are `vless`, `vmess`, `hysteria2` / `hy2`,
+`trojan`, `ss`, `wg` / `wireguard`, `socks` / `socks5`,
+`http` / `https`, `naive+https`, and `anytls`.
+Connection availability depends on the protocol modules compiled into the build.
+`socks4://` and `naive://` links are rejected.
 The CLI also imports canonical Core JSON and WireGuard `[Interface]` configuration;
 its `import` command requires exactly one profile. Arbitrary Xray or sing-box JSON
 is not a supported subscription format.
@@ -133,31 +106,6 @@ Partial import returns rejected entries explicitly; strict import rejects an
 unsupported entry. See the [subscription parser](crates/foxcore-link/src/lib.rs),
 [structured formats](crates/foxcore-link/src/structured.rs), and
 [CLI import](crates/foxcore-cli/src/import.rs).
-
-## 🧭 Architecture and execution model
-
-### Mapping to the FoxHole Guard model
-
-At the application level, the user operates with the chain **mode → scenario → routing rules**. These concepts belong to FoxHole Guard. Before applying them, the application compiles them into runtime configuration and route/DNS/application policy executed by FoxHole Core.
-
-FoxHole Core does not choose the user mode on its own. Its responsibility is to deterministically apply the already compiled policy to each new flow and fail closed when the required protected route is unavailable.
-
-### Core principles
-
-- fixed `enum Outbound`;
-- one Android protected dialer;
-- native TCP/UDP flow engine;
-- compiled routing policy;
-- atomic policy reload;
-- fail-closed routing;
-- on Android, every outbound socket passes `protect(fd)` and binds to the selected physical `Network` before connect/send;
-- no silent downgrade when a protected route fails.
-
-Per-app/application policy is compiled inside `foxcore-route` and updated through the native API without recreating the TUN interface.
-
-I2P is a separate runtime boundary: FoxHole Core connects to an already running `i2pd` instance through a local SOCKS5 adapter and does not manage the I2P process itself.
-
----
 
 ## 🔌 Supported protocols
 
@@ -178,22 +126,33 @@ I2P is a separate runtime boundary: FoxHole Core connects to an already running 
 | **SOCKS5** | CONNECT, UDP ASSOCIATE, authentication | `beta` |
 | **HTTP** | CONNECT proxy | `beta` |
 | **Tor** | Arti, TCP, `.onion`, bridges, pluggable transports | `beta` |
-| Tor onion **service** (publishing) | compiled, never exercised on a device — the artifact every acceptance run covered was built without it | `experimental` |
+| Tor onion **service** (publishing) | Compiled experimental API; no ready-to-use Guard publishing flow or independent publication qualification claimed | `experimental` |
 | **I2P** | TCP-only SOCKS5 adapter to external `i2pd` | `experimental` |
 | **Selector** | named outbound group, connect failover, urltest | `beta` |
 
-`Selector` is an internal outbound placed in front of up to 64 member outbounds. The application wraps every imported profile in a selector, so it is present on every connection.
+`Selector` is a utility group of up to 64 outbounds, supporting member selection, connection failover and `urltest`. Its use depends on the client configuration; Core also accepts an individual outbound without Selector.
 
 ### Transport composition constraints
 
 The protocol list above is not a freely composable transport matrix:
 
-- **Reality** is a security layer, not a carrier, and is mutually exclusive with normal TLS. A stream transport may sit above it: WebSocket, HTTP Upgrade, gRPC and H2 are all accepted, gRPC being the common shape in the wild. **Vision** is the exception — it requires raw TCP.
+- **Reality** is a security layer, not a carrier, and is mutually exclusive with normal TLS. A stream transport may sit above it: WebSocket, HTTP Upgrade, gRPC and H2 are all accepted, gRPC being the common shape in the wild. **Vision** is the exception - it requires raw TCP.
 - **Vision**, in this implementation, requires TLS 1.3 on the outer layer and `packet_encoding = xudp`, and rejects UDP on port 443.
 - **XHTTP** implements only stream-one over HTTP/2. Other modes and unsupported settings are refused.
 - **Outline** `prefix=` applies to AEAD ciphers over TCP; it is not carried over to AEAD-2022 or UDP.
 - **Hysteria2 port hopping** rotates the destination port from the configured set while retaining one protected local UDP socket. The reference client also rotates the source port, so this implementation is deliberately narrower.
 - **ShadowTLS v3** carries Shadowsocks only; no share-link form is supported.
+
+- **ECH** requires an explicit `ECHConfigList`; automatic retrieval from DNS HTTPS records is not implemented. ECH GREASE does not hide SNI. ECH is unavailable for Hysteria2, TUIC and ShadowTLS and cannot be combined with `tls.fingerprint`.
+
+### TLS and limitations
+
+**TLS fingerprints:** REALITY forms ClientHello using ten browser profiles: seven transcribed from uTLS, two from first-party captures and one source-derived Chromium156 configuration without supplied Trust Anchor IDs. Provenance and measurements are in `fingerprints/`. Matching ClientHello parameters does not imply matching the browser’s complete network behavior.
+
+REALITY keeps its compiled Fox-owned ClientHello generator. Generic TCP TLS
+separately supports explicit `chrome_156` and historical `chrome_151` profiles through the pinned rustls
+fork; incompatible TLS settings are refused. These two mechanisms are described
+in [TLS fingerprinting](docs/architecture/02-cryptography.md#25-tls-fingerprinting--two-disjoint-mechanisms).
 
 ### Shadowsocks / Outline
 
@@ -274,18 +233,7 @@ Applications explicitly assigned to `Direct` continue to use a separate protecte
 
 ## 🌐 DNS
 
-The built-in DNS handler supports:
-
-```text
-UDP
-TCP
-DoT
-DoH
-cache
-stale cache
-fake-IP
-route-aware DNS
-```
+DNS supports UDP/TCP, DoT, DoH over HTTP/2, DoQ and DoH over HTTP/3, caching, policy-controlled stale cache, fake-IP, and route-aware DNS. DoQ and DoH over HTTP/3 require a route with UDP support.
 
 `.onion` and `.i2p` are handled fail-closed and never leak to clearnet DNS.
 
@@ -307,8 +255,12 @@ Supported:
 - user isolation;
 - timeouts;
 - network connections through the Android protected dialer;
-- onion services.
 
+
+
+Onion-service publishing is a separate experimental core capability.
+It is compiled into the standard Android build; this does not imply
+a ready-to-use publishing flow in the Guard interface. See [interop.md](docs/interop.md) for qualification status.
 ---
 
 ## 🕸️ I2P access
@@ -351,6 +303,74 @@ Supported:
 
 ---
 
+<a id="quickstart"></a>
+
+## 🧪 Build and checks
+
+The toolchain is pinned in `rust-toolchain.toml`.
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+```
+
+Check the `foxcore-android` crate with all Cargo features on the current host platform:
+
+```bash
+cargo check --locked -p foxcore-android --all-features
+```
+
+Android libraries are built through `scripts/android-build.sh` with pinned NDK and cargo-ndk. By default it builds four ABIs and runs ELF checks. Offline builds require dependencies to be available locally. Device checks and protocol interoperability are documented separately in [interop.md](docs/interop.md).
+
+---
+
+<a id="details"></a>
+
+## 🧭 Architecture and execution model
+
+**Android traffic path**
+
+```text
+FoxHole Guard / Android
+        ↓
+VpnService + TUN + policy
+        ↓
+      C/JNI ABI
+        ↓
+    FoxHole Core
+        ↓
+TUN → flow engine → routing policy → outbound
+                              ├─ VPN / Named Outbound
+                              ├─ Tor / Arti
+                              ├─ I2P → loopback SOCKS5 → i2pd
+                              ├─ Direct → protected socket
+                              └─ Block
+```
+
+### Mapping to the FoxHole Guard model
+
+At the application level, the user operates with the chain **mode → scenario → routing rules**. These concepts belong to FoxHole Guard. Before applying them, the application compiles them into runtime configuration and route/DNS/application policy executed by FoxHole Core.
+
+FoxHole Core does not choose the user mode on its own. Its responsibility is to deterministically apply the already compiled policy to each new flow and fail closed when the required protected route is unavailable.
+
+### Core principles
+
+- fixed `enum Outbound`;
+- one Android protected dialer;
+- native TCP/UDP flow engine;
+- compiled routing policy;
+- atomic policy reload;
+- fail-closed routing;
+- on Android, every outbound socket passes `protect(fd)` and binds to the selected physical `Network` before connect/send;
+- no silent downgrade when a protected route fails.
+
+Per-app/application policy is compiled inside `foxcore-route` and updated through the native API without recreating the TUN interface.
+
+I2P is a separate runtime boundary: FoxHole Core connects to an already running `i2pd` instance through a local SOCKS5 adapter and does not manage the I2P process itself.
+
+---
+
 ## 📡 Core events and audit
 
 The core publishes a bounded event stream read by the application; the core does not push event callbacks into Java. The buffer holds 512 events; events that do not fit are reported through an explicit `dropped` counter for the affected window.
@@ -371,10 +391,7 @@ The shipped ABI also exposes traffic-map open/close events with its own `dropped
 Component/share event streams remain exported for v0.0.1 ABI compatibility, but the current Guard
 does not subscribe to them.
 
-FoxHole Core does not maintain a persistent security journal and does not contain
-FoxHole Sentinel. FoxHole Sentinel and the long-term FoxHole Guard journal live in
-the Android application; the core only exposes bounded event streams that the
-application may use for journaling, traffic mapping and local correlation.
+The Core networking library does not maintain a persistent security journal or run FoxHole Sentinel; the Android app manages these functions. This repository also contains a separate [native YARA scanner](native/sentinel-yara/README.md) for the isolated Sentinel process, built separately from the networking core.
 
 ---
 
@@ -396,12 +413,12 @@ Operations are authorized through leases. A lease is not a permanent grant: it m
 | --- | --- |
 | Web navigation | Web App's own route |
 | Web notification | Web App's own route |
-| File sharing (in development) | always Tor; no clearnet fallback |
+| File sharing | always Tor; no clearnet fallback |
 | Proxy server | no component lease route; its preset selects VPN/Tor upstreams |
 
 The shipped core contains the vault implementation, onion-service support and the compatibility
 JNI exports, so `share.compiled` reports code presence. FoxHole Guard has no product call site for
-this **in-development** surface.
+this surface.
 
 ---
 
@@ -443,8 +460,8 @@ FoxHole Core exposes a versioned C/JNI ABI.
 
 The Android application queries runtime capabilities.
 
-The release library has 33 `FoxholeNativeEngine` exports and Guard declares 32; only the legacy
-start without an Android `Network` handle is intentionally omitted. Signed DNS starts and
+Guard uses the versioned `FoxholeNativeEngine` JNI interface. The legacy start without an Android `Network` remains in Core for compatibility but is not declared by the current app. See [abi.md](docs/abi.md) for the contract and export checks.
+Signed DNS starts and
 `nativeTrafficMap` are used in production. Link-import and continuity declarations are retained as
 compatibility-only ABI, with no Kotlin product wrapper. Signed DNS downloads are persisted first,
 then installed live into a stable engine; enabling filtering or changing trust uses an atomic
@@ -461,7 +478,7 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-The 1.0.1 release candidate requires the `android4` delivery profile:
+Release 1.0.1 uses the `android4` delivery profile:
 
 ```text
 arm64-v8a
@@ -515,6 +532,7 @@ crates/
 ├── foxcore-api
 ├── foxcore-runtime
 ├── foxcore-android
+├── foxcore-cli
 ├── foxcore-tun
 ├── foxcore-route
 ├── foxcore-dns
@@ -546,25 +564,46 @@ crates/
 └── foxcore-testkit
 ```
 
----
-
-## 🧪 Build and checks
-
-The toolchain is pinned in `rust-toolchain.toml`.
-
-```bash
-cargo fmt --all -- --check
-cargo test --workspace --all-targets
-cargo clippy --workspace --all-targets -- -D warnings
-```
-
-Full Android-side check:
-
-```bash
-cargo check -p foxcore-android --all-features
-```
+`native/sentinel-yara` is a separate native Sentinel scanner workspace, outside the main Cargo workspace.
 
 ---
+
+## 📚 Documentation
+
+| Document | Purpose |
+| --- | --- |
+| [Architecture](docs/architecture/README.md) | cross-repository architecture, trust boundaries and release data flow |
+| [SECURITY.md](SECURITY.md) | vulnerability reporting and security scope |
+| [threat-model.md](docs/threat-model.md) | threat model and security boundaries |
+| [abi.md](docs/abi.md) | FFI contract: handles, threads, panic boundaries, error codes and limits |
+| [interop.md](docs/interop.md) | artifact-bound interoperability status and pending evidence |
+| [fingerprints/](fingerprints/) | provenance of REALITY ClientHello fingerprints |
+
+FoxHole VPN is a separate consumer of the same Core ABI. Its connection-data updater checks
+the signed FoxHole DB REALITY table feed against the pinned compiled baseline and applies
+changed tables only after a user action. It downloads data for known profiles, not native code
+or other Guard feeds. Native acceptance affects future handshakes in that application's process
+without reconnecting the tunnel; see [VPN client architecture](docs/architecture/06-vpn-client.md).
+
+[FoxHole OpenWrt Client](https://github.com/foxhole-team/foxhole-openwrt-client) uses Core in its router client modules and is available as a public beta. Current packages and platform limitations are listed in the [OpenWrt Client releases](https://github.com/foxhole-team/foxhole-openwrt-client/releases).
+
+---
+
+<a id="ecosystem"></a>
+
+## 🔗 FoxHole ecosystem
+
+| Project | Role |
+| --- | --- |
+| [FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) | Android: VPN, Tor/I2P, traffic rules and local monitoring |
+| [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) | Android: simple VPN client and paired OpenWrt management |
+| [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) | Shared Rust networking core; features depend on the build |
+| [FoxHole OpenWrt](https://github.com/foxhole-team/foxhole-openwrt-client) | Router VPN and local-network management |
+| [FoxHole DB](https://github.com/foxhole-team/foxhole-db) | Signed rules and reference datasets |
+
+## 🤝 Contributing
+
+Report bugs and propose changes through [Issues](https://github.com/foxhole-team/foxhole-core/issues).
 
 ## ❤️ Support
 
@@ -608,18 +647,3 @@ Third-party dependency licenses are documented in [THIRD_PARTY_NOTICES.md](THIRD
 ```text
 sbom/*.cdx.json
 ```
-
-## 🔗 Related projects
-
-[![FoxHole DB](https://img.shields.io/badge/GitHub-FoxHole_DB-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-db)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-db?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-db/releases)
-
-[![FoxHole Guard](https://img.shields.io/badge/GitHub-FoxHole_Guard-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-guard)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-guard?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-guard/releases)
-
-[![FoxHole VPN](https://img.shields.io/badge/GitHub-FoxHole_VPN-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-vpn)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-vpn?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-vpn/releases)
-
-[![FoxHole OpenWrt](https://img.shields.io/badge/GitHub-FoxHole_OpenWrt-181717?logo=github&style=flat-square)](https://github.com/foxhole-team/foxhole-openwrt-client)
-[![Version](https://img.shields.io/github/v/release/foxhole-team/foxhole-openwrt-client?label=version&style=flat-square)](https://github.com/foxhole-team/foxhole-openwrt-client/releases)
-

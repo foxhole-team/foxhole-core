@@ -44,7 +44,7 @@ class LabReleaseTests(unittest.TestCase):
                                           'crates/fixture/src/lib.rs', 'vendor/rustls/Cargo.toml',
                                           'vendor/rustls/build.rs', 'vendor/rustls/src/lib.rs',
                                           'fixtures/abi/v1/capabilities.json'} | {
-                                              'fingerprints/profile-' + str(i) + '.json' for i in range(9)}
+                                              'fingerprints/profile-' + str(i) + '.json' for i in range(10)}
         for name in source_paths:
             file = repo/name
             if not file.exists():

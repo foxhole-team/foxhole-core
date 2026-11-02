@@ -1,6 +1,15 @@
 # Changelog
 
-## 1.0.1 — 2026-10-30
+## 1.0.2 - 2026-11-01
+
+- Обновлены браузерные TLS-профили.
+- Исправлена совместимость VLESS + REALITY.
+- Добавлен автоматический выбор совместимого TLS-профиля при импорте REALITY-конфигураций с устаревшим профилем QQ.
+- Добавлен контроль согласованности общего кода Guard и VPN.
+- Уточнена документация по возможностям ядра.
+
+
+## 1.0.1 - 2026-10-30
 
 - Fix kill switch activation with expired DNS data and cancel DNS queries when their policy or app access is revoked.
 - Fix partial Clash/SIP008 imports, DNS reload errors and CLI bootstrap timeouts.
@@ -122,7 +131,7 @@ Published release. The historical entries below do not qualify 1.0.1 binaries.
 - Document bounded GitHub asset redirects and per-origin token handling in the Android clients.
 - Document separate GitHub and F-Droid release APKs, their update policies and per-APK delivery verification.
 
-## 0.0.5 — 2026-09-08
+## 0.0.5 - 2026-09-08
 
 - Keep retained TCP/UDP sessions in one cancellation epoch across policy reloads;
   serialize network callbacks with policy and DNS-rule publication.

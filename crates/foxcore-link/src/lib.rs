@@ -651,17 +651,7 @@ fn require_vmess_disabled(
 /// No network access happens here. Callers own download policy, TLS validation,
 /// and secret storage; this function only parses the response body.
 pub fn import_subscription(value: &str) -> Result<Vec<ImportedProfile>, LinkError> {
-    if value.is_empty() || value.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(format!(
-            "body length must be in 1..={MAX_SUBSCRIPTION_BYTES} bytes"
-        )));
-    }
-    let text = decode_subscription_body(value)?;
-    if text.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(
-            "decoded body exceeds the subscription size limit".into(),
-        ));
-    }
+    let text = checked_subscription_body(value)?;
 
     if clash::looks_like(&text) {
         let result = clash::import_yaml(&text)?;
@@ -746,17 +736,7 @@ pub struct SubscriptionImport {
 /// Still refuses outright when the body is oversized, undecodable, or yields no
 /// profiles at all — those are failures of the subscription, not of one line.
 pub fn import_subscription_partial(value: &str) -> Result<SubscriptionImport, LinkError> {
-    if value.is_empty() || value.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(format!(
-            "body length must be in 1..={MAX_SUBSCRIPTION_BYTES} bytes"
-        )));
-    }
-    let text = decode_subscription_body(value)?;
-    if text.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(
-            "decoded body exceeds the subscription size limit".into(),
-        ));
-    }
+    let text = checked_subscription_body(value)?;
 
     if clash::looks_like(&text) {
         return clash::import_yaml(&text);
@@ -822,17 +802,7 @@ fn safe_rejection_reason(error: &LinkError) -> String {
 /// protocols still produce a closed, log-safe shape so production probes can
 /// report exactly which protocol module is missing.
 pub fn inspect_subscription(value: &str) -> Result<Vec<ProfileShape>, LinkError> {
-    if value.is_empty() || value.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(format!(
-            "body length must be in 1..={MAX_SUBSCRIPTION_BYTES} bytes"
-        )));
-    }
-    let text = decode_subscription_body(value)?;
-    if text.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(
-            "decoded body exceeds the subscription size limit".into(),
-        ));
-    }
+    let text = checked_subscription_body(value)?;
 
     let mut shapes = Vec::new();
     for (line_index, line) in text.lines().enumerate() {
@@ -868,17 +838,7 @@ pub fn import_first_profile_by_scheme(
     value: &str,
     requested: ProfileScheme,
 ) -> Result<ImportedProfile, LinkError> {
-    if value.is_empty() || value.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(format!(
-            "body length must be in 1..={MAX_SUBSCRIPTION_BYTES} bytes"
-        )));
-    }
-    let text = decode_subscription_body(value)?;
-    if text.len() > MAX_SUBSCRIPTION_BYTES {
-        return Err(LinkError::Subscription(
-            "decoded body exceeds the subscription size limit".into(),
-        ));
-    }
+    let text = checked_subscription_body(value)?;
     let mut profile_count = 0usize;
     for (line_index, line) in text.lines().enumerate() {
         let line = line.trim();
@@ -1205,7 +1165,8 @@ fn import_vless(value: &str) -> Result<ImportedProfile, LinkError> {
             let mut tls = tls_config(&query, true)?;
             if let Some(fp) = query.get("fp").filter(|v| !v.is_empty()) {
                 tls.fingerprint = Some(match fp.as_str() {
-                    "chrome" | "chrome_151" => foxcore_api::TlsFingerprint::Chrome151,
+                    "chrome" | "chrome_156" => foxcore_api::TlsFingerprint::Chrome156,
+                    "chrome_151" => foxcore_api::TlsFingerprint::Chrome151,
                     _ => {
                         return Err(LinkError::Unsupported(
                             "ordinary TLS fingerprint is not implemented".into(),
@@ -1350,13 +1311,22 @@ fn reality_fingerprint(
 ) -> Result<RealityFingerprint, LinkError> {
     let requested = query.get("fp").map(String::as_str).unwrap_or("chrome");
     match requested {
-        "" | "chrome" | "chrome_151" => Ok(RealityFingerprint::Chrome151),
+        "" | "chrome" | "chrome_156" => Ok(RealityFingerprint::Chrome156),
+        "chrome_151" => Ok(RealityFingerprint::Chrome151),
         "chrome_133" => Ok(RealityFingerprint::Chrome133),
         "chrome_131" => Ok(RealityFingerprint::Chrome131),
         "edge" | "edge_85" => Ok(RealityFingerprint::Edge85),
         "safari" | "safari_26_3" => Ok(RealityFingerprint::Safari263),
         "ios" | "ios_14" => Ok(RealityFingerprint::Ios14),
-        "qq" | "qq_11_1" => Ok(RealityFingerprint::Qq111),
+        "qq" => {
+            dropped.push(DroppedOption {
+                option: "fp".into(),
+                reason: "VLESS Reality unversioned QQ preference uses Chromium 156 for current \
+                         server compatibility; explicit qq_11_1 remains available".into(),
+            });
+            Ok(RealityFingerprint::Chrome156)
+        }
+        "qq_11_1" => Ok(RealityFingerprint::Qq111),
         "firefox" | "firefox_153" => Ok(RealityFingerprint::Firefox153),
         "firefox_148" => Ok(RealityFingerprint::Firefox148),
         "random" => Ok(random_modern_fingerprint()),
@@ -1382,6 +1352,7 @@ fn reality_fingerprint(
 }
 
 const RANDOM_MODERN_PROFILES: &[RealityFingerprint] = &[
+    RealityFingerprint::Chrome156,
     RealityFingerprint::Chrome151,
     RealityFingerprint::Firefox153,
     RealityFingerprint::Edge85,
@@ -3428,6 +3399,21 @@ fn decode_base64_bytes(value: &str) -> Option<Vec<u8>> {
     .find_map(Result::ok)
 }
 
+fn checked_subscription_body(value: &str) -> Result<String, LinkError> {
+    if value.is_empty() || value.len() > MAX_SUBSCRIPTION_BYTES {
+        return Err(LinkError::Subscription(format!(
+            "body length must be in 1..={MAX_SUBSCRIPTION_BYTES} bytes"
+        )));
+    }
+    let text = decode_subscription_body(value)?;
+    if text.len() > MAX_SUBSCRIPTION_BYTES {
+        return Err(LinkError::Subscription(
+            "decoded body exceeds the subscription size limit".into(),
+        ));
+    }
+    Ok(text)
+}
+
 fn decode_subscription_body(value: &str) -> Result<String, LinkError> {
     let value = value.trim_start_matches('\u{feff}').trim();
     if value.contains("://") || value.starts_with('{') || clash::looks_like(value) {
@@ -3482,7 +3468,7 @@ mod tests {
 
     #[test]
     fn xhttp_reality_auto_imports_as_stream_one_without_dropping_options() {
-        let text = "vless://11111111-1111-4111-8111-111111111111@example.net:443?encryption=none&security=reality&sni=reality.example.net&fp=qq&pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb&type=xhttp&mode=auto";
+        let text = "vless://11111111-1111-4111-8111-111111111111@example.net:443?encryption=none&security=reality&sni=reality.example.net&fp=qq_11_1&pbk=t2ZQZgVX0h9ItHCmYzVQIWLPYs2N9v0lBjTsLpEhAXQ&sid=aabb&type=xhttp&mode=auto";
         let imported = import_link(text).expect("REALITY auto selects XHTTP stream-one");
         assert!(imported.dropped.is_empty());
         let value = serde_json::to_value(imported.outbound).unwrap();
@@ -4117,7 +4103,7 @@ mod tests {
         assert!(!vless.tls.enabled);
         let reality = vless.reality.as_ref().expect("Reality must be present");
         assert_eq!(reality.server_name, "www.example.com");
-        assert_eq!(reality.fingerprint, RealityFingerprint::Chrome151);
+        assert_eq!(reality.fingerprint, RealityFingerprint::Chrome156);
         assert_eq!(reality.short_id.expose(), "0123456789abcdef");
         assert_eq!(
             inspect_link_shape(link).unwrap(),
@@ -4485,7 +4471,7 @@ mod tests {
         let vless = "vless://d0cf0001-0000-4000-8000-000000000000@198.51.100.9:443\
             ?encryption=none&security=tls&sni=tls.example.net&type=tcp";
         let hysteria2 = "hysteria2://import-secret@198.51.100.10:443?sni=hy.example.net";
-        for fingerprint in ["chrome", "chrome_151"] {
+        for fingerprint in ["chrome", "chrome_156", "chrome_151"] {
             let imported = import_link(&format!("{vless}&fp={fingerprint}")).unwrap();
             assert!(imported.dropped.is_empty());
         }
@@ -4532,11 +4518,12 @@ mod tests {
             vless.reality.as_ref().unwrap().fingerprint
         };
 
-        for exact in ["", "&fp=chrome", "&fp=chrome_151"] {
+        for exact in ["", "&fp=chrome", "&fp=chrome_156"] {
             let link = format!("{base}{exact}");
             assert!(import_link(&link).unwrap().dropped.is_empty());
-            assert_eq!(fingerprint_of(&link), RealityFingerprint::Chrome151);
+            assert_eq!(fingerprint_of(&link), RealityFingerprint::Chrome156);
         }
+        assert_eq!(fingerprint_of(&format!("{base}&fp=chrome_151")), RealityFingerprint::Chrome151);
         assert_eq!(
             fingerprint_of(&format!("{base}&fp=chrome_133")),
             RealityFingerprint::Chrome133
@@ -4559,7 +4546,6 @@ mod tests {
             ("safari_26_3", RealityFingerprint::Safari263),
             ("ios", RealityFingerprint::Ios14),
             ("ios_14", RealityFingerprint::Ios14),
-            ("qq", RealityFingerprint::Qq111),
             ("qq_11_1", RealityFingerprint::Qq111),
             ("firefox", RealityFingerprint::Firefox153),
             ("firefox_153", RealityFingerprint::Firefox153),
@@ -4572,6 +4558,13 @@ mod tests {
             );
             assert_eq!(fingerprint_of(&link), expected, "fp={name}");
         }
+
+        let qq_alias = format!("{base}&fp=qq");
+        let imported = import_link(&qq_alias).unwrap();
+        assert_eq!(fingerprint_of(&qq_alias), RealityFingerprint::Chrome156);
+        assert_eq!(imported.dropped.len(), 1);
+        assert_eq!(imported.dropped[0].option, "fp");
+        assert!(imported.dropped[0].reason.contains("Chromium 156"));
 
         let random_link = format!("{base}&fp=random");
         assert!(import_link(&random_link).unwrap().dropped.is_empty());
@@ -4735,16 +4728,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(reality_grpc.len(), 10);
         for profile in reality_grpc {
-            assert!(
-                profile.dropped.is_empty(),
-                "fp=qq is implemented; nothing should be dropped"
-            );
+            assert_eq!(profile.dropped.len(), 1);
+            assert_eq!(profile.dropped[0].option, "fp");
             let OutboundConfig::Vless(vless) = &profile.outbound else {
                 panic!("profile must be VLESS");
             };
             assert_eq!(
                 vless.reality.as_ref().unwrap().fingerprint,
-                RealityFingerprint::Qq111
+                RealityFingerprint::Chrome156
             );
         }
         assert_eq!(
@@ -4753,7 +4744,7 @@ mod tests {
                 .iter()
                 .filter(|profile| profile.dropped.is_empty())
                 .count(),
-            14
+            4
         );
     }
 
@@ -5368,7 +5359,7 @@ PersistentKeepalive = 25
         };
         assert_eq!(
             vless.tls.fingerprint,
-            Some(foxcore_api::TlsFingerprint::Chrome151)
+            Some(foxcore_api::TlsFingerprint::Chrome156)
         );
 
         let unknown = concat!(

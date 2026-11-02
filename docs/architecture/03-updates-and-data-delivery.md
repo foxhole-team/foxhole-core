@@ -47,7 +47,7 @@ flowchart TD
 | APK | the certificate the **currently installed app** is signed with | the APK itself (Android signing scheme) |
 
 APK update manifests are unsigned HTTPS metadata, not signed FoxHole DB feeds. Guard matches the
-installed APK signer; VPN additionally requires its pinned release-certificate digest — see [3.6](#36-apk-update-channel).
+installed APK signer; VPN additionally requires its pinned release-certificate digest - see [3.6](#36-apk-update-channel).
 
 ---
 
@@ -117,14 +117,14 @@ flowchart LR
 |---|---|
 | Algorithm | ECDSA P-256, `SHA256withECDSA`, DER signature |
 | PEM literal | `app/src/main/kotlin/com/foxhole/guard/runtime/FoxholeDb.kt:42-47` |
-| DER SHA-256 | `3acd123f1fd03f8aee97b2e71029ba1f6efdd9c17703419d7cda78a790198d69` — `FoxholeDb.kt:49-50` |
+| DER SHA-256 | `3acd123f1fd03f8aee97b2e71029ba1f6efdd9c17703419d7cda78a790198d69` - `FoxholeDb.kt:49-50` |
 | Base64 DER handed to Rust | derived from the PEM at `FoxholeDb.kt:52-56`, consumed at `DnsFilterAssetInstaller.kt:252` |
 | Failure mode | `check(...)` → `IllegalStateException`, treated as **non-retryable** |
 | Derivation test | `app/src/test/kotlin/com/foxhole/guard/runtime/FoxholeDbSigningKeyContractTest.kt:13-28` |
 
 The five root manifest URLs derive from **one** configurable base (`FoxholeDb.kt:12-40`); artifacts resolve
 relative to their manifest URL. Redirecting the base moves every feed together. **The pin does not
-move with it** — a mirror is only usable if it is published by the same tooling.
+move with it** - a mirror is only usable if it is published by the same tooling.
 Categorized DNS resolves one of four variant paths only from the official legacy DNS URL;
 an explicitly configured custom DNS URL is used directly
 (`CategorizedDnsSelection.kt:24-29`).
@@ -177,7 +177,7 @@ fallback. It is bounded display metadata, not a signed DB statement or a routing
 `foxhole-vpn/vpn-profile/src/main/kotlin/com/foxhole/vpn/profile/SubscriptionExpiry.kt:5`;
 `foxhole-vpn/vpn-profile/src/main/kotlin/com/foxhole/vpn/profile/VpnProfileImporter.kt:58`).
 
-## 3.3 Verification chain — DNS rule set (the strictest)
+## 3.3 Verification chain - DNS rule set (the strictest)
 
 ```mermaid
 sequenceDiagram
@@ -195,7 +195,7 @@ sequenceDiagram
     C->>C: GET manifest.json.sig (app cap 72 B)
     C->>C: ECDSA verify vs pinned key
     Note over C: failure = non-retryable
-    C->>C: requireValid — schema 2, name, format,<br/>positive sequence, skew at most 600s, validity 1..31d,<br/>key_sha256 == SHA256(pinned DER), core_schema == 1
+    C->>C: requireValid - schema 2, name, format,<br/>positive sequence, skew at most 600s, validity 1..31d,<br/>key_sha256 == SHA256(pinned DER), core_schema == 1
     C->>C: requireNotRolledBack vs installed sequence
     C->>C: GET artifact (cap 64 MiB)
     C->>C: size, FHDNS1 magic, sha256, counters,<br/>embedded source input_sha256, zeroed reserved
@@ -215,7 +215,7 @@ sequenceDiagram
     S->>I: prepareVerifiedOrNull on a later session start
     I-->>S: paths for manifest + signature + artifact
     S->>N: nativeStartWithNetworkAndDnsRuleSet(...)
-    N->>N: verify_rule_set — signature FIRST, then manifest fields
+    N->>N: verify_rule_set - signature FIRST, then manifest fields
     N-->>S: handle, or refuse the entire start
 ```
 
@@ -228,7 +228,7 @@ generation-fenced call `FoxCoreRuntime.kt:856-892,1161-1172`. Start payload sele
 
 ### The native half
 
-The core re-does the whole check on bytes the app already validated —
+The core re-does the whole check on bytes the app already validated -
 `foxhole-core/crates/foxcore-route/src/ruleset.rs`:
 
 ```mermaid
@@ -278,7 +278,7 @@ its signed payload is still verified before start (`FoxCoreNativeSessionStarter.
 
 > **Closed.** GeoIP and the bridges mirror had no ordering check: a validly signed *older*
 > manifest read as "changed" and installed, and neither enforced `min_app_version`. Both now refuse
-> a rollback and check the version. The bridge floor is persisted rather than process-scoped —
+> a rollback and check the version. The bridge floor is persisted rather than process-scoped -
 > a memory-only floor reopened the window on every cold start.
 
 The threat-intel floor and exact signed payload bytes share `sentinel/threat-intel-committed.bin`
@@ -298,7 +298,7 @@ by `requireFreshFoxholeDbManifest` to at most 45 days old (`FoxholeDb.kt:60-82`)
 
 ```mermaid
 flowchart TD
-    subgraph dnsp["DNS rule set — persist first, then live or atomic-start activation"]
+    subgraph dnsp["DNS rule set - persist first, then live or atomic-start activation"]
         D1["DnsFilterAssetInstaller<br/>per-file replace, manifest last"] --> D2["prepareVerifiedOrNull<br/>re-verify on read"]
         D1 --> D6["LiveActivatingDnsRuleSetStore<br/>exact verified bytes"]
         D6 --> D7["FoxCoreRuntime.installDnsRuleSet<br/>generation-fenced"]
@@ -316,7 +316,7 @@ flowchart TD
         F4 -->|"negative return"| F5["nativeClearTlsFingerprintTables<br/>fall back to compiled-in tables"]
     end
 
-    subgraph other["The other three — never touch the data plane"]
+    subgraph other["The other three - never touch the data plane"]
         T1["threat-intel.json"] --> T2["ThreatIntelDiskState<br/>one payload + generation frame"] --> T3["FileThreatIntelStore<br/>read lazily by Sentinel"]
         G1["dbip CSVs"] --> G2["GeoIpDatabaseStore + TorGeoIpCountryResolver.invalidateShared"]
         B1["bridges.json"] --> B2["TorBridgeStore, applies at next Tor start"]
@@ -384,7 +384,7 @@ by the final `Bridge` lines survive into the managed-transport plan
 (`core/runtime/src/main/kotlin/com/foxhole/core/runtime/TorRuntimeInstaller.kt:158-187,278-286`).
 
 > **Closed.** The installer's comment claimed it ran "after every successful feed update" while it
-> had exactly one call site, `FoxholeVpnService.onCreate()` — so a table set downloaded into a live
+> had exactly one call site, `FoxholeVpnService.onCreate()` - so a table set downloaded into a live
 > VPN process did nothing until the service was recreated. The hand-off now happens in
 > `TlsFingerprintUpdateRepository.refreshNow()`, the single choke point all three refresh paths go
 > through; app and service share one process, so the core picks it up in place.
@@ -432,20 +432,20 @@ sequenceDiagram
 
 | Fact | Value |
 |---|---|
-| Default endpoint | `https://api.github.com/repos/foxhole-team/foxhole-guard/releases/latest` — `AppUpdateClient.kt:450` |
+| Default endpoint | `https://api.github.com/repos/foxhole-team/foxhole-guard/releases/latest` - `AppUpdateClient.kt:450` |
 | Overridable | yes, `updateSources.appReleasesUrl` + optional bearer token |
-| Token scope | recreated per request, only for the configured HTTPS host and port; absent on a different CDN origin — `AppUpdateClient.kt:432` |
-| Redirects | at most five hops for metadata and streamed APKs; each target must pass HTTPS/public-address validation, and the transport uses guarded DNS — `AppUpdateClient.kt:327`, `AppUpdateClient.kt:362` |
-| Deadline and cancellation | one 600-second operation deadline covers redirects and body reads; external cancellation closes the owned call/response and propagates — `AppUpdateClient.kt:133`, `AppUpdateClient.kt:238`, `AppUpdateHttpCall.kt:13` |
-| Manifest | `update-manifest.json` asset: `versionCode, versionName, apkName, apkSha256, notes` — `AppUpdateClient.kt:30` |
-| Matching version | a parsable release tag at or below the installed version returns `UpToDate` before any manifest request — `AppUpdateClient.kt:179` |
-| Newer release without manifest | returns `Available(installable=false)` with release notes/link rather than an update-check failure — `AppUpdateClient.kt:195` |
+| Token scope | recreated per request, only for the configured HTTPS host and port; absent on a different CDN origin - `AppUpdateClient.kt:432` |
+| Redirects | at most five hops for metadata and streamed APKs; each target must pass HTTPS/public-address validation, and the transport uses guarded DNS - `AppUpdateClient.kt:327`, `AppUpdateClient.kt:362` |
+| Deadline and cancellation | one 600-second operation deadline covers redirects and body reads; external cancellation closes the owned call/response and propagates - `AppUpdateClient.kt:133`, `AppUpdateClient.kt:238`, `AppUpdateHttpCall.kt:13` |
+| Manifest | `update-manifest.json` asset: `versionCode, versionName, apkName, apkSha256, notes` - `AppUpdateClient.kt:30` |
+| Matching version | a parsable release tag at or below the installed version returns `UpToDate` before any manifest request - `AppUpdateClient.kt:179` |
+| Newer release without manifest | returns `Available(installable=false)` with release notes/link rather than an update-check failure - `AppUpdateClient.kt:195` |
 | Manifest signed? | **No.** No `.sig` is fetched anywhere in this client |
-| Real anchor | package/version checks plus signer-certificate set equality with the installed app — `AppUpdateApkVerifier.kt:15-39` |
-| Which signers | `apkContentsSigners`, deliberately **not** `signingCertificateHistory`, and empty sets never match — `AppUpdateApkVerifier.kt:49-80` |
+| Real anchor | package/version checks plus signer-certificate set equality with the installed app - `AppUpdateApkVerifier.kt:15-39` |
+| Which signers | `apkContentsSigners`, deliberately **not** `signingCertificateHistory`, and empty sets never match - `AppUpdateApkVerifier.kt:49-80` |
 | Static cert pin | none in the client. `foxhole_guard/config/release-cert-sha256.txt` (`e59de248…0df665`) is a **build-time** check, not a runtime one |
-| Install | user-driven `ACTION_VIEW`, no `PackageInstaller` session, no silent install — `HomeViewModelAppUpdateSupport.kt:99-126` |
-| Channel gate | `github` only; `fdroid` disables APK self-update and background release checks — `AppUpdatePolicy.kt:7-12`. Optional F-Droid support-floor/horizon values default to zero — `app/build.gradle.kts:266-270`. |
+| Install | user-driven `ACTION_VIEW`, no `PackageInstaller` session, no silent install - `HomeViewModelAppUpdateSupport.kt:99-126` |
+| Channel gate | `github` only; `fdroid` disables APK self-update and background release checks - `AppUpdatePolicy.kt:7-12`. Optional F-Droid support-floor/horizon values default to zero - `app/build.gradle.kts:266-270`. |
 
 The repository accepts only APK basenames and gives each download its own candidate.
 Hash-checked bytes are atomically promoted before archive verification; only a verified,

@@ -1,28 +1,28 @@
 # FoxHole Core architecture
 
 FoxHole Guard spans the core, Android client and data repositories. FoxHole VPN is a separate,
-smaller Android consumer of the same core. Minimum prose, maximum diagrams — read the pictures, use the text
+smaller Android consumer of the same core. Minimum prose, maximum diagrams - read the pictures, use the text
 only for what a picture cannot say.
 
 ```mermaid
 flowchart TD
-    subgraph guard["foxhole_guard — Android client, Kotlin/Compose"]
+    subgraph guard["foxhole_guard - Android client, Kotlin/Compose"]
         UI["modes, scenarios, routing rules"]
-        IMP["core/importer — links and subscriptions"]
-        RT["core/runtime — profile to engine config"]
-        SVC["app/.../runtime — VpnService, JNI, workers"]
+        IMP["core/importer - links and subscriptions"]
+        RT["core/runtime - profile to engine config"]
+        SVC["app/.../runtime - VpnService, JNI, workers"]
     end
 
-    subgraph core["foxhole-core — FoxCore, Rust"]
-        API["foxcore-api — config schema"]
-        RUN["foxcore-runtime — lifecycle"]
+    subgraph core["foxhole-core - FoxCore, Rust"]
+        API["foxcore-api - config schema"]
+        RUN["foxcore-runtime - lifecycle"]
         DP["tun / route / dns / dialer / outbound"]
-        PROTO["proto-* — 15 protocol crates"]
+        PROTO["proto-* - 15 protocol crates"]
     end
 
-    LITE["foxhole-vpn — VPN-only Android client"]
+    LITE["foxhole-vpn - VPN-only Android client"]
 
-    subgraph db["foxhole-db — signed data feeds"]
+    subgraph db["foxhole-db - signed data feeds"]
         F1["DNS rules"]
         F2["Tor bridges"]
         F3["Sentinel threat intel"]
@@ -71,7 +71,7 @@ flowchart LR
 | Binding | Mechanism |
 |---|---|
 | Client → core, source | Gradle resolves the sibling folder `foxhole-core`; override with `-Pfoxhole.foxCoreSourceRoot` or `FOXCORE_SOURCE_ROOT` |
-| Client → core, revision | `config/foxcore-revision.txt` — CI/F-Droid check out that commit; local Gradle compares the sibling's Git HEAD (`app/build.gradle.kts:268-327`), refuses a mismatch for release tasks and prints an error banner for other tasks |
+| Client → core, revision | `config/foxcore-revision.txt` - CI/F-Droid check out that commit; local Gradle compares the sibling's Git HEAD (`app/build.gradle.kts:268-327`), refuses a mismatch for release tasks and prints an error banner for other tasks |
 | Core → client, native artifact | `scripts/android-build.sh:67-98` applies stable virtual prefixes to Rust source locations; `scripts/android-elf-gate.sh:138-166,222-225` refuses host build paths in `libfoxhole_native.so` |
 | Core → DB | `build-fingerprints.sh` sparse-checks out `foxhole-core/fingerprints/` at a pinned revision |
 | DB → client | five feeds and nine published manifests with one pinned ECDSA P-256 key; categorized DNS resolves four variant paths for the official DNS URL (`foxhole-db/.github/published-files.txt:11-26`; `foxhole_guard/app/src/main/kotlin/com/foxhole/guard/runtime/CategorizedDnsSelection.kt:24-29`) |
@@ -126,11 +126,11 @@ Each document ends with the inconsistencies found while writing it:
 
 | Document | Section |
 |---|---|
-| 1 — Protocols | 1.8 — no open inconsistencies after the smoltcp/UDP contract pass |
-| 2 — Cryptography | 2.7 — no open inconsistencies after the current pass |
-| 3 — Updates | 3.7 — inline vs shared verifiers and permissive Kotlin vs strict Rust JSON parsing; stale DNS/updater activation claims were closed in this pass |
-| 4 — Boundary | 4.7 — compatibility-only link/continuity ABI, DNS activation, divergent link parsers, and the path-independent native build contract |
-| 5 — Data repository | 5.7 — no open inconsistencies after the five-feed publication pass; source-info files remain audit-only by design |
+| 1 - Protocols | 1.8 - no open inconsistencies after the smoltcp/UDP contract pass |
+| 2 - Cryptography | 2.7 - no open inconsistencies after the current pass |
+| 3 - Updates | 3.7 - inline vs shared verifiers and permissive Kotlin vs strict Rust JSON parsing; stale DNS/updater activation claims were closed in this pass |
+| 4 - Boundary | 4.7 - compatibility-only link/continuity ABI, DNS activation, divergent link parsers, and the path-independent native build contract |
+| 5 - Data repository | 5.7 - no open inconsistencies after the five-feed publication pass; source-info files remain audit-only by design |
 
-| 6 — VPN client | Inconsistencies and verification boundaries — clipboard JSON/import mismatch and subscription naming/refresh ownership and fresh candidate restoration closed; provider, camera, device and performance acceptance remain separate |
-| 7 — Router runtime | Inconsistencies and verification boundaries — Linux CLI source and runtime checks are distinct from OpenWrt/package/phone pairing acceptance |
+| 6 - VPN client | Inconsistencies and verification boundaries - clipboard JSON/import mismatch and subscription naming/refresh ownership and fresh candidate restoration closed; provider, camera, device and performance acceptance remain separate |
+| 7 - Router runtime | Inconsistencies and verification boundaries - Linux CLI source and runtime checks are distinct from OpenWrt/package/phone pairing acceptance |

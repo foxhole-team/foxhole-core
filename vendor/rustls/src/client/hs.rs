@@ -87,7 +87,7 @@ impl ClientHelloInput {
         config: Arc<ClientConfig>,
     ) -> Result<Self, Error> {
         #[cfg(feature = "chrome-hello")]
-        let chrome = if config.chrome_151 {
+        let chrome = if config.chrome_profile.is_some() {
             if cx.common.is_quic() {
                 return Err(Error::General(
                     "Chrome151 TCP hello cannot be used for QUIC".into(),

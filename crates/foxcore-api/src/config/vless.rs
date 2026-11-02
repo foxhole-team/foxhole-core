@@ -110,12 +110,14 @@ pub enum PacketEncoding {
     Packetaddr,
 }
 
-/// Closed set of verified ClientHello tables. Bare `chrome` and `firefox`
-/// aliases track the current table; versioned names pin exact bytes.
+/// Closed set of verified ClientHello tables. Bare browser aliases track current
+/// tables; `qq` selects modern REALITY compatibility. Versioned names pin bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum RealityFingerprint {
     #[default]
-    #[serde(rename = "chrome_151", alias = "chrome")]
+    #[serde(rename = "chrome_156", alias = "chrome", alias = "qq")]
+    Chrome156,
+    #[serde(rename = "chrome_151")]
     Chrome151,
     /// uTLS-compatible Chrome 133 table retained for deployed peers.
     #[serde(rename = "chrome_133")]
@@ -131,7 +133,7 @@ pub enum RealityFingerprint {
     Safari263,
     #[serde(rename = "ios_14", alias = "ios")]
     Ios14,
-    #[serde(rename = "qq_11_1", alias = "qq")]
+    #[serde(rename = "qq_11_1")]
     Qq111,
     #[serde(rename = "firefox_153", alias = "firefox")]
     Firefox153,

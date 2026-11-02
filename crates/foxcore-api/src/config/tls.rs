@@ -41,6 +41,8 @@ pub struct TlsConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TlsFingerprint {
+    #[serde(rename = "chrome_156")]
+    Chrome156,
     #[serde(rename = "chrome_151")]
     Chrome151,
 }
@@ -217,7 +219,7 @@ impl TlsConfig {
                 || self.max_version.is_some_and(|v| v != TlsVersion::Tls13)
             {
                 return Err(ConfigError::Invalid(
-                    "Chrome151 fingerprint requires the TLS1.2..TLS1.3 offer".into(),
+                    format!("{} fingerprint requires the TLS1.2..TLS1.3 offer", if self.fingerprint == Some(TlsFingerprint::Chrome156) { "Chrome156" } else { "Chrome151" }),
                 ));
             }
             let chrome_groups = [
@@ -228,7 +230,7 @@ impl TlsConfig {
             ];
             if !self.curve_preferences.is_empty() && self.curve_preferences != chrome_groups {
                 return Err(ConfigError::Invalid(
-                    "Chrome151 fingerprint cannot discard explicit curve preferences".into(),
+                    format!("{} fingerprint cannot discard explicit curve preferences", if self.fingerprint == Some(TlsFingerprint::Chrome156) { "Chrome156" } else { "Chrome151" }),
                 ));
             }
         }

@@ -247,7 +247,7 @@ pub struct ClientConfig {
 
     /// Use the opt-in Chrome151 wire shape. Certificate verification stays unchanged.
     #[cfg(feature = "chrome-hello")]
-    pub(super) chrome_151: bool,
+    pub(super) chrome_profile: Option<super::chrome_hello::ChromeProfile>,
 
     /// Source of randomness and other crypto.
     pub(super) provider: Arc<CryptoProvider>,
@@ -314,8 +314,17 @@ impl ClientConfig {
     /// certificate verifier, ALPN and key schedule. Unsupported combinations fail.
     #[cfg(feature = "chrome-hello")]
     pub fn enable_chrome_151(&mut self) -> Result<(), Error> {
-        super::chrome_hello::configure(self)?;
-        self.chrome_151 = true;
+        super::chrome_hello::configure(self, super::chrome_hello::ChromeProfile::Chrome151)?;
+        self.chrome_profile = Some(super::chrome_hello::ChromeProfile::Chrome151);
+        Ok(())
+    }
+
+    /// Enable the source-derived Chromium156 shape without supplied Trust Anchor IDs.
+    /// The certificate verifier and all unsupported-combination guards are retained.
+    #[cfg(feature = "chrome-hello")]
+    pub fn enable_chrome_156(&mut self) -> Result<(), Error> {
+        super::chrome_hello::configure(self, super::chrome_hello::ChromeProfile::Chrome156)?;
+        self.chrome_profile = Some(super::chrome_hello::ChromeProfile::Chrome156);
         Ok(())
     }
 

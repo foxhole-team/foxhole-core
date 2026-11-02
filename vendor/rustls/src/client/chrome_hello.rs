@@ -1,4 +1,5 @@
-//! Opt-in Chromium151 shape from FoxCore's independently captured chrome_151 vector.
+//! Opt-in captured Chromium151 and source-derived Chromium156 TCP shapes.
+//! Chromium156 supplies no Trust Anchor IDs; it does not claim default-platform fidelity.
 //! Encoding remains inside rustls: binders, transcript hashes and records see the same bytes.
 
 use crate::client::ClientConfig;
@@ -17,6 +18,12 @@ use alloc::vec;
 use alloc::vec::Vec;
 use brotli_decompressor::{BrotliDecompressStream, BrotliResult, BrotliState, StandardAlloc};
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChromeProfile {
+    Chrome151,
+    Chrome156,
+}
+
 const SIGNATURES: [u16; 11] = [
     0x0904, 0x0905, 0x0906, 0x0403, 0x0804, 0x0401, 0x0503, 0x0805, 0x0501, 0x0806, 0x0601,
 ];
@@ -33,21 +40,21 @@ pub(crate) fn signature_allowed(scheme: SignatureScheme) -> bool {
     SIGNATURES.contains(&u16::from(scheme))
 }
 
-fn refuse(message: &str) -> Error {
-    Error::General(message.into())
+fn refuse(profile: ChromeProfile, message: &str) -> Error {
+    Error::General(message.replace("Chrome151", match profile { ChromeProfile::Chrome151 => "Chrome151", ChromeProfile::Chrome156 => "Chrome156" }))
 }
 
-pub(super) fn configure(config: &mut ClientConfig) -> Result<(), Error> {
+pub(super) fn configure(config: &mut ClientConfig, profile: ChromeProfile) -> Result<(), Error> {
     if config.ech_mode.is_some() || config.enable_early_data || config.send_ticket_request.is_some()
     {
-        return Err(refuse(
+        return Err(refuse(profile, 
             "Chrome151 cannot discard ECH, early-data or ticket-request requirements",
         ));
     }
     if !config.supports_version(ProtocolVersion::TLSv1_2, Protocol::Tcp)
         || !config.supports_version(ProtocolVersion::TLSv1_3, Protocol::Tcp)
     {
-        return Err(refuse(
+        return Err(refuse(profile, 
             "Chrome151 requires its TLS1.2 and TLS1.3 version offer",
         ));
     }
@@ -58,7 +65,7 @@ pub(super) fn configure(config: &mut ClientConfig) -> Result<(), Error> {
         .map(|group| u16::from(group.name()))
         .collect();
     if groups != GROUPS {
-        return Err(refuse(
+        return Err(refuse(profile, 
             "Chrome151 requires its exact hybrid-first group order",
         ));
     }
@@ -68,14 +75,14 @@ pub(super) fn configure(config: &mut ClientConfig) -> Result<(), Error> {
             .iter()
             .any(|protocol| protocol != b"h2" && protocol != b"http/1.1")
     {
-        return Err(refuse("Chrome151 supports explicit h2/http/1.1 ALPN only"));
+        return Err(refuse(profile, "Chrome151 supports explicit h2/http/1.1 ALPN only"));
     }
     let schemes = config.verifier.supported_verify_schemes();
     if SIGNATURES
         .iter()
         .any(|scheme| !schemes.contains(&SignatureScheme::from(*scheme)))
     {
-        return Err(refuse(
+        return Err(refuse(profile, 
             "Chrome151 requires verification for every advertised signature, including ML-DSA",
         ));
     }
@@ -85,20 +92,23 @@ pub(super) fn configure(config: &mut ClientConfig) -> Result<(), Error> {
 
 #[derive(Clone, Debug)]
 pub(crate) struct ChromeExtensions {
-    grease: [u16; 5],
+    grease: [u16; 6],
+    profile: ChromeProfile,
     permutation: u64,
     ech: Vec<u8>,
 }
 
 impl ChromeExtensions {
     pub(super) fn new(config: &ClientConfig) -> Result<Self, Error> {
+        let profile = config.chrome_profile.ok_or_else(|| Error::General("missing Chrome profile".into()))?;
         let mut random = [0u8; 16];
         config.provider.secure_random.fill(&mut random)?;
         if random[3] & 0xf0 == random[4] & 0xf0 {
             random[4] ^= 0x10;
         }
         let grease = core::array::from_fn(|index| {
-            let byte = (random[index] & 0xf0) | 0x0a;
+            let seed = if index == 5 { random[15] } else { random[index] };
+            let byte = (seed & 0xf0) | 0x0a;
             u16::from_be_bytes([byte, byte])
         });
         let permutation = u64::from_be_bytes(random[5..13].try_into().unwrap());
@@ -107,11 +117,11 @@ impl ChromeExtensions {
             .kx_groups
             .iter()
             .find(|group| group.name() == NamedGroup::X25519)
-            .ok_or_else(|| refuse("Chrome151 ECH GREASE requires X25519"))?
+            .ok_or_else(|| refuse(profile, "Chrome151 ECH GREASE requires X25519"))?
             .start()?;
         let enc = x25519.pub_key();
         if enc.len() != 32 {
-            return Err(refuse("Chrome151 ECH GREASE key is not X25519"));
+            return Err(refuse(profile, "Chrome151 ECH GREASE key is not X25519"));
         }
         let payload_len = [128usize, 160, 192, 224][usize::from(random[14]) % 4] + 16;
         let mut payload = vec![0u8; payload_len];
@@ -122,6 +132,7 @@ impl ChromeExtensions {
         ech.extend_from_slice(&payload);
         Ok(Self {
             grease,
+            profile,
             permutation,
             ech,
         })
@@ -133,13 +144,13 @@ impl ChromeExtensions {
         schemes: &[SignatureScheme],
     ) -> Result<(), Error> {
         if hello.server_name.is_none() || hello.protocols.is_none() {
-            return Err(refuse("Chrome151 requires DNS SNI and explicit ALPN"));
+            return Err(refuse(self.profile, "Chrome151 requires DNS SNI and explicit ALPN"));
         }
         if SIGNATURES
             .iter()
             .any(|scheme| !schemes.contains(&SignatureScheme::from(*scheme)))
         {
-            return Err(refuse("Chrome151 signature verifier changed"));
+            return Err(refuse(self.profile, "Chrome151 signature verifier changed"));
         }
         let allowed = [0, 23, 65281, 10, 11, 35, 16, 5, 13, 51, 45, 43, 27, 44, 41];
         if hello
@@ -147,20 +158,24 @@ impl ChromeExtensions {
             .iter()
             .any(|id| !allowed.contains(&u16::from(*id)))
         {
-            return Err(refuse("Chrome151 cannot discard a configured extension"));
+            return Err(refuse(self.profile, "Chrome151 cannot discard a configured extension"));
         }
         hello.cipher_suites = core::iter::once(self.grease[0])
             .chain(CIPHERS)
             .map(CipherSuite::from)
             .collect();
-        hello.signature_schemes = Some(SIGNATURES.into_iter().map(SignatureScheme::from).collect());
+        let mut signatures: Vec<_> = SIGNATURES.into_iter().map(SignatureScheme::from).collect();
+        if self.profile == ChromeProfile::Chrome156 {
+            signatures.insert(0, SignatureScheme::from(self.grease[5]));
+        }
+        hello.signature_schemes = Some(signatures);
         let mut groups = vec![NamedGroup::from(self.grease[1])];
         groups.extend(GROUPS.into_iter().map(NamedGroup::from));
         hello.named_groups = Some(groups);
         let shares = hello
             .key_shares
             .as_mut()
-            .ok_or_else(|| refuse("Chrome151 has no authenticated key share"))?;
+            .ok_or_else(|| refuse(self.profile, "Chrome151 has no authenticated key share"))?;
         shares.insert(
             0,
             KeyShareEntry::new(NamedGroup::from(self.grease[1]), &[0]),
@@ -172,7 +187,7 @@ impl ChromeExtensions {
         if hello.certificate_compression_algorithms.as_deref()
             != Some(&[CertificateCompressionAlgorithm::Brotli])
         {
-            return Err(refuse(
+            return Err(refuse(self.profile, 
                 "Chrome151 Brotli certificate decompressor unavailable",
             ));
         }
