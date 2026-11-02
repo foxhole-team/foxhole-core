@@ -1,0 +1,464 @@
+{
+  "schema": 1,
+  "corePublishedSource": "c06c3c43670163f293773f5dfcb0576dfdfceebe",
+  "coreProducerSource": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+  "corePublishedTree": "2d01df36d0dede7fd3b9231de2ba6f13999cc661",
+  "compiledSourceManifestSHA256": "013c64d83859b2ed92a23a91bac172ab11142861720a82c756052560281410c8",
+  "compiledInputCount": 529,
+  "compiledPublicAndSignedSourceBankExact": true,
+  "signedSourceBank": {
+    "name": "foxhole-core-native-source-v1.0.2.tar",
+    "sha256": "13d7deff46cd11d892ae9c03c205023b1aba05c0c4b3fc96c3ec89b5f86d8098",
+    "bytes": 22538240,
+    "url": "https://github.com/foxhole-team/foxhole-core/releases/download/v1.0.2/foxhole-core-native-source-v1.0.2.tar",
+    "detachedSignature": {
+      "sha256": "56471240e2c46664540425a9979e8fb35c988ae0f58e508dbda8e6c485bd3581",
+      "url": "https://github.com/foxhole-team/foxhole-core/releases/download/v1.0.2/foxhole-core-native-source-v1.0.2.tar.asc"
+    }
+  },
+  "apks": [
+    {
+      "application": "guard",
+      "version": "1.0.2",
+      "abi": "arm64-v8a",
+      "name": "FoxHole-Guard-1.0.2-arm64-v8a.apk",
+      "url": "https://github.com/foxhole-team/foxhole-guard/releases/download/v1.0.2/FoxHole-Guard-1.0.2-arm64-v8a.apk",
+      "sha256": "5e6be71ec7437b47f2402d2f7243bfb831ad83dcadc2bac4f39cfd26a1fa0635",
+      "bytes": 88634996,
+      "applicationSourceCommit": "9a5578b977f67e91017d7055f2891fc6166fe325",
+      "nativeLibraries": [
+        "guard-core/arm64-v8a",
+        "guard-sentinel/arm64-v8a"
+      ]
+    },
+    {
+      "application": "guard",
+      "version": "1.0.2",
+      "abi": "armeabi-v7a",
+      "name": "FoxHole-Guard-1.0.2-armeabi-v7a.apk",
+      "url": "https://github.com/foxhole-team/foxhole-guard/releases/download/v1.0.2/FoxHole-Guard-1.0.2-armeabi-v7a.apk",
+      "sha256": "3c48591a4c0ea6c5e1180eb85cdada5ed7fe10b1b20c4f482b7b95938858420e",
+      "bytes": 86070920,
+      "applicationSourceCommit": "9a5578b977f67e91017d7055f2891fc6166fe325",
+      "nativeLibraries": [
+        "guard-core/armeabi-v7a",
+        "guard-sentinel/armeabi-v7a"
+      ]
+    },
+    {
+      "application": "guard",
+      "version": "1.0.2",
+      "abi": "x86",
+      "name": "FoxHole-Guard-1.0.2-x86.apk",
+      "url": "https://github.com/foxhole-team/foxhole-guard/releases/download/v1.0.2/FoxHole-Guard-1.0.2-x86.apk",
+      "sha256": "7647bab6443b127f0029f5375e0a08855a021441431f3aa0049e4bbe97168b9c",
+      "bytes": 91874872,
+      "applicationSourceCommit": "9a5578b977f67e91017d7055f2891fc6166fe325",
+      "nativeLibraries": [
+        "guard-core/x86",
+        "guard-sentinel/x86"
+      ]
+    },
+    {
+      "application": "guard",
+      "version": "1.0.2",
+      "abi": "x86_64",
+      "name": "FoxHole-Guard-1.0.2-x86_64.apk",
+      "url": "https://github.com/foxhole-team/foxhole-guard/releases/download/v1.0.2/FoxHole-Guard-1.0.2-x86_64.apk",
+      "sha256": "75f4c02f63ad65e869a2c20f3635e9b0d2a468d4ffdc37eec5174cc67f34e500",
+      "bytes": 91031126,
+      "applicationSourceCommit": "9a5578b977f67e91017d7055f2891fc6166fe325",
+      "nativeLibraries": [
+        "guard-core/x86_64",
+        "guard-sentinel/x86_64"
+      ]
+    },
+    {
+      "application": "guard",
+      "version": "1.0.2",
+      "abi": "universal",
+      "name": "FoxHole-Guard-1.0.2-universal.apk",
+      "url": "https://github.com/foxhole-team/foxhole-guard/releases/download/v1.0.2/FoxHole-Guard-1.0.2-universal.apk",
+      "sha256": "2f089ea3e640a3f71c447dab65018d80208e6833ddbb75c92eac8e1b9f11110c",
+      "bytes": 192343929,
+      "applicationSourceCommit": "9a5578b977f67e91017d7055f2891fc6166fe325",
+      "nativeLibraries": [
+        "guard-core/arm64-v8a",
+        "guard-core/armeabi-v7a",
+        "guard-core/x86",
+        "guard-core/x86_64",
+        "guard-sentinel/arm64-v8a",
+        "guard-sentinel/armeabi-v7a",
+        "guard-sentinel/x86",
+        "guard-sentinel/x86_64"
+      ]
+    },
+    {
+      "application": "vpn",
+      "version": "1.0.1",
+      "abi": "arm64-v8a",
+      "name": "FoxHole-VPN-1.0.1-arm64-v8a.apk",
+      "url": "https://github.com/foxhole-team/foxhole-vpn/releases/download/v1.0.1/FoxHole-VPN-1.0.1-arm64-v8a.apk",
+      "sha256": "18c3dd50915d638ff9208be0448f39f1d1975a580248f29c4501dc7697219ea1",
+      "bytes": 21563768,
+      "applicationSourceCommit": "017f2ab4d426361679b089769941ac814912bfcc",
+      "nativeLibraries": [
+        "vpn-core/arm64-v8a"
+      ]
+    },
+    {
+      "application": "vpn",
+      "version": "1.0.1",
+      "abi": "armeabi-v7a",
+      "name": "FoxHole-VPN-1.0.1-armeabi-v7a.apk",
+      "url": "https://github.com/foxhole-team/foxhole-vpn/releases/download/v1.0.1/FoxHole-VPN-1.0.1-armeabi-v7a.apk",
+      "sha256": "c3db3adbdfc4d28edc482cc25831488734ed09326f1aab458ef85897abb4658c",
+      "bytes": 17873276,
+      "applicationSourceCommit": "017f2ab4d426361679b089769941ac814912bfcc",
+      "nativeLibraries": [
+        "vpn-core/armeabi-v7a"
+      ]
+    },
+    {
+      "application": "vpn",
+      "version": "1.0.1",
+      "abi": "x86",
+      "name": "FoxHole-VPN-1.0.1-x86.apk",
+      "url": "https://github.com/foxhole-team/foxhole-vpn/releases/download/v1.0.1/FoxHole-VPN-1.0.1-x86.apk",
+      "sha256": "873f6ca4ad00e0e03aa568b1bc5afd355f01f2eb2c6968475a79091f40f7e47f",
+      "bytes": 22395244,
+      "applicationSourceCommit": "017f2ab4d426361679b089769941ac814912bfcc",
+      "nativeLibraries": [
+        "vpn-core/x86"
+      ]
+    },
+    {
+      "application": "vpn",
+      "version": "1.0.1",
+      "abi": "x86_64",
+      "name": "FoxHole-VPN-1.0.1-x86_64.apk",
+      "url": "https://github.com/foxhole-team/foxhole-vpn/releases/download/v1.0.1/FoxHole-VPN-1.0.1-x86_64.apk",
+      "sha256": "bc5896fefb5effa0eb5c1444b11a8d40edb750a82c5d21cfe7e273119c3c14ba",
+      "bytes": 23873906,
+      "applicationSourceCommit": "017f2ab4d426361679b089769941ac814912bfcc",
+      "nativeLibraries": [
+        "vpn-core/x86_64"
+      ]
+    },
+    {
+      "application": "vpn",
+      "version": "1.0.1",
+      "abi": "universal",
+      "name": "FoxHole-VPN-1.0.1-universal.apk",
+      "url": "https://github.com/foxhole-team/foxhole-vpn/releases/download/v1.0.1/FoxHole-VPN-1.0.1-universal.apk",
+      "sha256": "aee1cbcdc3dff6491a9a226e58c1669a12cd66db4259890fb130066fc3c7a359",
+      "bytes": 57903970,
+      "applicationSourceCommit": "017f2ab4d426361679b089769941ac814912bfcc",
+      "nativeLibraries": [
+        "vpn-core/arm64-v8a",
+        "vpn-core/armeabi-v7a",
+        "vpn-core/x86",
+        "vpn-core/x86_64"
+      ]
+    }
+  ],
+  "nativeLibraries": [
+    {
+      "id": "guard-core/arm64-v8a",
+      "component": "core",
+      "consumer": "guard",
+      "abi": "arm64-v8a",
+      "target": "aarch64-linux-android",
+      "apkMember": "lib/arm64-v8a/libfoxhole_native.so",
+      "bytes": 24991528,
+      "sha256": "342bc93099f284a3e8804764cdf8413ad201e1d1603b52b428f99fd1f827d194",
+      "producerNativeSHA256": "342bc93099f284a3e8804764cdf8413ad201e1d1603b52b428f99fd1f827d194",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/foxcore/foxcore-aarch64-linux-android.cdx.json",
+        "sha256": "884eb62ad0ebd24fe1fdeaaaaa902694ad0f9ea6e78378a4d3f2f6d59e9838dd"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/foxcore/ABI-COVERAGE.json",
+        "sha256": "ae75b1b1afd93c0832dd93dc321c886ecbaf802e79a8bde37844d2cba6ee093c"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "guard-sentinel/arm64-v8a",
+      "component": "sentinel",
+      "consumer": "guard",
+      "abi": "arm64-v8a",
+      "target": "aarch64-linux-android",
+      "apkMember": "lib/arm64-v8a/libfoxhole_sentinel_yara.so",
+      "bytes": 11041000,
+      "sha256": "df31b3525c5b3a11bdc178e0d1f9acf8d583893d6d80986fdf3be72fe9d11725",
+      "producerNativeSHA256": "d67654bab588ae1585a660972b98d3ac665eb90a203a77557a81205290088730",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/sentinel/selected-aarch64-linux-android.cdx.json",
+        "sha256": "d1087aeb7bf059409d4b32711eeed1321697d3de503fd8367caabaf4ac9bc795"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/sentinel/ABI-COVERAGE.json",
+        "sha256": "d499482f01490351e93d97655506cf40ad0146cbe58193eaa47bc849f2266c8a"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "retained earlier compilation with effective-input equality under the stated current source context; not a new compilation under this Core producer",
+      "packagingTransformation": {
+        "tool": "Android NDK 29.0.14206865 llvm-strip",
+        "toolBinarySHA256": "af5d31dfee7cfc076d5850e1f407dfa74690b1e510dd2ccf5f7eb16d29edb9c8",
+        "arguments": [
+          "--strip-unneeded"
+        ],
+        "producerBytes": 15490432,
+        "exactPackagedOutputReproduced": true
+      }
+    },
+    {
+      "id": "guard-core/armeabi-v7a",
+      "component": "core",
+      "consumer": "guard",
+      "abi": "armeabi-v7a",
+      "target": "armv7-linux-androideabi",
+      "apkMember": "lib/armeabi-v7a/libfoxhole_native.so",
+      "bytes": 18020948,
+      "sha256": "19ecd5efe192a9cdf2736d7fdbf47b4e012d93c6dba53bae8a632c463c5772e8",
+      "producerNativeSHA256": "19ecd5efe192a9cdf2736d7fdbf47b4e012d93c6dba53bae8a632c463c5772e8",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/foxcore/foxcore-armv7-linux-androideabi.cdx.json",
+        "sha256": "d6671196d785962b8be589e184f91cb5b9b3a8e9734cce4008ab8aef3ec9f487"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/foxcore/ABI-COVERAGE.json",
+        "sha256": "ae75b1b1afd93c0832dd93dc321c886ecbaf802e79a8bde37844d2cba6ee093c"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "guard-sentinel/armeabi-v7a",
+      "component": "sentinel",
+      "consumer": "guard",
+      "abi": "armeabi-v7a",
+      "target": "armv7-linux-androideabi",
+      "apkMember": "lib/armeabi-v7a/libfoxhole_sentinel_yara.so",
+      "bytes": 6843172,
+      "sha256": "f53f4f737d6af60f62b6da2d7729e9a2dfdc6161306e30cdb2ed59509acde648",
+      "producerNativeSHA256": "e249db8a186efd5dbca0d47c5f7794085005a50f02e8c07d7ce2fdb61d59df36",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/sentinel/selected-armv7-linux-androideabi.cdx.json",
+        "sha256": "843448abb0bf8e1a47fc6c899ac730db54357f11ca6f5d8ebe636853abac3440"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/sentinel/ABI-COVERAGE.json",
+        "sha256": "d499482f01490351e93d97655506cf40ad0146cbe58193eaa47bc849f2266c8a"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "retained earlier compilation with effective-input equality under the stated current source context; not a new compilation under this Core producer",
+      "packagingTransformation": {
+        "tool": "Android NDK 29.0.14206865 llvm-strip",
+        "toolBinarySHA256": "af5d31dfee7cfc076d5850e1f407dfa74690b1e510dd2ccf5f7eb16d29edb9c8",
+        "arguments": [
+          "--strip-unneeded"
+        ],
+        "producerBytes": 10499908,
+        "exactPackagedOutputReproduced": true
+      }
+    },
+    {
+      "id": "guard-core/x86",
+      "component": "core",
+      "consumer": "guard",
+      "abi": "x86",
+      "target": "i686-linux-android",
+      "apkMember": "lib/x86/libfoxhole_native.so",
+      "bytes": 27414080,
+      "sha256": "e1079436378d45522130c7d16e5dd15988bab498b37089a928b38f09e013f6c1",
+      "producerNativeSHA256": "e1079436378d45522130c7d16e5dd15988bab498b37089a928b38f09e013f6c1",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/foxcore/foxcore-i686-linux-android.cdx.json",
+        "sha256": "758f98d0912965d6b5eac4bf986474d150e0a2b819a940cedc6c3a15665f94c7"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/foxcore/ABI-COVERAGE.json",
+        "sha256": "ae75b1b1afd93c0832dd93dc321c886ecbaf802e79a8bde37844d2cba6ee093c"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "guard-sentinel/x86",
+      "component": "sentinel",
+      "consumer": "guard",
+      "abi": "x86",
+      "target": "i686-linux-android",
+      "apkMember": "lib/x86/libfoxhole_sentinel_yara.so",
+      "bytes": 15394604,
+      "sha256": "8df7c17987fb0ca487750d22c8c597dd2f11e7fd630d142f93f781e2abf7fa69",
+      "producerNativeSHA256": "4c44e75410b1a91e35ab3f7cfd76ee89649f6eba728d742890d91de88805eb8d",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/sentinel/selected-i686-linux-android.cdx.json",
+        "sha256": "cd3165018c2581c5fe1750d0d3197a799fe263d6fade1f4a1346ee26a116bf12"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/sentinel/ABI-COVERAGE.json",
+        "sha256": "d499482f01490351e93d97655506cf40ad0146cbe58193eaa47bc849f2266c8a"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "retained earlier compilation with effective-input equality under the stated current source context; not a new compilation under this Core producer",
+      "packagingTransformation": {
+        "tool": "Android NDK 29.0.14206865 llvm-strip",
+        "toolBinarySHA256": "af5d31dfee7cfc076d5850e1f407dfa74690b1e510dd2ccf5f7eb16d29edb9c8",
+        "arguments": [
+          "--strip-unneeded"
+        ],
+        "producerBytes": 19094928,
+        "exactPackagedOutputReproduced": true
+      }
+    },
+    {
+      "id": "guard-core/x86_64",
+      "component": "core",
+      "consumer": "guard",
+      "abi": "x86_64",
+      "target": "x86_64-linux-android",
+      "apkMember": "lib/x86_64/libfoxhole_native.so",
+      "bytes": 28445432,
+      "sha256": "81470580a6e102ef99d665e21aae269c01aeaf36534eddce35d2615282384e5c",
+      "producerNativeSHA256": "81470580a6e102ef99d665e21aae269c01aeaf36534eddce35d2615282384e5c",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/foxcore/foxcore-x86_64-linux-android.cdx.json",
+        "sha256": "8b96511c75da4a60e30168862386d08aaa786ffd84c98dae98ef35b3c66f2dd1"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/foxcore/ABI-COVERAGE.json",
+        "sha256": "ae75b1b1afd93c0832dd93dc321c886ecbaf802e79a8bde37844d2cba6ee093c"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "guard-sentinel/x86_64",
+      "component": "sentinel",
+      "consumer": "guard",
+      "abi": "x86_64",
+      "target": "x86_64-linux-android",
+      "apkMember": "lib/x86_64/libfoxhole_sentinel_yara.so",
+      "bytes": 14813160,
+      "sha256": "7e9d2b261dea2ac7b313d2df0b16bb5f748ad28daf2a65ba3e49a531b784c907",
+      "producerNativeSHA256": "37057099aae040ec780c18674600cc482b9672393bfb4271f69fc8a570bcbc4e",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/sentinel/selected-x86_64-linux-android.cdx.json",
+        "sha256": "36bbe3c419d7e69a12647f5c7a67ea72b9b22ce9993bd5d83a031c39e25f79e0"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/sentinel/ABI-COVERAGE.json",
+        "sha256": "d499482f01490351e93d97655506cf40ad0146cbe58193eaa47bc849f2266c8a"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "retained earlier compilation with effective-input equality under the stated current source context; not a new compilation under this Core producer",
+      "packagingTransformation": {
+        "tool": "Android NDK 29.0.14206865 llvm-strip",
+        "toolBinarySHA256": "af5d31dfee7cfc076d5850e1f407dfa74690b1e510dd2ccf5f7eb16d29edb9c8",
+        "arguments": [
+          "--strip-unneeded"
+        ],
+        "producerBytes": 18706200,
+        "exactPackagedOutputReproduced": true
+      }
+    },
+    {
+      "id": "vpn-core/arm64-v8a",
+      "component": "core",
+      "consumer": "vpn",
+      "abi": "arm64-v8a",
+      "target": "aarch64-linux-android",
+      "apkMember": "lib/arm64-v8a/libfoxhole_native.so",
+      "bytes": 12274696,
+      "sha256": "2e73e61f73e037f8aaa7456d903d0fa98e8809f74276cbc7cff25bb3c03dbae5",
+      "producerNativeSHA256": "2e73e61f73e037f8aaa7456d903d0fa98e8809f74276cbc7cff25bb3c03dbae5",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/native/aarch64-linux-android.cdx.json",
+        "sha256": "aed54dd159738703621697f0c148017cd995f489abdac98ce652297cfff1233c"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/native/foxcore/ABI-COVERAGE.json",
+        "sha256": "e460e8b2b16d9cb04ad8dd59bea18cd17eeb6641356207178e7aaeeffc1922d6"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "vpn-core/armeabi-v7a",
+      "component": "core",
+      "consumer": "vpn",
+      "abi": "armeabi-v7a",
+      "target": "armv7-linux-androideabi",
+      "apkMember": "lib/armeabi-v7a/libfoxhole_native.so",
+      "bytes": 8581772,
+      "sha256": "0cb7b83919f57f27edac23dc3fcfc56cabc9ed663270ff8282a2003e1bf1e7c6",
+      "producerNativeSHA256": "0cb7b83919f57f27edac23dc3fcfc56cabc9ed663270ff8282a2003e1bf1e7c6",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/native/armv7-linux-androideabi.cdx.json",
+        "sha256": "0c7abdba0f47fa9747592197dae717a6fffc6fc863a70379f6da51716d28ec65"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/native/foxcore/ABI-COVERAGE.json",
+        "sha256": "e460e8b2b16d9cb04ad8dd59bea18cd17eeb6641356207178e7aaeeffc1922d6"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "vpn-core/x86",
+      "component": "core",
+      "consumer": "vpn",
+      "abi": "x86",
+      "target": "i686-linux-android",
+      "apkMember": "lib/x86/libfoxhole_native.so",
+      "bytes": 13103268,
+      "sha256": "009dc5ce41ab2ab75360f7eb823b4d211ede80ffa62c75152da084cefc49e721",
+      "producerNativeSHA256": "009dc5ce41ab2ab75360f7eb823b4d211ede80ffa62c75152da084cefc49e721",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/native/i686-linux-android.cdx.json",
+        "sha256": "5b8811ed8855ec0e4b0a10ae1211f9f681aa0ed9eb1b0029f9d967ea108ea769"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/native/foxcore/ABI-COVERAGE.json",
+        "sha256": "e460e8b2b16d9cb04ad8dd59bea18cd17eeb6641356207178e7aaeeffc1922d6"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    },
+    {
+      "id": "vpn-core/x86_64",
+      "component": "core",
+      "consumer": "vpn",
+      "abi": "x86_64",
+      "target": "x86_64-linux-android",
+      "apkMember": "lib/x86_64/libfoxhole_native.so",
+      "bytes": 14582680,
+      "sha256": "724c6ebb6633e1d79121acabd9502f55d10e1dfcdacfba1855f03fe6ddb22208",
+      "producerNativeSHA256": "724c6ebb6633e1d79121acabd9502f55d10e1dfcdacfba1855f03fe6ddb22208",
+      "embeddedSBOM": {
+        "apkMember": "assets/licenses/native/x86_64-linux-android.cdx.json",
+        "sha256": "f2d4171fcba37e1fc5562b418b80155cac09b77de4785710ba7b7b78c22f12a2"
+      },
+      "embeddedCoverage": {
+        "apkMember": "assets/licenses/native/foxcore/ABI-COVERAGE.json",
+        "sha256": "e460e8b2b16d9cb04ad8dd59bea18cd17eeb6641356207178e7aaeeffc1922d6"
+      },
+      "sourceContextCommit": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+      "nativeProducerRole": "actual Core native build under the stated producer source"
+    }
+  ],
+  "scope": "APK bytes and embedded SBOM/coverage digests were verified. Core packaged bytes equal producer bytes. Sentinel packaged bytes equal the exactly reproduced NDK stripping output of the declared producer bytes. This is artifact binding, not independent reproducible-build or complete runtime proof.",
+  "counts": {
+    "apks": 10,
+    "uniqueCoreNativeLibraries": 8,
+    "uniqueGuardSentinelNativeLibraries": 4,
+    "uniqueNativeLibraries": 12,
+    "packagedNativeEntries": 24
+  },
+  "vpnSentinelScope": "VPN contains reference Sentinel attribution metadata but no Sentinel native library; that metadata is not a shipped-binary assertion."
+}

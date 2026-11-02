@@ -1,0 +1,54 @@
+{
+  "schema": 1,
+  "checked_at": "2026-11-02T18:00:42.850067+00:00",
+  "source_commit": "c06c3c43670163f293773f5dfcb0576dfdfceebe",
+  "scanner": "cargo-deny 0.20.2",
+  "failed": true,
+  "lockfiles_before": {
+    "Cargo.lock": "c82e5f7351ad507789a41f589f2541eb65c08fe96c9421d7f8068262f9b45880",
+    "native/sentinel-yara/Cargo.lock": "c62d9da8b639b8214553b338bda2bd95ef00967ad1d75536fd0f483ba73c5285"
+  },
+  "lockfiles_after": {
+    "Cargo.lock": "c82e5f7351ad507789a41f589f2541eb65c08fe96c9421d7f8068262f9b45880",
+    "native/sentinel-yara/Cargo.lock": "c62d9da8b639b8214553b338bda2bd95ef00967ad1d75536fd0f483ba73c5285"
+  },
+  "graphs": [
+    {
+      "name": "default",
+      "fetch_exit": 0,
+      "check_exit": 0,
+      "diagnostics": []
+    },
+    {
+      "name": "all-features",
+      "fetch_exit": 0,
+      "check_exit": 0,
+      "diagnostics": []
+    },
+    {
+      "name": "sentinel",
+      "fetch_exit": 0,
+      "check_exit": 1,
+      "diagnostics": [
+        {
+          "severity": "error",
+          "code": "vulnerability",
+          "message": "Typed functions with `i31` or `nullref` arguments may panic due to insufficient type-check",
+          "id": "RUSTSEC-2026-0422"
+        },
+        {
+          "severity": "error",
+          "code": "vulnerability",
+          "message": "Cross-engine type confusion with host-created struct-types-with-supertypes",
+          "id": "RUSTSEC-2026-0423"
+        },
+        {
+          "severity": "error",
+          "code": "vulnerability",
+          "message": "Unchecked memory usage in transferring borrowed resources between components",
+          "id": "RUSTSEC-2026-0424"
+        }
+      ]
+    }
+  ]
+}

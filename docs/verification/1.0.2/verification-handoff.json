@@ -1,0 +1,99 @@
+{
+  "schema": 1,
+  "kind": "source-and-Android-artifact-verification-handoff",
+  "corePublishedSource": "c06c3c43670163f293773f5dfcb0576dfdfceebe",
+  "coreProducerSource": "66286391a715fbc1c2bbabb2581c5295f76a1acd",
+  "compiledSourceManifestSHA256": "013c64d83859b2ed92a23a91bac172ab11142861720a82c756052560281410c8",
+  "compiledInputCount": 529,
+  "signedSourceBankSHA256": "13d7deff46cd11d892ae9c03c205023b1aba05c0c4b3fc96c3ec89b5f86d8098",
+  "dataOnlyUpdate": true,
+  "newCoreReleaseOrConsumerPinChange": false,
+  "files": {
+    "android-binary-binding.json": {
+      "sha256": "969b0b058a42016bce399189d8477025e74f6a428e19550ff944857353577fec",
+      "bytes": 20723
+    },
+    "advisories.json": {
+      "sha256": "5762788d32664f9ff34e53cd92297d6fe4af75cc09523acb32b1a067975164ef",
+      "bytes": 1664
+    },
+    "README.md": {
+      "sha256": "85897419019c213fbb2db8020b0679b4aa82379b78dc21a9be63981cc48015a3",
+      "bytes": 1622
+    }
+  },
+  "focusedChecks": {
+    "sourceCommit": "c06c3c43670163f293773f5dfcb0576dfdfceebe",
+    "target": "aarch64-apple-darwin",
+    "rustToolchain": "1.97.1",
+    "source529BeforeAfterExact": true,
+    "TLS": {
+      "passed": 25,
+      "failed": 0,
+      "ignored": 0,
+      "filteredOut": 69,
+      "command": "cargo test --locked --offline -j1 -p foxcore-transport --features fingerprinting --lib tls:: -- --test-threads=1",
+      "includes": [
+        "large-window Brotli rejection",
+        "valid compressed-certificate handshake",
+        "malformed/truncated/wrong-size Brotli rejection",
+        "TLS certificate negative cases",
+        "hybrid group offer",
+        "separate profile/session caches",
+        "HRR and shaped PSK resumption"
+      ]
+    },
+    "TUNDescriptorLifecycle": {
+      "passed": 5,
+      "failed": 0,
+      "ignored": 0,
+      "command": "cargo test --locked --offline -j1 -p foxcore-tun --test tun_descriptor_lifetime -- --test-threads=1"
+    },
+    "denyDeprecatedCompile": {
+      "exitCode": 0,
+      "scope": "foxcore-tun library crate",
+      "command": "cargo rustc --locked --offline -j1 -p foxcore-tun --lib -- -Ddeprecated"
+    },
+    "newAndroidNativeBuilds": 0
+  },
+  "advisories": {
+    "database": "https://github.com/RustSec/advisory-db",
+    "databaseCommit": "263a4d951a0867d4bddc29dddd6d59427c78f9a7",
+    "rawReport": "advisories.json",
+    "overallResult": "FAILED",
+    "results": {
+      "default": 0,
+      "all-features": 0,
+      "sentinel": 1
+    },
+    "sentinelWasmtime": "49.0.4",
+    "minimalPatchedWasmtime": "49.0.5",
+    "observedFeatureTarget": "aarch64-linux-android",
+    "resolvedFeatures": [
+      "cranelift",
+      "once_cell",
+      "pulley",
+      "runtime",
+      "std",
+      "wasmtime-jit-icache-coherence"
+    ],
+    "GCOrComponentModelFeaturesResolved": false,
+    "sourceAssessment": "Reviewed YARA-X embedding uses TypedFunc<(), i32> and a singleton engine. The specific GC/component-model prerequisites are absent from the observed resolved feature graph; this is source/feature reasoning, not adversarial runtime proof. The cargo-deny result remains failed and no advisory ignore was added."
+  },
+  "remainingVerification": [
+    "Negative TLS handshake with an actual distrusted emSign certificate chain.",
+    "Adversarial unauthenticated ServerHello PQ downgrade and session-store Debug redaction cases.",
+    "Hysteria2, TUIC, DoQ and HTTP/3 end-to-end CID-retirement, fragmented-stream and empty-DATAGRAM DoS cases.",
+    "Actual Android TUN restart and descriptor accounting; host UnixStream tests do not establish Android kernel behavior."
+  ],
+  "limits": [
+    "Not a whole release gate.",
+    "Not an independent reproducible build.",
+    "Not a complete Android runtime or all-platform qualification."
+  ],
+  "signature": {
+    "detachedFile": "verification-handoff.json.asc",
+    "trustedPublicKey": "https://raw.githubusercontent.com/foxhole-team/foxhole-core/c06c3c43670163f293773f5dfcb0576dfdfceebe/config/release-signers.asc",
+    "trustedFingerprints": "https://raw.githubusercontent.com/foxhole-team/foxhole-core/c06c3c43670163f293773f5dfcb0576dfdfceebe/config/release-signing-fingerprints.txt"
+  }
+}
