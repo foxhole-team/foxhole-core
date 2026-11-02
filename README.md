@@ -46,7 +46,7 @@ the build and integration.
 | Linux CLI | Hysteria2 by default; other VPN protocols are selected at build time. Tor and I2P are not included in the CLI |
 | Specific client | Exposes only its available features; a Core capability does not imply a corresponding app UI feature |
 
-<p align="center"><a href="#quickstart">Get started</a> · <a href="#features">Features</a> · <a href="#details">Details</a> · <a href="#whats-new">What's new</a></p>
+<p align="center"><a href="#quickstart">Get started</a> · <a href="#features">Features</a> · <a href="#details">Details</a> · <a href="#whats-new">What's new</a> · <a href="ROADMAP.md">Roadmap</a></p>
 
 <a id="whats-new"></a>
 

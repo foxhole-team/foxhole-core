@@ -46,7 +46,7 @@
 | Linux CLI | По умолчанию Hysteria2; другие VPN-протоколы выбираются при сборке. Tor и I2P в CLI не включены |
 | Конкретный клиент | Показывает только доступные ему функции; наличие возможности в Core не означает её наличие в интерфейсе приложения |
 
-<p align="center"><a href="#quickstart">Начать</a> · <a href="#features">Возможности</a> · <a href="#details">Подробности</a> · <a href="#whats-new">Что нового</a></p>
+<p align="center"><a href="#quickstart">Начать</a> · <a href="#features">Возможности</a> · <a href="#details">Подробности</a> · <a href="#whats-new">Что нового</a> · <a href="../ROADMAP.md">Roadmap</a></p>
 
 <a id="whats-new"></a>
 
