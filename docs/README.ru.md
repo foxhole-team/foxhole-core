@@ -1,5 +1,11 @@
 <h1 align="center">🦀 FoxHole Core</h1>
 
+<a id="whats-new"></a>
+
+## 🆕 Что нового — 1.0.3
+
+- Исправлена DNS-маршрутизация в сценариях работы приложения.
+
 <div align="center">
 
 **FoxHole Core** - сетевое ядро экосистемы FoxHole на Rust.
@@ -48,11 +54,6 @@
 
 <p align="center"><a href="#quickstart">Начать</a> · <a href="#features">Возможности</a> · <a href="#details">Подробности</a> · <a href="#whats-new">Что нового</a> · <a href="../ROADMAP.md">Roadmap</a> · <a href="verification/1.0.2/README.md">Verification</a></p>
 
-<a id="whats-new"></a>
-
-## 🆕 Что нового — 1.0.3
-
-- Исправление DNS-маршрутизации в сценариях работы приложения.
 
 <a id="features"></a>
 

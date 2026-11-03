@@ -6,11 +6,11 @@
 
 ## 1.0.2 - 2026-11-01
 
-- Обновлены браузерные TLS-профили.
-- Исправлена совместимость VLESS + REALITY.
-- Добавлен автоматический выбор совместимого TLS-профиля при импорте REALITY-конфигураций с устаревшим профилем QQ.
-- Добавлен контроль согласованности общего кода Guard и VPN.
-- Уточнена документация по возможностям ядра.
+- Updated browser TLS profiles.
+- Fixed VLESS + REALITY compatibility.
+- Added automatic selection of a compatible TLS profile when importing REALITY configurations with an outdated QQ profile.
+- Added consistency checks for shared Guard and VPN code.
+- Clarified documentation of core capabilities.
 
 
 ## 1.0.1 - 2026-10-30
