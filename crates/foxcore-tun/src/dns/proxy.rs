@@ -11,7 +11,10 @@ use foxcore_api::{
     BlockReason, CoreEvent, Destination, DnsCategory, DnsConfig, DnsMode, DnsRoute, DnsUpstream,
     EventSink, FlowContext, IpTransport, TlsConfig,
 };
-use foxcore_dns::{DnsCache, http_query, nxdomain_response, restore_transaction_id};
+use foxcore_dns::{
+    DnsCache, DnsResponseLane, DnsResponseScope, http_query, nxdomain_response,
+    restore_transaction_id,
+};
 use foxcore_outbound::{Outbound, OutboundKind, OutboundRegistry};
 use foxcore_route::domain::{BlocklistSource, DomainBlocklist};
 use foxcore_route::ruleset::RuleSetArtifact;
@@ -952,7 +955,9 @@ impl DnsProxy {
         if self.network_epoch.load(Ordering::Acquire) != epoch {
             return Err(network_changed_error());
         }
-        let response = self.cache.cached_response(query, stale);
+        let response =
+            self.cache
+                .cached_response_scoped(query, stale, &self.response_scope(identity, epoch));
         if let (Some(identity), Some(response)) = (identity, response.as_ref())
             && (bypasses_filtering || self.blocked_response_alias(query, response)?.is_none())
         {
@@ -989,13 +994,32 @@ impl DnsProxy {
         if self.network_epoch.load(Ordering::Acquire) != epoch {
             return Err(network_changed_error());
         }
-        let valid = self
-            .cache
-            .cache_response(query, response, self.config.negative_cache);
+        let valid = self.cache.cache_response_scoped(
+            query,
+            response,
+            self.config.negative_cache,
+            &self.response_scope(identity, epoch),
+        );
         if valid && let Some(identity) = identity {
             self.cache.learn_route_hints(query, response, identity);
         }
         Ok(valid)
+    }
+
+    fn response_scope(
+        &self,
+        identity: Option<&foxcore_dns::DnsIdentity>,
+        epoch: u64,
+    ) -> DnsResponseScope {
+        DnsResponseScope::new(
+            if self.config.route == DnsRoute::Direct {
+                DnsResponseLane::Direct
+            } else {
+                DnsResponseLane::Profile
+            },
+            identity.cloned(),
+            epoch,
+        )
     }
 
     /// Drop the cached answers and the idle upstream connections.

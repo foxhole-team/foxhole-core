@@ -50,13 +50,9 @@ the build and integration.
 
 <a id="whats-new"></a>
 
-## 🆕 What's new - 1.0.2
+## 🆕 What's new - 1.0.3
 
-- Updated browser TLS profiles.
-- Fixed VLESS + REALITY compatibility.
-- Added automatic selection of a compatible TLS profile when importing REALITY configurations with the legacy QQ profile.
-- Added consistency checks for shared Guard and VPN code.
-- Clarified documentation of core capabilities.
+- Fixed DNS routing in application scenarios.
 
 <a id="features"></a>
 

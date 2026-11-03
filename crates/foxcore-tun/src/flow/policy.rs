@@ -257,7 +257,8 @@ impl FlowPolicyStore {
             artifacts,
         );
         let kill_switch = routes.kill_switch();
-        let revocation = if kill_switch {
+        let revoke_previous = kill_switch || current.routes.kill_switch();
+        let revocation = if revoke_previous {
             CancellationToken::new()
         } else {
             // Retained flows from every ordinary reload share one cancellation epoch.
@@ -273,7 +274,7 @@ impl FlowPolicyStore {
         }));
         // After the swap, so no flow can slip in under the old snapshot between
         // the revoke and the new policy becoming visible.
-        if kill_switch {
+        if revoke_previous {
             current.revocation.cancel();
             if let Some(proxy) = &current.dns_proxy {
                 proxy.network_changed();

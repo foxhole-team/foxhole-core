@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.3
+
+- Fixed DNS routing in application scenarios.
+
 ## 1.0.2 - 2026-11-01
 
 - Обновлены браузерные TLS-профили.

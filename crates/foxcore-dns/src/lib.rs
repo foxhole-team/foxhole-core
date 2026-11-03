@@ -4,6 +4,9 @@ mod consts;
 mod message;
 mod wire;
 
+#[cfg(test)]
+mod identity_scope_tests;
+
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -45,6 +48,35 @@ impl DnsIdentity {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DnsResponseLane {
+    Profile,
+    Direct,
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct DnsResponseScope {
+    lane: DnsResponseLane,
+    identity: Option<DnsIdentity>,
+    network_epoch: u64,
+}
+
+impl DnsResponseScope {
+    pub fn new(lane: DnsResponseLane, identity: Option<DnsIdentity>, network_epoch: u64) -> Self {
+        Self {
+            lane,
+            identity,
+            network_epoch,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ResponseKey {
+    question: Vec<u8>,
+    scope: Option<DnsResponseScope>,
+}
+
 #[derive(Default)]
 struct RouteHints {
     names: HashMap<String, Instant>,
@@ -56,7 +88,7 @@ struct State {
     sequence: u64,
     reverse: HashMap<IpAddr, CacheEntry>,
     route_hints: HashMap<(DnsIdentity, IpAddr), RouteHints>,
-    responses: HashMap<Vec<u8>, ResponseEntry>,
+    responses: HashMap<ResponseKey, ResponseEntry>,
 }
 
 #[derive(Default)]
@@ -279,7 +311,28 @@ impl DnsCache {
     /// When `allow_stale` is true, expired entries remain usable for a short
     /// bounded stale-on-error window and are returned with TTL zero.
     pub fn cached_response(&self, query: &[u8], allow_stale: bool) -> Option<Vec<u8>> {
-        let key = query_key(query)?;
+        self.cached_response_inner(query, allow_stale, None)
+    }
+
+    pub fn cached_response_scoped(
+        &self,
+        query: &[u8],
+        allow_stale: bool,
+        scope: &DnsResponseScope,
+    ) -> Option<Vec<u8>> {
+        self.cached_response_inner(query, allow_stale, Some(scope.clone()))
+    }
+
+    fn cached_response_inner(
+        &self,
+        query: &[u8],
+        allow_stale: bool,
+        scope: Option<DnsResponseScope>,
+    ) -> Option<Vec<u8>> {
+        let key = ResponseKey {
+            question: query_key(query)?,
+            scope,
+        };
         let transaction_id = [*query.first()?, *query.get(1)?];
         let now = (self.clock)();
         let mut state = lock(&self.state);
@@ -319,9 +372,30 @@ impl DnsCache {
     /// Validate and cache a response. A valid zero-TTL response is accepted
     /// but deliberately not retained.
     pub fn cache_response(&self, query: &[u8], response: &[u8], negative_cache: bool) -> bool {
-        let Some(key) = query_key(query) else {
+        self.cache_response_inner(query, response, negative_cache, None)
+    }
+
+    pub fn cache_response_scoped(
+        &self,
+        query: &[u8],
+        response: &[u8],
+        negative_cache: bool,
+        scope: &DnsResponseScope,
+    ) -> bool {
+        self.cache_response_inner(query, response, negative_cache, Some(scope.clone()))
+    }
+
+    fn cache_response_inner(
+        &self,
+        query: &[u8],
+        response: &[u8],
+        negative_cache: bool,
+        scope: Option<DnsResponseScope>,
+    ) -> bool {
+        let Some(question) = query_key(query) else {
             return false;
         };
+        let key = ResponseKey { question, scope };
         let Some(metadata) = response_metadata(query, response) else {
             return false;
         };
