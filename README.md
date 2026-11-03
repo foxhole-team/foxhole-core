@@ -1,11 +1,5 @@
 <h1 align="center">🦀 FoxHole Core</h1>
 
-<a id="whats-new"></a>
-
-## 🆕 What's new - 1.0.3
-
-- Fixed DNS routing in application scenarios.
-
 <div align="center">
 
 **FoxHole Core** is the Rust networking core of the FoxHole ecosystem.
@@ -54,6 +48,11 @@ the build and integration.
 
 <p align="center"><a href="#quickstart">Get started</a> · <a href="#features">Features</a> · <a href="#details">Details</a> · <a href="#whats-new">What's new</a> · <a href="ROADMAP.md">Roadmap</a> · <a href="docs/verification/1.0.2/README.md">Verification</a></p>
 
+<a id="whats-new"></a>
+
+## 🆕 What's new - 1.0.3
+
+- Fixed DNS routing in application scenarios.
 
 <a id="features"></a>
 
