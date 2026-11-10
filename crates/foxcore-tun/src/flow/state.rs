@@ -86,6 +86,8 @@ pub(crate) fn is_primary_outbound(id: &str) -> bool {
 #[derive(Clone)]
 pub struct FlowEngine {
     pub(crate) generation: u64,
+    #[cfg(feature = "wireguard")]
+    pub(crate) packet_dns: Arc<crate::packet_dns::PacketDnsTracker>,
     pub(crate) outbounds: Arc<OutboundRegistry>,
     pub(crate) direct: Arc<Outbound>,
     pub(crate) policy: Arc<FlowPolicyStore>,
@@ -149,6 +151,7 @@ pub(crate) struct PolicyMutable {
 /// load and keep the selected revision for the lifetime of each flow.
 pub struct FlowPolicyStore {
     pub(crate) generation: u64,
+    pub(crate) packet_dns_peer: [u8; 32],
     pub(crate) outbounds: Arc<OutboundRegistry>,
     pub(crate) direct: Arc<Outbound>,
     /// Carried so a hot reload rebuilds the DNS interceptor against the same

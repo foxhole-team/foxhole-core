@@ -50,9 +50,25 @@ pub struct IngressChannels {
 /// Binder call. The cost is bounded by the attribution timeout the caller
 /// applies, and it is paid once per flow, not once per packet.
 pub async fn classify<F, Fut>(
+    from_tun: mpsc::Receiver<BytesMut>,
+    splitter: PacketSplitter,
+    decide: F,
+    channels: IngressChannels,
+    cancel: CancellationToken,
+) where
+    F: Fn(FlowKey) -> Fut,
+    Fut: Future<Output = PacketDecision>,
+{
+    classify_with_dns(from_tun, splitter, decide, None, channels, cancel).await;
+}
+
+type DnsPacketObserver = Arc<dyn Fn(&[u8]) -> bool + Send + Sync>;
+
+pub(crate) async fn classify_with_dns<F, Fut>(
     mut from_tun: mpsc::Receiver<BytesMut>,
     mut splitter: PacketSplitter,
     decide: F,
+    packet_dns: Option<DnsPacketObserver>,
     channels: IngressChannels,
     cancel: CancellationToken,
 ) where
@@ -74,13 +90,24 @@ pub async fn classify<F, Fut>(
         let Some(key) = FlowKey::from_packet(&packet) else {
             continue;
         };
-        let route = match splitter.lookup(&key, now_ms) {
+        // DNS socket reuse must recheck the owner before another query can bind names.
+        let cached = if packet_dns.is_some() && key.destination_port == 53 {
+            None
+        } else {
+            splitter.lookup(&key, now_ms)
+        };
+        let route = match cached {
             Some(route) => route,
             None => {
                 let decision = tokio::select! {
                     _ = cancel.cancelled() => return,
                     decision = decide(key) => decision,
                 };
+                // Attribution can finish after its snapshot or flow was revoked.
+                if decision.is_void() {
+                    channels.metrics.split_blocked();
+                    continue;
+                }
                 let route = decision.route;
                 splitter.insert(key, decision, now_ms);
                 route
@@ -88,6 +115,13 @@ pub async fn classify<F, Fut>(
         };
         let destination = match route {
             PacketRoute::Tunnel => {
+                if key.destination_port == 53
+                    && let Some(dns) = &packet_dns
+                    && !dns(&packet)
+                {
+                    channels.metrics.split_blocked();
+                    continue;
+                }
                 channels.metrics.split_to_tunnel();
                 // The only place the tunnel's uplink bytes can be attributed to
                 // an app: past this point the packet is sealed and there is no
@@ -328,6 +362,44 @@ mod tests {
             "a blocked packet must not leak into the tunnel"
         );
 
+        cancel.cancel();
+        task.await.unwrap();
+    }
+
+    #[cfg_attr(miri, ignore = "tokio's I/O driver")]
+    #[tokio::test]
+    async fn a_revoked_initial_decision_cannot_forward_its_first_packet() {
+        let (to_ingress, from_tun) = mpsc::channel(4);
+        let (to_tunnel, mut tunnel) = mpsc::channel(4);
+        let (to_stack, mut stack) = mpsc::channel(4);
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(classify(
+            from_tun,
+            PacketSplitter::new(8, 30000),
+            |key| async move {
+                if key.destination_port == 443 {
+                    let old_policy = CancellationToken::new();
+                    old_policy.cancel();
+                    PacketDecision::new(PacketRoute::Tunnel).voided_by(old_policy)
+                } else {
+                    PacketDecision::new(PacketRoute::Stack)
+                }
+            },
+            IngressChannels {
+                to_tunnel,
+                to_stack,
+                metrics: Arc::new(crate::FlowMetrics::default()),
+                accounting: Arc::new(PacketAccounting::default()),
+            },
+            cancel.clone(),
+        ));
+        to_ingress.send(udp_packet(443)).await.unwrap();
+        to_ingress.send(udp_packet(80)).await.unwrap();
+        assert_eq!(stack.recv().await.unwrap(), udp_packet(80));
+        assert!(
+            tunnel.try_recv().is_err(),
+            "revoked policy must not leak the first packet"
+        );
         cancel.cancel();
         task.await.unwrap();
     }

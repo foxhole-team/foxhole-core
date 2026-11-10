@@ -43,6 +43,8 @@ class LabReleaseTests(unittest.TestCase):
         source_paths = V.COMPILED_FIXED | {'crates/fixture/Cargo.toml', 'crates/fixture/build.rs',
                                           'crates/fixture/src/lib.rs', 'vendor/rustls/Cargo.toml',
                                           'vendor/rustls/build.rs', 'vendor/rustls/src/lib.rs',
+                                          'vendor/libsqlite3-sys/Cargo.toml', 'vendor/libsqlite3-sys/build.rs',
+                                          'vendor/libsqlite3-sys/sqlite3/sqlite3.c',
                                           'fixtures/abi/v1/capabilities.json'} | {
                                               'fingerprints/profile-' + str(i) + '.json' for i in range(10)}
         for name in source_paths:
@@ -151,6 +153,7 @@ class LabReleaseTests(unittest.TestCase):
     def test_omitted_rust_vendor_build_and_feature_inputs_are_rejected_even_rehashed(self):
         repo, required, handoff, files, data = self.fixture()
         for missing in ('crates/fixture/src/lib.rs', 'vendor/rustls/src/lib.rs',
+                        'vendor/libsqlite3-sys/sqlite3/sqlite3.c',
                         'crates/fixture/build.rs', '.cargo/config.toml',
                         'config/foxcore-android-delivery.json', 'crates/fixture/Cargo.toml'):
             bad = dict(files);inputs = V.document(files['metadata/compiled-inputs.json'])

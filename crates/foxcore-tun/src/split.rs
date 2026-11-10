@@ -153,6 +153,10 @@ impl PacketDecision {
         }
     }
 
+    pub(crate) fn is_void(&self) -> bool {
+        decision_revoked(self.voided_by.as_ref(), self.flow.as_ref())
+    }
+
     /// Tie this decision to the life of a policy snapshot.
     ///
     /// A reload, a kill switch and a network change all install a new snapshot
@@ -190,14 +194,13 @@ impl Decision {
     /// not move at all. Either way the next packet is decided again rather than
     /// routed on the strength of an answer nobody stands behind any more.
     fn is_void(&self) -> bool {
-        self.voided_by
-            .as_ref()
-            .is_some_and(CancellationToken::is_cancelled)
-            || self
-                .flow
-                .as_ref()
-                .is_some_and(|handle| handle.flow().revocation().is_cancelled())
+        decision_revoked(self.voided_by.as_ref(), self.flow.as_ref())
     }
+}
+
+fn decision_revoked(policy: Option<&CancellationToken>, flow: Option<&FlowHandle>) -> bool {
+    policy.is_some_and(CancellationToken::is_cancelled)
+        || flow.is_some_and(|handle| handle.flow().revocation().is_cancelled())
 }
 
 /// Conntrack for the split decision.

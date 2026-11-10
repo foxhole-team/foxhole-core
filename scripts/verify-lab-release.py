@@ -32,8 +32,11 @@ COMPILED_FIXED = {'.cargo/config.toml', 'Cargo.toml', 'Cargo.lock', 'rust-toolch
                   'scripts/android-build.sh', 'scripts/android-elf-gate.sh', 'scripts/android-path-leaks.py',
                   'config/foxcore-android-delivery.json', 'config/source-forks/rustls-0.23.46.json',
                   'config/source-forks/rustls-0.23.46.upstream-files.json',
-                  'config/source-forks/rustls-0.23.46.NOTICE.md', 'patches/rustls-0.23.46-chrome151.patch'}
-COMPILED_ROOTS = ('crates/', 'fingerprints/', 'fixtures/', 'vendor/rustls/')
+                  'config/source-forks/rustls-0.23.46.NOTICE.md', 'patches/rustls-0.23.46-chrome151.patch',
+                  'config/source-forks/libsqlite3-sys-0.37.0.json',
+                  'config/source-forks/libsqlite3-sys-0.37.0.NOTICE.md',
+                  'patches/libsqlite3-sys-0.37.0-CVE-2026-119375.patch'}
+COMPILED_ROOTS = ('crates/', 'fingerprints/', 'fixtures/', 'vendor/rustls/', 'vendor/libsqlite3-sys/')
 
 
 def need(value, message):

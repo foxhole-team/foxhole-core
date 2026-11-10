@@ -68,9 +68,14 @@ if [ "${1:-}" = "--supply" ]; then
         # Two graphs. The shipped one contains Arti client and onion-service,
         # so all of their findings are decided in deny.toml. The second graph
         # remains the widest-feature guard for future optional additions.
-        cargo deny check || fail "cargo-deny: shipped graph"
-        cargo deny --all-features --config deny-all-features.toml check ||
-            fail "cargo-deny: widest feature graph"
+        if python3 "$HERE/scripts/sqlite-fork-origin.py" --policy "$HERE/deny.toml" --output "$HERE/target/security/default-source-verified-deny.toml" &&
+           python3 "$HERE/scripts/sqlite-fork-origin.py" --policy "$HERE/deny-all-features.toml" --output "$HERE/target/security/all-source-verified-deny.toml"; then
+            cargo deny --config "$HERE/target/security/default-source-verified-deny.toml" check || fail "cargo-deny: shipped graph"
+            cargo deny --all-features --config "$HERE/target/security/all-source-verified-deny.toml" check ||
+                fail "cargo-deny: widest feature graph"
+        else
+            fail "sqlite source backport: no advisory exception applied"
+        fi
     else
         fail "cargo-deny is not installed: cargo install cargo-deny --locked"
     fi

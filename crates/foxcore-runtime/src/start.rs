@@ -182,6 +182,17 @@ impl CoreRuntime {
         // change for the life of this generation, because swapping the primary
         // outbound needs a new one.
         let packet_tunnel = config.outbound.is_packet_tunnel();
+        let packet_dns_peer = if packet_tunnel {
+            use sha2::{Digest, Sha256};
+            let material = foxcore_api::SecretString::new(
+                serde_json::to_string(&config.outbound).map_err(io::Error::other)?,
+            );
+            Some(<[u8; 32]>::from(Sha256::digest(
+                material.expose().as_bytes(),
+            )))
+        } else {
+            None
+        };
         let runtime_config = config.runtime.clone();
         let control_proxy_config = runtime_config.control_proxy.clone();
         let loopback_inbound_configs = runtime_config.loopback_inbounds.clone();
@@ -362,7 +373,10 @@ impl CoreRuntime {
                                 trusted_rule_sets,
                                 imported_dns,
                             ) {
-                                Ok(policy) => Arc::new(policy),
+                                Ok(policy) => Arc::new(match packet_dns_peer {
+                                    Some(peer) => policy.with_packet_dns_peer(peer),
+                                    None => policy,
+                                }),
                                 Err(error) => {
                                     let message = format!("initialize DNS policy: {error}");
                                     set_error(&thread_error, message.clone());

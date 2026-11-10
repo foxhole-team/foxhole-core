@@ -416,6 +416,46 @@ publication. This preserves the existing authenticated probe and its bounded exe
 new lifetime to a stale proof and adds no new JNI or Core ABI
 (`foxhole-openwrt-client/package/foxhole-openwrt-client/root/usr/share/foxhole/core-adapter.uc:79-120`).
 
+### Packet-tunnel domain routing
+
+`dns.packet_resolvers` opts an L3 WireGuard profile into managed raw DNS from tunnel
+startup. The bounded list contains only its explicit unicast resolver addresses. Real-IP
+mode, advertised resolver and DNS egress stay unchanged; no public fallback or Fake-IP/L3
+exception is introduced. Switching managed DNS on or off requires a new generation.
+
+Authenticated replies are paired with bounded original UDP/TCP queries after TUN-address
+restoration. The original answer supplies UID/package-scoped name bindings with its original
+TTL. Replies delivered to Android carry zero real resource-record TTL so its per-network DNS
+cache cannot give another UID an answer without that UID's own exchange. EDNS pseudo-TTL and
+RRSIG data are preserved. TCP framing, matching retransmissions and sequence wrap are bounded;
+gaps, conflicts, overflow, unsupported message authentication and unpaired replies fail closed.
+Truncated UDP answers retain a valid TCP-fallback response and extended error identity.
+
+A separate name-binding namespace is keyed by the exact immutable WireGuard configuration,
+exact DNS configuration and UID/packages. It can survive route revisions and physical roaming
+under the same authenticated DNS authority; a changed peer or DNS configuration cannot read
+those bindings. Ordinary reverse hints and upstream response caches retain their existing
+policy/network invalidation. Every new flow evaluates current numeric, application, domain
+and kill-switch policy: retaining a name binding never retains permission. Clean-stop DNS
+continuation can carry the namespace through a native handover; forced or unsettled stops
+cannot authorize continuation import.
+
+Direct requires agreeing explicit domain allowances for every observed name in the address's
+current authority/identity scope. Unbound, expired and ambiguous addresses cannot supply that
+permission. Real-IP routing cannot distinguish an unqueried name sharing an address or inspect
+encrypted DNS. Proxy profiles retain Fake-IP name bindings for that separation. Managed DNS
+must cover the whole WireGuard session, including periods without website rules; it does not
+retroactively revoke addresses already held in private application caches. Clients migrating
+an unmanaged session need a real resolver/cache boundary, rather than assuming that another
+`Builder.establish()` creates a new Android network.
+
+The Android client requires API30+ for WireGuard domain routes: API29 exposes flow ownership,
+but Android Q can force system DNS sockets to the resolver UID. Missing trustworthy attribution
+remains a refusal. Numeric/no-domain WireGuard and proxy Fake-IP domain routing retain their
+own platform scope. Sources: `crates/foxcore-tun/src/packet_dns.rs`,
+`crates/foxcore-tun/src/packet_dns_ttl.rs`, `crates/foxcore-dns/src/lib.rs`,
+`crates/foxcore-tun/src/flow/policy.rs`, and `crates/foxcore-runtime/src/start.rs`.
+
 ### DNS attribution on legacy Android
 
 Without a platform UID API, global domain rules require an advertised active Fake-IP resolver.

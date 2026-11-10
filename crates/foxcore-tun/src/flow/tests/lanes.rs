@@ -258,8 +258,12 @@ fn arming_the_kill_switch_revokes_live_flows_and_disarming_frees_the_next_one() 
         "disarming must free the next flow without a restart"
     );
     assert!(
-        !armed.is_cancelled(),
-        "disarming revokes nothing: it is the permissive direction"
+        armed.is_cancelled(),
+        "disarming must revoke the blocked epoch so cached kill-switch decisions expire"
+    );
+    assert!(
+        !policy.current.load().revocation.is_cancelled(),
+        "the new permissive epoch must remain usable"
     );
 }
 

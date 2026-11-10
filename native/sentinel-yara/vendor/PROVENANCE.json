@@ -14,11 +14,11 @@
     },
     {
       "path": "patches/wasmtime49-dependency.patch",
-      "sha256": "abc91b2e412128fab557ee8aebd5e982cc8b41aeb251e5dd70b823f9176557bd"
+      "sha256": "97c8485a4e1138573cf5ac75a3af08c56a3fc060f42fc51d9826488e565a241d"
     }
   ],
   "reasons": [
-    "Pin Wasmtime 49.0.4 security fixes without enabling component-model async features.",
+    "Pin Wasmtime 49.0.5 security fixes without enabling component-model async features.",
     "Expose ULEB128 for dex-module without the unused crypto feature and RSA dependency.",
     "Derive private/global rule iterator lengths from the actual matching/nonmatching bitmaps."
   ],

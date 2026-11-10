@@ -101,11 +101,30 @@ if fork_candidates or (source_root / "config/source-forks/rustls-0.23.46.json").
     fork_origin = fork_module.validate_origin(read_source, names)
     fork_ids = {fork_package["id"]}
 
+sqlite_ids = set()
+sqlite_origin = None
+sqlite_candidates = [p for p in packages.values() if p.get("source") is None and p["name"] == "libsqlite3-sys"]
+if sqlite_candidates or (source_root / "config/source-forks/libsqlite3-sys-0.37.0.json").exists():
+    if len(sqlite_candidates) != 1:
+        raise ValueError("SQLite fork must resolve to exactly one path package")
+    package = sqlite_candidates[0]
+    if package["id"] in workspace or Path(package["manifest_path"]).resolve() != (source_root / "vendor/libsqlite3-sys/Cargo.toml").resolve():
+        raise ValueError("Only the reviewed non-workspace SQLite fork is admitted")
+    spec = importlib.util.spec_from_file_location("sqlite_fork_origin", source_root / "scripts/sqlite-fork-origin.py")
+    sqlite_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sqlite_module)
+    sqlite_origin = sqlite_module.validate(source_root)
+    revision = os.environ.get("FOXCORE_SOURCE_REVISION", "")
+    sqlite_module.identity_url(sqlite_origin, revision)
+    sqlite_ids = {package["id"]}
+
 
 def ref(package_id: str) -> str:
     package = packages[package_id]
     if package_id in fork_ids:
         return fork_module.identity_url(fork_origin, revision)
+    if package_id in sqlite_ids:
+        return sqlite_module.identity_url(sqlite_origin, revision)
     return f"pkg:cargo/{package['name']}@{package['version']}"
 
 
@@ -146,7 +165,7 @@ for package_id in sorted(reachable, key=ref):
     package = packages[package_id]
     if package_id in workspace:
         continue  # the workspace itself is metadata.component, not a dependency
-    if package.get("source") is None and package_id not in fork_ids:
+    if package.get("source") is None and package_id not in fork_ids | sqlite_ids:
         raise ValueError("Unadmitted non-workspace path dependency in Core SBOM")
     component = {
         "type": "library",
@@ -158,6 +177,8 @@ for package_id in sorted(reachable, key=ref):
     }
     if package_id in fork_ids:
         component["properties"] = fork_module.component_properties(fork_origin, revision)
+    if package_id in sqlite_ids:
+        component["properties"] = sqlite_module.component_properties(sqlite_origin, revision)
     if package.get("description"):
         component["description"] = package["description"]
     entries = licenses(package)
@@ -207,8 +228,8 @@ document = {
     "dependencies": dependencies,
 }
 
-if fork_origin is not None:
-    document["metadata"]["properties"] += [{"name": "foxhole:native:vendored-fork-components", "value": "1"},
+if fork_origin is not None or sqlite_origin is not None:
+    document["metadata"]["properties"] += [{"name": "foxhole:native:vendored-fork-components", "value": str(len(fork_ids | sqlite_ids))},
                                             {"name": "foxcore:source-revision", "value": revision}]
 json.dump(document, sys.stdout, indent=2, sort_keys=False)
 sys.stdout.write("\n")

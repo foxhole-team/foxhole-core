@@ -1,3 +1,4 @@
+mod packet_dns;
 use super::*;
 use bytes::BytesMut;
 use std::sync::Arc;

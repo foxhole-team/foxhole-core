@@ -586,6 +586,12 @@ impl CoreRuntime {
                 "traffic.i2p_enabled=true requires a registered I2P outbound",
             ));
         }
+        if !config.dns.packet_resolvers.is_empty() && !self.packet_tunnel {
+            return Err(PolicyError::new(
+                PolicyRefusal::Invalid,
+                "dns.packet_resolvers requires a packet-tunnel primary",
+            ));
+        }
         // The start-time refusal in `EngineConfig::validate` cannot cover this:
         // a reload replaces the DNS policy of a generation whose outbound is
         // already fixed, so fake-IP can be switched on under a running packet

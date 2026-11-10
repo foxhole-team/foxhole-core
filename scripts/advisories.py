@@ -4,12 +4,14 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import html
+import importlib.util
 import json
 import os
 from pathlib import Path
 import re
 import signal
 import subprocess
+import tomllib
 
 
 SCANNER_VERSION = "cargo-deny 0.20.2"
@@ -19,6 +21,23 @@ GRAPHS = (
     ("sentinel", ("--manifest-path", "native/sentinel-yara/Cargo.toml", "--config", "native/sentinel-yara/deny.toml")),
 )
 LOCKFILES = ("Cargo.lock", "native/sentinel-yara/Cargo.lock")
+
+
+def sqlite_policies(root, output):
+    manifest = root / "Cargo.toml"
+    if not manifest.is_file() or "libsqlite3-sys" not in tomllib.loads(manifest.read_text()).get("patch", {}).get("crates-io", {}):
+        return {}, None
+    spec = importlib.util.spec_from_file_location("sqlite_fork", root / "scripts/sqlite-fork-origin.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    policies = {}
+    proof = None
+    for name, original in (("default", "deny.toml"), ("all-features", "deny-all-features.toml")):
+        destination = output / (name + "-source-verified-deny.toml")
+        proof = module.policy(root, root / original, destination)
+        policies[name] = destination
+    (output / "sqlite-source-backport.json").write_text(json.dumps(proof, indent=2) + "\n")
+    return policies, proof
 
 
 def run(command, root, log, timeout):
@@ -115,8 +134,18 @@ def main():
     version = (output / "scanner-version.log").read_text(errors="replace").strip()
     failed = source is None or version_exit != 0 or version != SCANNER_VERSION or any(v is None for v in before.values())
     graphs = []
+    try:
+        policies, sqlite_proof = sqlite_policies(root, output)
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        failed = True
+        policies, sqlite_proof = {}, None
+        (output / "sqlite-source-backport-error.log").write_text(str(error) + "\n")
+        print("::error title=SQLite backport invalid::Exact source proof failed; no advisory exception applied.")
     if version_exit == 0 and version == SCANNER_VERSION:
         for name, options in GRAPHS:
+            if name in policies:
+                options = ("--all-features",) if name == "all-features" else ()
+                options += ("--config", str(policies[name]))
             print(f"Checking fresh advisories: {name}", flush=True)
             fetch_exit = run(["cargo", "deny", *options, "fetch"], root, output / f"{name}-fetch.log", args.timeout)
             check_exit = None
@@ -143,7 +172,8 @@ def main():
     if version_exit != 0 or version != SCANNER_VERSION or source is None or any(v is None for v in before.values()):
         print("::error title=Dependency check unavailable::Missing source identity, lockfile or pinned scanner; inspect the artifact.")
     report = {"schema": 1, "checked_at": datetime.now(timezone.utc).isoformat(), "source_commit": source,
-              "scanner": version, "failed": bool(failed), "lockfiles_before": before, "lockfiles_after": after, "graphs": graphs}
+              "scanner": version, "failed": bool(failed), "lockfiles_before": before, "lockfiles_after": after, "graphs": graphs,
+              "sqlite_source_backport": sqlite_proof}
     (output / "report.json").write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
     text = summary(report)
     (output / "report.md").write_text(text)

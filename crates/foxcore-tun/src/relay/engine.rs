@@ -75,6 +75,7 @@ impl PacketTunnelRelay {
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error.to_string()))?;
         let (keepalive, network) = watch::channel(0);
         Ok(Self {
+            packet_dns: None,
             tunnel,
             socket,
             endpoint,
@@ -87,6 +88,14 @@ impl PacketTunnelRelay {
             accounting: Arc::new(PacketAccounting::default()),
             events: EventSink::none(),
         })
+    }
+
+    pub(crate) fn with_packet_dns(
+        mut self,
+        tracker: Arc<crate::packet_dns::PacketDnsTracker>,
+    ) -> Self {
+        self.packet_dns = Some(tracker);
+        self
     }
 
     /// Report untranslatable packets to the engine's audit stream.
@@ -127,6 +136,7 @@ impl PacketTunnelRelay {
         // Destructured so the socket and the state machine can be borrowed
         // independently inside `select!`.
         let Self {
+            packet_dns,
             mut tunnel,
             socket,
             mut endpoint,
@@ -325,6 +335,13 @@ impl PacketTunnelRelay {
                                 metrics.tunnel_untranslated_down();
                                 refusals.report(&events, refusal, &decrypted);
                             } else {
+                                if let Some(dns) = &packet_dns
+                                    && !dns.response_for_tun(&mut decrypted)
+                                {
+                                    metrics.dns_blocked();
+                                    metrics.block_flow();
+                                    continue;
+                                }
                                 metrics.add_down(decrypted.len() as u64);
                                 // The tuple is read after translation, so it is
                                 // the tun-side one the split bound the flow to.

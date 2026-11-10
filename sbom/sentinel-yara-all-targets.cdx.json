@@ -353,173 +353,173 @@
       "version": "0.2.17"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-assembler-x64-meta@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-assembler-x64-meta@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-assembler-x64-meta",
-      "purl": "pkg:cargo/cranelift-assembler-x64-meta@0.136.4",
+      "purl": "pkg:cargo/cranelift-assembler-x64-meta@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-assembler-x64@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-assembler-x64@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-assembler-x64",
-      "purl": "pkg:cargo/cranelift-assembler-x64@0.136.4",
+      "purl": "pkg:cargo/cranelift-assembler-x64@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-bforest@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-bforest@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-bforest",
-      "purl": "pkg:cargo/cranelift-bforest@0.136.4",
+      "purl": "pkg:cargo/cranelift-bforest@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-bitset@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-bitset@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-bitset",
-      "purl": "pkg:cargo/cranelift-bitset@0.136.4",
+      "purl": "pkg:cargo/cranelift-bitset@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-codegen-meta@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-codegen-meta@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-codegen-meta",
-      "purl": "pkg:cargo/cranelift-codegen-meta@0.136.4",
+      "purl": "pkg:cargo/cranelift-codegen-meta@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-codegen-shared@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-codegen-shared@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-codegen-shared",
-      "purl": "pkg:cargo/cranelift-codegen-shared@0.136.4",
+      "purl": "pkg:cargo/cranelift-codegen-shared@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-codegen@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-codegen@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-codegen",
-      "purl": "pkg:cargo/cranelift-codegen@0.136.4",
+      "purl": "pkg:cargo/cranelift-codegen@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-control@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-control@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-control",
-      "purl": "pkg:cargo/cranelift-control@0.136.4",
+      "purl": "pkg:cargo/cranelift-control@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-entity@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-entity@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-entity",
-      "purl": "pkg:cargo/cranelift-entity@0.136.4",
+      "purl": "pkg:cargo/cranelift-entity@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-frontend@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-frontend@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-frontend",
-      "purl": "pkg:cargo/cranelift-frontend@0.136.4",
+      "purl": "pkg:cargo/cranelift-frontend@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-isle@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-isle@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-isle",
-      "purl": "pkg:cargo/cranelift-isle@0.136.4",
+      "purl": "pkg:cargo/cranelift-isle@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-native@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-native@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-native",
-      "purl": "pkg:cargo/cranelift-native@0.136.4",
+      "purl": "pkg:cargo/cranelift-native@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
-      "bom-ref": "pkg:cargo/cranelift-srcgen@0.136.4",
+      "bom-ref": "pkg:cargo/cranelift-srcgen@0.136.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "cranelift-srcgen",
-      "purl": "pkg:cargo/cranelift-srcgen@0.136.4",
+      "purl": "pkg:cargo/cranelift-srcgen@0.136.5",
       "scope": "required",
       "type": "library",
-      "version": "0.136.4"
+      "version": "0.136.5"
     },
     {
       "bom-ref": "pkg:cargo/crc32fast@1.5.2",
@@ -1575,30 +1575,30 @@
       "version": "3.7.2"
     },
     {
-      "bom-ref": "pkg:cargo/pulley-interpreter@49.0.4",
+      "bom-ref": "pkg:cargo/pulley-interpreter@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "pulley-interpreter",
-      "purl": "pkg:cargo/pulley-interpreter@49.0.4",
+      "purl": "pkg:cargo/pulley-interpreter@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/pulley-macros@49.0.4",
+      "bom-ref": "pkg:cargo/pulley-macros@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "pulley-macros",
-      "purl": "pkg:cargo/pulley-macros@49.0.4",
+      "purl": "pkg:cargo/pulley-macros@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
       "bom-ref": "pkg:cargo/quote@1.0.47",
@@ -2407,134 +2407,134 @@
       "version": "0.258.3"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-environ@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-environ@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-environ",
-      "purl": "pkg:cargo/wasmtime-environ@49.0.4",
+      "purl": "pkg:cargo/wasmtime-environ@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-component-util@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-component-util@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-component-util",
-      "purl": "pkg:cargo/wasmtime-internal-component-util@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-component-util@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-core@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-core@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-core",
-      "purl": "pkg:cargo/wasmtime-internal-core@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-core@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-cranelift@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-cranelift@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-cranelift",
-      "purl": "pkg:cargo/wasmtime-internal-cranelift@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-cranelift@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-fiber@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-fiber@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-fiber",
-      "purl": "pkg:cargo/wasmtime-internal-fiber@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-fiber@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-jit-debug@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-jit-debug@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-jit-debug",
-      "purl": "pkg:cargo/wasmtime-internal-jit-debug@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-jit-debug@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-jit-icache-coherence",
-      "purl": "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-unwinder@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-unwinder@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-unwinder",
-      "purl": "pkg:cargo/wasmtime-internal-unwinder@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-unwinder@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime-internal-versioned-export-macros",
-      "purl": "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4",
+      "purl": "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
-      "bom-ref": "pkg:cargo/wasmtime@49.0.4",
+      "bom-ref": "pkg:cargo/wasmtime@49.0.5",
       "licenses": [
         {
           "expression": "Apache-2.0 WITH LLVM-exception"
         }
       ],
       "name": "wasmtime",
-      "purl": "pkg:cargo/wasmtime@49.0.4",
+      "purl": "pkg:cargo/wasmtime@49.0.5",
       "scope": "required",
       "type": "library",
-      "version": "49.0.4"
+      "version": "49.0.5"
     },
     {
       "bom-ref": "pkg:cargo/which@4.4.2",
@@ -3037,62 +3037,62 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-srcgen@0.136.4"
+        "pkg:cargo/cranelift-srcgen@0.136.5"
       ],
-      "ref": "pkg:cargo/cranelift-assembler-x64-meta@0.136.4"
+      "ref": "pkg:cargo/cranelift-assembler-x64-meta@0.136.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-assembler-x64-meta@0.136.4"
+        "pkg:cargo/cranelift-assembler-x64-meta@0.136.5"
       ],
-      "ref": "pkg:cargo/cranelift-assembler-x64@0.136.4"
+      "ref": "pkg:cargo/cranelift-assembler-x64@0.136.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-entity@0.136.4",
-        "pkg:cargo/wasmtime-internal-core@49.0.4"
+        "pkg:cargo/cranelift-entity@0.136.5",
+        "pkg:cargo/wasmtime-internal-core@49.0.5"
       ],
-      "ref": "pkg:cargo/cranelift-bforest@0.136.4"
+      "ref": "pkg:cargo/cranelift-bforest@0.136.5"
     },
     {
       "dependsOn": [
         "pkg:cargo/serde@1.0.229",
         "pkg:cargo/serde_derive@1.0.229",
-        "pkg:cargo/wasmtime-internal-core@49.0.4"
+        "pkg:cargo/wasmtime-internal-core@49.0.5"
       ],
-      "ref": "pkg:cargo/cranelift-bitset@0.136.4"
+      "ref": "pkg:cargo/cranelift-bitset@0.136.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-assembler-x64-meta@0.136.4",
-        "pkg:cargo/cranelift-codegen-shared@0.136.4",
-        "pkg:cargo/cranelift-srcgen@0.136.4",
+        "pkg:cargo/cranelift-assembler-x64-meta@0.136.5",
+        "pkg:cargo/cranelift-codegen-shared@0.136.5",
+        "pkg:cargo/cranelift-srcgen@0.136.5",
         "pkg:cargo/heck@0.5.0",
-        "pkg:cargo/pulley-interpreter@49.0.4"
+        "pkg:cargo/pulley-interpreter@49.0.5"
       ],
-      "ref": "pkg:cargo/cranelift-codegen-meta@0.136.4"
+      "ref": "pkg:cargo/cranelift-codegen-meta@0.136.5"
     },
     {
       "dependsOn": [],
-      "ref": "pkg:cargo/cranelift-codegen-shared@0.136.4"
+      "ref": "pkg:cargo/cranelift-codegen-shared@0.136.5"
     },
     {
       "dependsOn": [
         "pkg:cargo/bumpalo@3.20.3",
-        "pkg:cargo/cranelift-assembler-x64@0.136.4",
-        "pkg:cargo/cranelift-bforest@0.136.4",
-        "pkg:cargo/cranelift-bitset@0.136.4",
-        "pkg:cargo/cranelift-codegen-meta@0.136.4",
-        "pkg:cargo/cranelift-codegen-shared@0.136.4",
-        "pkg:cargo/cranelift-control@0.136.4",
-        "pkg:cargo/cranelift-entity@0.136.4",
-        "pkg:cargo/cranelift-isle@0.136.4",
+        "pkg:cargo/cranelift-assembler-x64@0.136.5",
+        "pkg:cargo/cranelift-bforest@0.136.5",
+        "pkg:cargo/cranelift-bitset@0.136.5",
+        "pkg:cargo/cranelift-codegen-meta@0.136.5",
+        "pkg:cargo/cranelift-codegen-shared@0.136.5",
+        "pkg:cargo/cranelift-control@0.136.5",
+        "pkg:cargo/cranelift-entity@0.136.5",
+        "pkg:cargo/cranelift-isle@0.136.5",
         "pkg:cargo/gimli@0.33.0",
         "pkg:cargo/hashbrown@0.17.1",
         "pkg:cargo/libm@0.2.16",
         "pkg:cargo/log@0.4.34",
         "pkg:cargo/postcard@1.1.3",
-        "pkg:cargo/pulley-interpreter@49.0.4",
+        "pkg:cargo/pulley-interpreter@49.0.5",
         "pkg:cargo/regalloc2@0.15.2",
         "pkg:cargo/rustc-hash@2.1.3",
         "pkg:cargo/serde@1.0.229",
@@ -3100,50 +3100,50 @@
         "pkg:cargo/sha2@0.10.9",
         "pkg:cargo/smallvec@1.16.2",
         "pkg:cargo/target-lexicon@0.13.5",
-        "pkg:cargo/wasmtime-internal-core@49.0.4"
+        "pkg:cargo/wasmtime-internal-core@49.0.5"
       ],
-      "ref": "pkg:cargo/cranelift-codegen@0.136.4"
+      "ref": "pkg:cargo/cranelift-codegen@0.136.5"
     },
     {
       "dependsOn": [
         "pkg:cargo/arbitrary@1.4.2"
       ],
-      "ref": "pkg:cargo/cranelift-control@0.136.4"
+      "ref": "pkg:cargo/cranelift-control@0.136.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-bitset@0.136.4",
+        "pkg:cargo/cranelift-bitset@0.136.5",
         "pkg:cargo/serde@1.0.229",
         "pkg:cargo/serde_derive@1.0.229",
-        "pkg:cargo/wasmtime-internal-core@49.0.4"
+        "pkg:cargo/wasmtime-internal-core@49.0.5"
       ],
-      "ref": "pkg:cargo/cranelift-entity@0.136.4"
+      "ref": "pkg:cargo/cranelift-entity@0.136.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-codegen@0.136.4",
+        "pkg:cargo/cranelift-codegen@0.136.5",
         "pkg:cargo/hashbrown@0.17.1",
         "pkg:cargo/log@0.4.34",
         "pkg:cargo/smallvec@1.16.2",
         "pkg:cargo/target-lexicon@0.13.5"
       ],
-      "ref": "pkg:cargo/cranelift-frontend@0.136.4"
+      "ref": "pkg:cargo/cranelift-frontend@0.136.5"
     },
     {
       "dependsOn": [],
-      "ref": "pkg:cargo/cranelift-isle@0.136.4"
+      "ref": "pkg:cargo/cranelift-isle@0.136.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-codegen@0.136.4",
+        "pkg:cargo/cranelift-codegen@0.136.5",
         "pkg:cargo/libc@0.2.190",
         "pkg:cargo/target-lexicon@0.13.5"
       ],
-      "ref": "pkg:cargo/cranelift-native@0.136.4"
+      "ref": "pkg:cargo/cranelift-native@0.136.5"
     },
     {
       "dependsOn": [],
-      "ref": "pkg:cargo/cranelift-srcgen@0.136.4"
+      "ref": "pkg:cargo/cranelift-srcgen@0.136.5"
     },
     {
       "dependsOn": [
@@ -3231,7 +3231,7 @@
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.190",
-        "pkg:cargo/windows-sys@0.59.0"
+        "pkg:cargo/windows-sys@0.61.2"
       ],
       "ref": "pkg:cargo/errno@0.3.14"
     },
@@ -3670,12 +3670,12 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-bitset@0.136.4",
+        "pkg:cargo/cranelift-bitset@0.136.5",
         "pkg:cargo/log@0.4.34",
-        "pkg:cargo/pulley-macros@49.0.4",
-        "pkg:cargo/wasmtime-internal-core@49.0.4"
+        "pkg:cargo/pulley-macros@49.0.5",
+        "pkg:cargo/wasmtime-internal-core@49.0.5"
       ],
-      "ref": "pkg:cargo/pulley-interpreter@49.0.4"
+      "ref": "pkg:cargo/pulley-interpreter@49.0.5"
     },
     {
       "dependsOn": [
@@ -3683,7 +3683,7 @@
         "pkg:cargo/quote@1.0.47",
         "pkg:cargo/syn@2.0.119"
       ],
-      "ref": "pkg:cargo/pulley-macros@49.0.4"
+      "ref": "pkg:cargo/pulley-macros@49.0.5"
     },
     {
       "dependsOn": [
@@ -3776,7 +3776,7 @@
         "pkg:cargo/errno@0.3.14",
         "pkg:cargo/libc@0.2.190",
         "pkg:cargo/linux-raw-sys@0.12.1",
-        "pkg:cargo/windows-sys@0.59.0"
+        "pkg:cargo/windows-sys@0.61.2"
       ],
       "ref": "pkg:cargo/rustix@1.1.5"
     },
@@ -3921,7 +3921,7 @@
         "pkg:cargo/getrandom@0.4.3",
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/rustix@1.1.5",
-        "pkg:cargo/windows-sys@0.59.0"
+        "pkg:cargo/windows-sys@0.61.2"
       ],
       "ref": "pkg:cargo/tempfile@3.27.0"
     },
@@ -4099,9 +4099,9 @@
       "dependsOn": [
         "pkg:cargo/anyhow@1.0.104",
         "pkg:cargo/cpp_demangle@0.5.1",
-        "pkg:cargo/cranelift-bforest@0.136.4",
-        "pkg:cargo/cranelift-bitset@0.136.4",
-        "pkg:cargo/cranelift-entity@0.136.4",
+        "pkg:cargo/cranelift-bforest@0.136.5",
+        "pkg:cargo/cranelift-bitset@0.136.5",
+        "pkg:cargo/cranelift-entity@0.136.5",
         "pkg:cargo/gimli@0.33.0",
         "pkg:cargo/hashbrown@0.17.1",
         "pkg:cargo/indexmap@2.14.2",
@@ -4118,14 +4118,14 @@
         "pkg:cargo/wasm-encoder@0.258.3",
         "pkg:cargo/wasmparser@0.258.3",
         "pkg:cargo/wasmprinter@0.258.3",
-        "pkg:cargo/wasmtime-internal-component-util@49.0.4",
-        "pkg:cargo/wasmtime-internal-core@49.0.4"
+        "pkg:cargo/wasmtime-internal-component-util@49.0.5",
+        "pkg:cargo/wasmtime-internal-core@49.0.5"
       ],
-      "ref": "pkg:cargo/wasmtime-environ@49.0.4"
+      "ref": "pkg:cargo/wasmtime-environ@49.0.5"
     },
     {
       "dependsOn": [],
-      "ref": "pkg:cargo/wasmtime-internal-component-util@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-component-util@49.0.5"
     },
     {
       "dependsOn": [
@@ -4133,65 +4133,65 @@
         "pkg:cargo/libm@0.2.16",
         "pkg:cargo/serde@1.0.229"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-core@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-core@49.0.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-codegen@0.136.4",
-        "pkg:cargo/cranelift-control@0.136.4",
-        "pkg:cargo/cranelift-entity@0.136.4",
-        "pkg:cargo/cranelift-frontend@0.136.4",
-        "pkg:cargo/cranelift-native@0.136.4",
+        "pkg:cargo/cranelift-codegen@0.136.5",
+        "pkg:cargo/cranelift-control@0.136.5",
+        "pkg:cargo/cranelift-entity@0.136.5",
+        "pkg:cargo/cranelift-frontend@0.136.5",
+        "pkg:cargo/cranelift-native@0.136.5",
         "pkg:cargo/gimli@0.33.0",
         "pkg:cargo/itertools@0.14.0",
         "pkg:cargo/log@0.4.34",
         "pkg:cargo/object@0.40.0",
-        "pkg:cargo/pulley-interpreter@49.0.4",
+        "pkg:cargo/pulley-interpreter@49.0.5",
         "pkg:cargo/smallvec@1.16.2",
         "pkg:cargo/target-lexicon@0.13.5",
         "pkg:cargo/thiserror@2.0.21",
         "pkg:cargo/wasmparser@0.258.3",
-        "pkg:cargo/wasmtime-environ@49.0.4",
-        "pkg:cargo/wasmtime-internal-core@49.0.4",
-        "pkg:cargo/wasmtime-internal-unwinder@49.0.4",
-        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4"
+        "pkg:cargo/wasmtime-environ@49.0.5",
+        "pkg:cargo/wasmtime-internal-core@49.0.5",
+        "pkg:cargo/wasmtime-internal-unwinder@49.0.5",
+        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-cranelift@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-cranelift@49.0.5"
     },
     {
       "dependsOn": [
         "pkg:cargo/cc@1.6.0",
         "pkg:cargo/libc@0.2.190",
         "pkg:cargo/rustix@1.1.5",
-        "pkg:cargo/wasmtime-environ@49.0.4",
-        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4",
+        "pkg:cargo/wasmtime-environ@49.0.5",
+        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5",
         "pkg:cargo/windows-sys@0.61.2"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-fiber@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-fiber@49.0.5"
     },
     {
       "dependsOn": [
         "pkg:cargo/cc@1.6.0",
-        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4"
+        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-jit-debug@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-jit-debug@49.0.5"
     },
     {
       "dependsOn": [
         "pkg:cargo/libc@0.2.190",
-        "pkg:cargo/wasmtime-internal-core@49.0.4",
+        "pkg:cargo/wasmtime-internal-core@49.0.5",
         "pkg:cargo/windows-sys@0.61.2"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.5"
     },
     {
       "dependsOn": [
-        "pkg:cargo/cranelift-codegen@0.136.4",
+        "pkg:cargo/cranelift-codegen@0.136.5",
         "pkg:cargo/log@0.4.34",
         "pkg:cargo/object@0.40.0",
-        "pkg:cargo/wasmtime-environ@49.0.4"
+        "pkg:cargo/wasmtime-environ@49.0.5"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-unwinder@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-unwinder@49.0.5"
     },
     {
       "dependsOn": [
@@ -4199,7 +4199,7 @@
         "pkg:cargo/quote@1.0.47",
         "pkg:cargo/syn@2.0.119"
       ],
-      "ref": "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4"
+      "ref": "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5"
     },
     {
       "dependsOn": [
@@ -4216,24 +4216,24 @@
         "pkg:cargo/object@0.40.0",
         "pkg:cargo/once_cell@1.21.4",
         "pkg:cargo/postcard@1.1.3",
-        "pkg:cargo/pulley-interpreter@49.0.4",
+        "pkg:cargo/pulley-interpreter@49.0.5",
         "pkg:cargo/rustix@1.1.5",
         "pkg:cargo/serde@1.0.229",
         "pkg:cargo/serde_derive@1.0.229",
         "pkg:cargo/smallvec@1.16.2",
         "pkg:cargo/target-lexicon@0.13.5",
         "pkg:cargo/wasmparser@0.258.3",
-        "pkg:cargo/wasmtime-environ@49.0.4",
-        "pkg:cargo/wasmtime-internal-core@49.0.4",
-        "pkg:cargo/wasmtime-internal-cranelift@49.0.4",
-        "pkg:cargo/wasmtime-internal-fiber@49.0.4",
-        "pkg:cargo/wasmtime-internal-jit-debug@49.0.4",
-        "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.4",
-        "pkg:cargo/wasmtime-internal-unwinder@49.0.4",
-        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.4",
+        "pkg:cargo/wasmtime-environ@49.0.5",
+        "pkg:cargo/wasmtime-internal-core@49.0.5",
+        "pkg:cargo/wasmtime-internal-cranelift@49.0.5",
+        "pkg:cargo/wasmtime-internal-fiber@49.0.5",
+        "pkg:cargo/wasmtime-internal-jit-debug@49.0.5",
+        "pkg:cargo/wasmtime-internal-jit-icache-coherence@49.0.5",
+        "pkg:cargo/wasmtime-internal-unwinder@49.0.5",
+        "pkg:cargo/wasmtime-internal-versioned-export-macros@49.0.5",
         "pkg:cargo/windows-sys@0.61.2"
       ],
-      "ref": "pkg:cargo/wasmtime@49.0.4"
+      "ref": "pkg:cargo/wasmtime@49.0.5"
     },
     {
       "dependsOn": [
@@ -4246,7 +4246,7 @@
     },
     {
       "dependsOn": [
-        "pkg:cargo/windows-sys@0.59.0"
+        "pkg:cargo/windows-sys@0.61.2"
       ],
       "ref": "pkg:cargo/winapi-util@0.1.11"
     },
@@ -4436,7 +4436,7 @@
         "pkg:cargo/thiserror@2.0.21",
         "pkg:cargo/walrus@0.27.2",
         "pkg:cargo/wasm-bindgen@0.2.129",
-        "pkg:cargo/wasmtime@49.0.4",
+        "pkg:cargo/wasmtime@49.0.5",
         "pkg:cargo/yara-x-macros@1.21.0",
         "pkg:cargo/yara-x-parser@1.21.0",
         "pkg:cargo/yara-x-proto@1.21.0"

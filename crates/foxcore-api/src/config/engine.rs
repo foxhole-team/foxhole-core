@@ -198,6 +198,11 @@ impl EngineConfig {
                 "I2P routes require traffic.i2p_enabled to be true or auto".into(),
             ));
         }
+        if !self.dns.packet_resolvers.is_empty() && !self.outbound.is_packet_tunnel() {
+            return Err(ConfigError::Invalid(
+                "dns.packet_resolvers requires a packet-tunnel primary".into(),
+            ));
+        }
         // An L3 peer cannot restore a clearnet name from its synthetic address.
         if self.outbound.is_packet_tunnel() && self.dns.mode == DnsMode::FakeIp {
             return Err(ConfigError::Invalid(format!(

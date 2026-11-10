@@ -9,7 +9,7 @@ fn ordinary_tls_chrome_is_honoured_not_reported_as_dropped() {
         imported.dropped
     );
     let value = serde_json::to_value(imported.outbound).unwrap();
-    assert_eq!(value["tls"]["fingerprint"], "chrome_151");
+    assert_eq!(value["tls"]["fingerprint"], "chrome_156");
     assert_eq!(value["tls"]["alpn"], serde_json::json!(["http/1.1"]));
     assert_eq!(value["tls"]["server_name"], "certificate.example");
     assert_eq!(value["transport"]["type"], "websocket");

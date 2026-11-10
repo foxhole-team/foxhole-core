@@ -121,7 +121,12 @@ impl FlowEngine {
             self.emit_block(BlockReason::DnsEncryptedBypass, IpTransport::Udp, &context);
             return;
         }
-        if !bind_dns_context(&mut context, &policy.routes, &policy.dns) {
+        if !bind_dns_context_for_policy(
+            &mut context,
+            &policy.routes,
+            &policy.dns,
+            self.policy.packet_dns_authority(&policy),
+        ) {
             self.metrics.block_flow();
             self.emit_block(BlockReason::Policy, context.transport, &context);
             return;

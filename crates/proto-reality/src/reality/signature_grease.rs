@@ -4,7 +4,7 @@ pub(super) fn vector(encoded: &[u8], grease: u16) -> io::Result<Vec<u8>> {
     let bytes = grease.to_be_bytes();
     if encoded.len() < 2
         || encoded.len() > 65533
-        || encoded.len() % 2 != 0
+        || !encoded.len().is_multiple_of(2)
         || usize::from(u16::from_be_bytes([encoded[0], encoded[1]])) != encoded.len() - 2
         || bytes[0] != bytes[1]
         || bytes[0] & 0x0f != 0x0a
@@ -28,7 +28,10 @@ mod tests {
     #[test]
     fn known_wire_prefix_and_legacy_tail_are_exact() {
         let legacy = [0, 4, 4, 3, 8, 4];
-        assert_eq!(vector(&legacy, 0x5a5a).unwrap(), [0, 6, 0x5a, 0x5a, 4, 3, 8, 4]);
+        assert_eq!(
+            vector(&legacy, 0x5a5a).unwrap(),
+            [0, 6, 0x5a, 0x5a, 4, 3, 8, 4]
+        );
         assert_eq!(legacy, [0, 4, 4, 3, 8, 4]);
     }
 

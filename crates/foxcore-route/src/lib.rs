@@ -229,6 +229,37 @@ impl RouteTable {
         !conflict
     }
 
+    /// Resolve names bound to the same identity by the selected packet DNS resolver.
+    pub fn constrain_with_packet_dns_bindings(
+        &self,
+        flow: &mut FlowContext,
+        names: &[String],
+    ) -> bool {
+        flow.domain_hint = None;
+        if *self.decide(flow) == RouteAction::Block || names.is_empty() {
+            return self.constrain_with_dns_hints(flow, names);
+        }
+        // A shared address grants Direct only when every observed name has an
+        // explicit domain allowance. Application and numeric denials remain authoritative.
+        let unanimous_direct = names.iter().all(|name| {
+            let mut candidate = flow.clone();
+            candidate.domain_hint = Some(name.clone());
+            let explanation = self.explain(&candidate);
+            explanation.action == RouteAction::Direct
+                && explanation.route_rule_applied
+                && explanation.route_rule_index.is_some_and(|index| {
+                    let rule = &self.rules[index];
+                    !rule.exact_domains.is_empty() || !rule.domain_suffixes.is_empty()
+                })
+        });
+        if unanimous_direct {
+            flow.domain_hint = names.first().cloned();
+            true
+        } else {
+            self.constrain_with_dns_hints(flow, names)
+        }
+    }
+
     pub fn tor_enabled(&self) -> bool {
         self.tor_enabled
     }
@@ -553,6 +584,54 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn packet_dns_bindings_require_unanimous_explicit_direct_rules() {
+        let table = RouteTable::compile(
+            vec![RouteRule {
+                domain_suffixes: vec!["org".into()],
+                action: RouteAction::Direct,
+                ..empty_rule(RouteAction::Direct)
+            }],
+            RouteAction::Outbound(OutboundId("primary".into())),
+        );
+        let flow = FlowContext::new(1, IpTransport::Tcp, Destination::new("203.0.113.9", 443));
+        let mut inferred = flow.clone();
+        assert!(table.constrain_with_dns_hints(&mut inferred, &["a.org".into()]));
+        assert!(matches!(table.decide(&inferred), RouteAction::Outbound(_)));
+        let mut bound = flow.clone();
+        assert!(
+            table.constrain_with_packet_dns_bindings(&mut bound, &["a.org".into(), "b.org".into()])
+        );
+        assert_eq!(table.decide(&bound), &RouteAction::Direct);
+        for names in [vec!["a.org".into(), "b.com".into()], vec![]] {
+            let mut ambiguous = flow.clone();
+            let accepted = table.constrain_with_packet_dns_bindings(&mut ambiguous, &names);
+            assert!(!accepted || *table.decide(&ambiguous) != RouteAction::Direct);
+        }
+    }
+
+    #[test]
+    fn packet_dns_bindings_preserve_numeric_blocks_and_kill_switch() {
+        let table = RouteTable::compile(
+            vec![
+                RouteRule {
+                    domain_suffixes: vec!["org".into()],
+                    action: RouteAction::Direct,
+                    ..empty_rule(RouteAction::Direct)
+                },
+                RouteRule {
+                    cidrs: vec!["203.0.113.0/24".parse().unwrap()],
+                    action: RouteAction::Block,
+                    ..empty_rule(RouteAction::Direct)
+                },
+            ],
+            RouteAction::Outbound(OutboundId("primary".into())),
+        );
+        let mut flow = FlowContext::new(1, IpTransport::Tcp, Destination::new("203.0.113.9", 443));
+        assert!(table.constrain_with_packet_dns_bindings(&mut flow, &["a.org".into()]));
+        assert_eq!(table.decide(&flow), &RouteAction::Block);
+    }
 
     #[test]
     fn shared_addresses_cannot_weaken_routes_by_response_order() {

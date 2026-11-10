@@ -49,11 +49,19 @@ async fn a_reality_grpc_link_builds_an_outbound_that_speaks_reality_first() {
     let link_text = link(port, "type=grpc&serviceName=fox&mode=gun");
 
     let (outbound, config, dropped) = outbound_from(&link_text).await;
-    assert!(dropped.is_empty(), "fp=qq is implemented: {dropped:?}");
+    assert_eq!(
+        dropped,
+        vec!["fp".to_owned()],
+        "only the intentional legacy QQ compatibility substitution is reported"
+    );
     let OutboundConfig::Vless(vless) = &config else {
         panic!("profile must be VLESS");
     };
     assert!(vless.reality.is_some());
+    assert_eq!(
+        serde_json::to_value(vless.reality.as_ref().unwrap()).unwrap()["fingerprint"],
+        "chrome_156"
+    );
     assert!(!vless.tls.enabled);
     assert!(matches!(
         vless.transport,
@@ -116,8 +124,13 @@ async fn reality_builds_an_outbound_under_every_stream_transport() {
         "type=httpupgrade&path=%2Fup",
     ] {
         let link_text = link(443, transport);
-        let (_outbound, _config, dropped) = outbound_from(&link_text).await;
-        assert!(dropped.is_empty(), "for {transport}: {dropped:?}");
+        let (_outbound, config, dropped) = outbound_from(&link_text).await;
+        assert_eq!(dropped, vec!["fp".to_owned()], "for {transport}");
+        assert_eq!(
+            serde_json::to_value(config).unwrap()["reality"]["fingerprint"],
+            "chrome_156",
+            "legacy QQ must select the reported compatibility profile for {transport}"
+        );
     }
 }
 

@@ -6,7 +6,7 @@ Load only in an ordinary non-exported isolatedProcess service. JNI rejects other
 
 Rule source provenance/signature and package identity are host responsibilities. Inputs, syntax, module imports, compilation artifacts, scan ranges, matches and diagnostics are bounded. No third-party compiled blob is deserialized. Complete evaluation covers only the declared input range and rule profile; no malware/safety verdict or dynamic-code coverage follows from zero matches.
 
-YARA-X 1.21.0 / Wasmtime 49.0.4 uses Pulley execution; Cargo features include Cranelift. Required third-party license text and notices are in `third-party/`. The existing FoxCore project license applies to this adapter; upstream dependencies retain their terms.
+YARA-X 1.21.0 / Wasmtime 49.0.5 uses Pulley execution; Cargo features include Cranelift. Required third-party license text and notices are in `third-party/`. The existing FoxCore project license applies to this adapter; upstream dependencies retain their terms.
 
 The isolated Android bridge exposes `nativeIsReadonlyRegularFd(fd)` for API 26 and later. It duplicates the borrowed descriptor, verifies `fstat` regular-file type and `fcntl(F_GETFL)` read-only access, and closes only the owned duplicate. It does not read file contents, change the shared file position, or create a compiled rule session. The Android library still refuses loading outside the standard isolated UID range.
 

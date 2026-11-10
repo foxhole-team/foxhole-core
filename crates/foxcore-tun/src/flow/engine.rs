@@ -40,6 +40,10 @@ impl FlowEngine {
             connections,
         } = context;
         Self {
+            #[cfg(feature = "wireguard")]
+            packet_dns: Arc::new(crate::packet_dns::PacketDnsTracker::for_policy(
+                policy.clone(),
+            )),
             generation: policy.generation,
             outbounds,
             direct,
@@ -134,7 +138,7 @@ impl FlowEngine {
         relay: crate::relay::PacketTunnelRelay,
         cancel: CancellationToken,
     ) -> io::Result<()> {
-        use crate::ingress::{IngressChannels, StackDevice, classify};
+        use crate::ingress::{IngressChannels, StackDevice, classify_with_dns};
         use crate::split::PacketSplitter;
 
         self.shutdown = cancel.clone();
@@ -156,7 +160,8 @@ impl FlowEngine {
         ));
 
         let engine = self.clone();
-        tasks.spawn(classify(
+        let packet_dns = self.packet_dns.clone();
+        tasks.spawn(classify_with_dns(
             from_tun,
             PacketSplitter::new(
                 self.runtime.max_tcp_flows + self.runtime.max_udp_flows,
@@ -170,6 +175,7 @@ impl FlowEngine {
                     engine.decide_packet(key).await.voided_by(policy_revoked)
                 }
             },
+            Some(Arc::new(move |packet| packet_dns.query(packet))),
             IngressChannels {
                 to_tunnel,
                 to_stack,
@@ -183,6 +189,7 @@ impl FlowEngine {
         let relay_writer = to_writer.clone();
         let relay = relay
             .with_accounting(self.connections.tunnel().clone())
+            .with_packet_dns(self.packet_dns.clone())
             .with_events(self.events.clone());
         tasks.spawn(async move {
             let _ = relay.run(tunnel_inbox, relay_writer, relay_cancel).await;
@@ -275,7 +282,40 @@ impl FlowEngine {
         if is_onion(&context.destination.host) || is_i2p(&context.destination.host) {
             return PacketDecision::new(PacketRoute::Stack);
         }
-        if !bind_dns_context(&mut context, &policy.routes, &policy.dns) {
+        if context.destination.port == 53
+            && policy
+                .dns_config
+                .packet_resolvers
+                .contains(&key.destination)
+        {
+            if *policy.routes.decide(&context) == RouteAction::Block {
+                return PacketDecision::new(PacketRoute::Block);
+            }
+            let identity = context
+                .uid
+                .map(|uid| foxcore_dns::DnsIdentity::new(uid, context.packages.clone()));
+            if policy.routes.requires_domain_hints() && identity.is_none() {
+                return PacketDecision::new(PacketRoute::Block);
+            }
+            if !self.packet_dns.register(
+                key,
+                identity,
+                policy.dns.clone(),
+                policy.revocation.clone(),
+            ) {
+                self.metrics.block_flow();
+                self.emit_block(BlockReason::Policy, transport, &context);
+                return PacketDecision::new(PacketRoute::Block);
+            }
+            // Profile DNS always stays inside WireGuard, including for a Direct application.
+            return PacketDecision::new(PacketRoute::Tunnel);
+        }
+        if !bind_dns_context_for_policy(
+            &mut context,
+            &policy.routes,
+            &policy.dns,
+            self.policy.packet_dns_authority(&policy),
+        ) {
             self.metrics.block_flow();
             self.emit_block(BlockReason::Policy, transport, &context);
             return PacketDecision::new(PacketRoute::Block);
@@ -424,7 +464,12 @@ impl FlowEngine {
             Self::close_towards_app(&mut stream).await;
             return;
         }
-        if !bind_dns_context(&mut context, &policy.routes, &policy.dns) {
+        if !bind_dns_context_for_policy(
+            &mut context,
+            &policy.routes,
+            &policy.dns,
+            self.policy.packet_dns_authority(&policy),
+        ) {
             self.metrics.block_flow();
             self.emit_block(BlockReason::Policy, context.transport, &context);
             Self::close_towards_app(&mut stream).await;

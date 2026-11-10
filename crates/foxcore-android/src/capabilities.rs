@@ -1468,7 +1468,7 @@ mod tests {
 
         fn short(name: &str) -> &str {
             match name {
-                "chrome_151" | "chrome_133" | "chrome_131" => "chrome",
+                "chrome_156" | "chrome_151" | "chrome_133" | "chrome_131" => "chrome",
                 "edge_85" => "edge",
                 "safari_26_3" => "safari",
                 "ios_14" => "ios",

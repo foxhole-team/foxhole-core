@@ -268,119 +268,119 @@
   },
   {
     "name": "cranelift-assembler-x64",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": null,
     "files": {
-      "third-party/cranelift-assembler-x64-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-assembler-x64-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-assembler-x64-meta",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": null,
     "files": {
-      "third-party/cranelift-assembler-x64-meta-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-assembler-x64-meta-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-bforest",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-bforest-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-bforest-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-bitset",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-bitset-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-bitset-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-codegen",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-codegen-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-codegen-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-codegen-meta",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-codegen-meta-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-codegen-meta-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-codegen-shared",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-codegen-shared-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-codegen-shared-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-control",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-control-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-control-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-entity",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-entity-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-entity-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-frontend",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-frontend-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-frontend-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-isle",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime/tree/main/cranelift/isle",
     "files": {
-      "third-party/cranelift-isle-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-isle-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-native",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-native-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-native-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "cranelift-srcgen",
-    "version": "0.136.4",
+    "version": "0.136.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/cranelift-srcgen-0.136.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/cranelift-srcgen-0.136.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
@@ -1185,20 +1185,20 @@
   },
   {
     "name": "pulley-interpreter",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime/tree/main/pulley",
     "files": {
-      "third-party/pulley-interpreter-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/pulley-interpreter-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "pulley-macros",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime/tree/main/pulley/macros",
     "files": {
-      "third-party/pulley-macros-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/pulley-macros-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
@@ -1827,95 +1827,95 @@
   },
   {
     "name": "wasmtime",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
-      "third-party/wasmtime-49.0.4/src/runtime/vm/gc/enabled/copying.rs": "2f014aa49e4380c586f95edbfa900a78538c41724cbc7f81193fc1327313fc29"
+      "third-party/wasmtime-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "third-party/wasmtime-49.0.5/src/runtime/vm/gc/enabled/copying.rs": "2f014aa49e4380c586f95edbfa900a78538c41724cbc7f81193fc1327313fc29"
     }
   },
   {
     "name": "wasmtime-environ",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-environ-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
-      "third-party/wasmtime-environ-49.0.4/src/gc/copying.rs": "842ff09ff6aeaa4a634ab1849b176465b670c0b2daed90a318413f2d2d161e29"
+      "third-party/wasmtime-environ-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "third-party/wasmtime-environ-49.0.5/src/gc/copying.rs": "842ff09ff6aeaa4a634ab1849b176465b670c0b2daed90a318413f2d2d161e29"
     }
   },
   {
     "name": "wasmtime-internal-component-util",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-component-util-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-component-util-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "wasmtime-internal-core",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": null,
     "files": {
-      "third-party/wasmtime-internal-core-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-core-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "wasmtime-internal-cranelift",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-cranelift-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
-      "third-party/wasmtime-internal-cranelift-49.0.4/src/func_environ/gc/copying.rs": "a6ac6f742b68c1390d78c973b6e31809e2ad1a84366684b09e9dfd84b231b733"
+      "third-party/wasmtime-internal-cranelift-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5",
+      "third-party/wasmtime-internal-cranelift-49.0.5/src/func_environ/gc/copying.rs": "a6ac6f742b68c1390d78c973b6e31809e2ad1a84366684b09e9dfd84b231b733"
     }
   },
   {
     "name": "wasmtime-internal-fiber",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-fiber-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-fiber-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "wasmtime-internal-jit-debug",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-jit-debug-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-jit-debug-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "wasmtime-internal-jit-icache-coherence",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-jit-icache-coherence-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-jit-icache-coherence-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "wasmtime-internal-unwinder",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-unwinder-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-unwinder-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {
     "name": "wasmtime-internal-versioned-export-macros",
-    "version": "49.0.4",
+    "version": "49.0.5",
     "license": "Apache-2.0 WITH LLVM-exception",
     "repository": "https://github.com/bytecodealliance/wasmtime",
     "files": {
-      "third-party/wasmtime-internal-versioned-export-macros-49.0.4/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
+      "third-party/wasmtime-internal-versioned-export-macros-49.0.5/LICENSE": "268872b9816f90fd8e85db5a28d33f8150ebb8dd016653fb39ef1f94f2686bc5"
     }
   },
   {

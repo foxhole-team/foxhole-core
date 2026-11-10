@@ -1,3 +1,5 @@
+#[cfg(feature = "wireguard")]
+mod packet_dns;
 use super::*;
 use crate::FlowMetrics;
 use crate::continuity::ContinuityGate;

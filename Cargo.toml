@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-exclude = ["vendor/rustls"]
+exclude = ["vendor/rustls", "vendor/libsqlite3-sys"]
 members = [
     "crates/foxcore-api",
     "crates/foxcore-dialer",
@@ -36,7 +36,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.0.3"
+version = "1.0.4"
 edition = "2024"
 rust-version = "1.92"
 license = "GPL-3.0-or-later"
@@ -121,3 +121,4 @@ strip = "symbols"
 
 [patch.crates-io]
 rustls = { path = "vendor/rustls" }
+libsqlite3-sys = { path = "vendor/libsqlite3-sys" }

@@ -18,6 +18,10 @@ mod metrics;
 /// The bounded TUN network stack and its packet-level regression surface.
 pub mod netstack;
 #[cfg(feature = "wireguard")]
+mod packet_dns;
+#[cfg(feature = "wireguard")]
+mod packet_dns_ttl;
+#[cfg(feature = "wireguard")]
 mod relay;
 mod split;
 

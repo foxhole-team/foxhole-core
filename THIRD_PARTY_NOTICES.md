@@ -167,3 +167,7 @@ notice and original Apache-2.0/ISC/MIT licence texts are retained under
 `config/source-forks/rustls-0.23.46*`, `patches/rustls-0.23.46-chrome151.patch`
 and `vendor/rustls/LICENSE-*`. Its source-bound identity and provenance are
 validated by `scripts/rustls-fork-origin.py` and included by `scripts/sbom.sh`.
+
+## SQLite WAL security backport
+
+The vendored libsqlite3-sys 0.37.0 source includes the upstream SQLite e5bf119821f25be1d7f10ef0a2edbe175289166e fix for CVE-2026-119375 in both bundled SQLite and SQLCipher amalgamations. See config/source-forks/libsqlite3-sys-0.37.0.NOTICE.md and its exact source manifest. No upstream version or prior artifact is relabelled.

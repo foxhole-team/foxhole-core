@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.4 - 2026-11-09
+
+- Backport SQLite WAL page initialization for CVE-2026-119375; preserve the pinned Arti API.
+- Update Sentinel to Wasmtime 49.0.5 and matching Cranelift security fixes.
+- Support managed WireGuard profile DNS for domain routes, including Direct; isolate Android resolver caches and retain only exact authority/identity name bindings across clean handovers.
+- Drop an initial packet decision revoked while flow attribution was pending.
+
 ## 1.0.3
 
 - Fixed DNS routing in application scenarios.

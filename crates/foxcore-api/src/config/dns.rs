@@ -78,6 +78,9 @@ pub enum DnsUpstream {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct DnsConfig {
+    /// Explicit profile resolvers whose authenticated L3 replies may bind domain routes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub packet_resolvers: Vec<std::net::IpAddr>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub advertise: Option<String>,
     /// Kept for schema-v1 compatibility. New configurations should use `upstreams`.
@@ -313,6 +316,7 @@ impl DnsBlocklistConfig {
 impl Default for DnsConfig {
     fn default() -> Self {
         Self {
+            packet_resolvers: Vec::new(),
             advertise: None,
             upstream: None,
             mode: DnsMode::RealIp,
@@ -406,6 +410,28 @@ impl DnsConfig {
     }
 
     pub(super) fn validate(&self) -> Result<(), ConfigError> {
+        if !self.packet_resolvers.is_empty() {
+            let unique: HashSet<_> = self.packet_resolvers.iter().collect();
+            if self.packet_resolvers.len() > 8
+                || unique.len() != self.packet_resolvers.len()
+                || self.packet_resolvers.iter().any(|ip| {
+                    ip.is_unspecified()
+                        || ip.is_multicast()
+                        || ip.is_loopback()
+                        || matches!(ip, std::net::IpAddr::V4(v4) if v4.is_broadcast())
+                        || matches!(ip, std::net::IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some())
+                })
+            {
+                return Err(ConfigError::Invalid(
+                    "dns.packet_resolvers requires 1..=8 distinct unicast profile addresses".into(),
+                ));
+            }
+            if self.mode != DnsMode::RealIp || self.intercepts() {
+                return Err(ConfigError::Invalid(
+                    "dns.packet_resolvers requires raw real-IP DNS without an interceptor".into(),
+                ));
+            }
+        }
         self.blocklist.validate()?;
         if self.rule_sets.len() > MAX_DNS_RULE_SETS {
             return Err(ConfigError::Invalid(

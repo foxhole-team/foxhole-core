@@ -31,6 +31,7 @@ pub struct DnsCache {
     capacity: usize,
     state: Mutex<State>,
     fake: Arc<Mutex<FakeState>>,
+    packet_hints: Arc<Mutex<PacketHintState>>,
     clock: Arc<dyn Fn() -> Instant + Send + Sync>,
 }
 
@@ -83,6 +84,11 @@ struct RouteHints {
     overflow_until: Option<Instant>,
 }
 
+struct PacketHintState {
+    capacity: usize,
+    hints: HashMap<([u8; 32], DnsIdentity, IpAddr), RouteHints>,
+}
+
 #[derive(Default)]
 struct State {
     sequence: u64,
@@ -132,10 +138,15 @@ struct FakeEntry {
 
 impl DnsCache {
     pub fn new(capacity: usize) -> Self {
+        let capacity = capacity.max(1);
         Self {
-            capacity: capacity.max(1),
+            capacity,
             state: Mutex::new(State::default()),
             fake: Arc::new(Mutex::new(FakeState::default())),
+            packet_hints: Arc::new(Mutex::new(PacketHintState {
+                capacity,
+                hints: HashMap::new(),
+            })),
             clock: Arc::new(Instant::now),
         }
     }
@@ -143,7 +154,8 @@ impl DnsCache {
     /// Create the cache for a new policy revision. Reverse and fake-IP
     /// mappings are migrated so active destinations remain routable, while
     /// upstream response entries are deliberately dropped to prevent answers
-    /// crossing DNS policy boundaries.
+    /// crossing DNS policy boundaries. Packet bindings retain their separate
+    /// immutable peer/DNS authority namespace and original shared admission cap.
     pub fn fork_for_policy(&self, capacity: usize) -> Self {
         let capacity = capacity.max(1);
         let now = (self.clock)();
@@ -163,6 +175,8 @@ impl DnsCache {
             capacity,
             state: Mutex::new(state),
             fake: self.fake.clone(),
+            // Forks share the original bounded store, never a fresh per-policy budget.
+            packet_hints: self.packet_hints.clone(),
             clock: self.clock.clone(),
         }
     }
@@ -176,8 +190,7 @@ impl DnsCache {
     /// same shape as D1, since a wrong address resolves, connects and fails
     /// while every counter stays clean.
     ///
-    /// Three maps are deliberately **not** touched, and the distinction is the
-    /// whole point of this being a method rather than a new cache:
+    /// The retained maps have distinct roles:
     ///
     /// * `fake_by_domain` / `fake_reverse` — applications are holding those
     ///   addresses right now. Invalidating them does not make anything more
@@ -187,6 +200,8 @@ impl DnsCache {
     ///   destination no longer maps back to a domain.
     /// * `reverse` — historical IP→name telemetry, never routing authority.
     ///   Attributed routing hints are cleared with the response cache.
+    /// * `packet_hints` — authenticated name bindings scoped to the exact
+    ///   peer/DNS authority and identity, never routing permission.
     ///
     /// This is exactly the split [`DnsCache::fork_for_policy`] already makes
     /// for a reload, for the same reason.
@@ -287,6 +302,76 @@ impl DnsCache {
         let now = (self.clock)();
         let mut state = lock(&self.state);
         let hints = state.route_hints.get_mut(&(identity.clone(), address))?;
+        if hints.overflow_until.is_some_and(|expiry| expiry > now) {
+            return None;
+        }
+        hints.names.retain(|_, expiry| *expiry > now);
+        if hints.names.is_empty() {
+            return None;
+        }
+        let mut names: Vec<_> = hints.names.keys().cloned().collect();
+        names.sort();
+        Some(names)
+    }
+
+    /// Learn name bindings from an authenticated packet's original paired DNS answer.
+    /// The caller supplies the current immutable peer/DNS configuration authority;
+    /// these bindings never replace current route, app, numeric or kill-switch checks.
+    pub fn learn_packet_route_hints(
+        &self,
+        authority: [u8; 32],
+        query: &[u8],
+        original_response: &[u8],
+        identity: &DnsIdentity,
+    ) {
+        if response_metadata(query, original_response).is_none() {
+            return;
+        }
+        let Some(answers) = parse_addresses(original_response) else {
+            return;
+        };
+        let now = (self.clock)();
+        let mut store = lock(&self.packet_hints);
+        let capacity = store.capacity;
+        store.hints.retain(|_, hints| {
+            hints.names.retain(|_, expiry| *expiry > now);
+            hints.overflow_until.is_some_and(|expiry| expiry > now) || !hints.names.is_empty()
+        });
+        for answer in answers {
+            if answer.ttl == 0 {
+                continue;
+            }
+            let key = (authority, identity.clone(), answer.address);
+            if !store.hints.contains_key(&key) && store.hints.len() >= capacity {
+                continue;
+            }
+            let hints = store.hints.entry(key).or_default();
+            let expires = now + Duration::from_secs(u64::from(answer.ttl.min(MAX_TTL)));
+            if hints.names.contains_key(&answer.domain) || hints.names.len() < 16 {
+                hints
+                    .names
+                    .entry(answer.domain)
+                    .and_modify(|previous| *previous = (*previous).max(expires))
+                    .or_insert(expires);
+            } else {
+                hints.overflow_until = Some(hints.overflow_until.unwrap_or(expires).max(expires));
+            }
+        }
+    }
+
+    /// Read only the current authority/identity's packet bindings. Missing or
+    /// overflowing bindings grant no permission; other hint namespaces are ignored.
+    pub fn packet_route_hints(
+        &self,
+        authority: [u8; 32],
+        identity: &DnsIdentity,
+        address: IpAddr,
+    ) -> Option<Vec<String>> {
+        let now = (self.clock)();
+        let mut store = lock(&self.packet_hints);
+        let hints = store
+            .hints
+            .get_mut(&(authority, identity.clone(), address))?;
         if hints.overflow_until.is_some_and(|expiry| expiry > now) {
             return None;
         }

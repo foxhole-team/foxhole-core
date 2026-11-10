@@ -210,6 +210,7 @@ impl PeerEndpoint {
 
 /// One peer's data path: state machine, protected socket, address translation.
 pub struct PacketTunnelRelay {
+    pub(crate) packet_dns: Option<Arc<crate::packet_dns::PacketDnsTracker>>,
     pub(super) tunnel: PeerTunnel,
     pub(super) socket: UdpSocket,
     pub(super) endpoint: PeerEndpoint,

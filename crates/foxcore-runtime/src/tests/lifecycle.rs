@@ -650,3 +650,29 @@ fn retained_tun_worker_replacement_preserves_unexpired_fake_dns_answers() {
         "The same master TUN still serves applications holding {issued}; another name received {other}, and original name moved to {after} before its300s TTL expired"
     );
 }
+
+#[test]
+fn packet_dns_resolvers_cannot_be_reloaded_onto_a_proxy_generation() {
+    let (tun, _peer) = UnixStream::pair().unwrap();
+    let runtime = CoreRuntime::start(
+        55,
+        vless_engine_config(),
+        OwnedFd::from(tun),
+        SocketCallbacks::none(),
+    )
+    .unwrap();
+    let failure = runtime
+        .reload_policy(PolicyConfig {
+            expected_revision: Some(1),
+            dns: DnsConfig {
+                packet_resolvers: vec!["10.8.0.1".parse().unwrap()],
+                ..Default::default()
+            },
+            routes: Vec::new(),
+            traffic: TrafficPolicyConfig::default(),
+        })
+        .expect_err("packet DNS bindings require a packet-tunnel primary");
+    assert_eq!(failure.refusal, PolicyRefusal::Invalid);
+    assert_eq!(runtime.policy_revision(), 1);
+    assert_eq!(runtime.stop(), StopResult::Stopped);
+}

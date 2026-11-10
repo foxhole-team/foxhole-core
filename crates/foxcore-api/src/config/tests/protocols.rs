@@ -966,3 +966,34 @@ fn refuses_hysteria2_keepalive_that_cannot_hold_the_idle_timeout_open() {
     }
     assert!(hysteria2_timing(r#","keepalive_ms":14999,"idle_timeout_ms":30000"#).is_ok());
 }
+
+#[test]
+fn packet_dns_resolvers_are_explicit_and_exclusive_to_raw_packet_dns() {
+    let wireguard = format!(
+        r#"{{"type":"wireguard","server":"edge.example","port":51820,"private_key":"{WG_PRIVATE_KEY}","peer_public_key":"{WG_PEER_PUBLIC_KEY}","address":["10.8.0.2/32"],"allowed_ips":["0.0.0.0/0"]}}"#
+    );
+    let make = |outbound: &str, dns: &str| {
+        format!(
+            r#"{{"schema_version":1,"outbound":{outbound},"tun":{{"mtu":1400,"ipv4":"10.0.0.2"}},"dns":{dns}}}"#
+        )
+    };
+    EngineConfig::parse(&make(
+        &wireguard,
+        r#"{"mode":"real_ip","packet_resolvers":["10.8.0.1","fd00::1"]}"#,
+    ))
+    .expect("explicit profile DNS stays inside the packet tunnel");
+    for dns in [
+        r#"{"mode":"fake_ip","packet_resolvers":["10.8.0.1"]}"#,
+        r#"{"advertise":"10.8.0.1","packet_resolvers":["10.8.0.1"]}"#,
+        r#"{"packet_resolvers":["0.0.0.0"]}"#,
+        r#"{"packet_resolvers":["ff02::1"]}"#,
+        r#"{"packet_resolvers":["10.8.0.1","10.8.0.1"]}"#,
+    ] {
+        assert!(
+            EngineConfig::parse(&make(&wireguard, dns)).is_err(),
+            "{dns}"
+        );
+    }
+    let proxy = r#"{"type":"vless","server":"edge.example","port":443,"uuid":"d0cf0001-0000-4000-8000-000000000000"}"#;
+    assert!(EngineConfig::parse(&make(proxy, r#"{"packet_resolvers":["10.8.0.1"]}"#)).is_err());
+}

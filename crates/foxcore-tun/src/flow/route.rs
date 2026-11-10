@@ -469,10 +469,20 @@ pub(crate) fn context_for(
     context
 }
 
+#[cfg(test)]
 pub(crate) fn bind_dns_context(
     context: &mut FlowContext,
     routes: &RouteTable,
     dns: &DnsCache,
+) -> bool {
+    bind_dns_context_for_policy(context, routes, dns, None)
+}
+
+pub(crate) fn bind_dns_context_for_policy(
+    context: &mut FlowContext,
+    routes: &RouteTable,
+    dns: &DnsCache,
+    packet_authority: Option<[u8; 32]>,
 ) -> bool {
     let Some(address) = context.destination.ip() else {
         return true;
@@ -484,10 +494,18 @@ pub(crate) fn bind_dns_context(
         return false;
     };
     let identity = foxcore_dns::DnsIdentity::new(uid, context.packages.clone());
-    let Some(names) = dns.route_hints(&identity, address) else {
+    let names = match packet_authority {
+        Some(authority) => dns.packet_route_hints(authority, &identity, address),
+        None => dns.route_hints(&identity, address),
+    };
+    let Some(names) = names else {
         return false;
     };
-    routes.constrain_with_dns_hints(context, &names)
+    if packet_authority.is_some() {
+        routes.constrain_with_packet_dns_bindings(context, &names)
+    } else {
+        routes.constrain_with_dns_hints(context, &names)
+    }
 }
 
 pub(crate) fn answer_icmp(unknown: UnknownTransport) {

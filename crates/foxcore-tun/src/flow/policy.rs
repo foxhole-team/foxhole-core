@@ -162,8 +162,14 @@ impl FlowPolicyStore {
             events.clone(),
             artifacts,
         );
+        let mut packet_dns_peer = [0_u8; 32];
+        if !dns_config.packet_resolvers.is_empty() {
+            getrandom::fill(&mut packet_dns_peer)
+                .map_err(|error| io::Error::other(error.to_string()))?;
+        }
         Ok(Self {
             generation,
+            packet_dns_peer,
             outbounds,
             direct,
             metrics,
@@ -188,6 +194,25 @@ impl FlowPolicyStore {
         self.current.load().dns.clone()
     }
 
+    /// The runtime binds the immutable peer before publishing this store.
+    pub fn with_packet_dns_peer(mut self, peer: [u8; 32]) -> Self {
+        self.packet_dns_peer = peer;
+        self
+    }
+
+    pub(crate) fn packet_dns_authority(&self, snapshot: &FlowPolicySnapshot) -> Option<[u8; 32]> {
+        if snapshot.dns_config.packet_resolvers.is_empty() {
+            return None;
+        }
+        let encoded =
+            foxcore_api::SecretString::new(serde_json::to_string(&snapshot.dns_config).ok()?);
+        let mut digest = Sha256::new();
+        digest.update(b"FoxHole authenticated packet DNS v1\0");
+        digest.update(self.packet_dns_peer);
+        digest.update(encoded.expose().as_bytes());
+        Some(digest.finalize().into())
+    }
+
     pub fn reload(
         &self,
         expected_revision: Option<u64>,
@@ -199,6 +224,13 @@ impl FlowPolicyStore {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let current = self.current.load_full();
+        if current.dns_config.packet_resolvers.is_empty() != dns_config.packet_resolvers.is_empty()
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "managed packet DNS mode must be chosen when the tunnel starts",
+            ));
+        }
         if expected_revision.is_some_and(|expected| expected != current.revision) {
             return Err(io::Error::new(
                 io::ErrorKind::WouldBlock,
