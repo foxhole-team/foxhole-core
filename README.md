@@ -50,9 +50,27 @@ the build and integration.
 
 <a id="whats-new"></a>
 
-## 🆕 What's new - 1.0.3
+## 🆕 What's new - 1.0.4
 
-- Fixed DNS routing in application scenarios.
+- Backport SQLite WAL page initialization for CVE-2026-119375; preserve the pinned Arti API.
+- Update Sentinel to Wasmtime 49.0.5 and matching Cranelift security fixes.
+- Support managed WireGuard profile DNS for domain routes, including Direct; isolate Android resolver caches and retain only exact authority/identity name bindings across clean handovers.
+- Drop an initial packet decision revoked while flow attribution was pending.
+
+### Companion Android app releases
+
+**FoxHole VPN 1.0.5**
+
+- Added Android 7 support.
+- Added website routing.
+- Improved the visual style of notifications.
+
+**FoxHole Guard 1.0.6**
+
+- Added Android 7 support.
+- Improved web-address routing filters.
+- Improved the visual style of notifications.
+
 
 <a id="features"></a>
 
