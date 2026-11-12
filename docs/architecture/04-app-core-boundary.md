@@ -36,10 +36,10 @@ flowchart TD
 |---|---|
 | Library | `libfoxhole_native.so` - `crate-type = ["cdylib"]`, lib name `foxhole_native` |
 | Load site | `core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java:51-53` - the only one |
-| Shipped Engine seam | **36 Rust exports / 35 Java declarations** (`FoxholeNativeEngine.java:48-163`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
-| Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` expose the product-reachable subset; link import and continuity stop at Java compatibility declarations |
+| Shipped Engine seam | **36 Engine definitions in Core source / 35 current Guard Java declarations** (`FoxholeNativeEngine.java:48-163`). Only legacy `nativeStart`, which has no Android `Network` handle, is intentionally absent from Java. |
+| Kotlin wrapper | `interface FoxCoreNativeApi` + `object JniFoxCoreNativeApi` expose the product-reachable subset; link import remains a separate compatibility boundary; DNS continuity has production Kotlin wrappers and is used for runtime replacement |
 | Cross-repository gate | The app compares every shipped Engine export with Java declarations and production Kotlin references (`scripts/verify-foxcore-jni-seam.sh`), then executes product-reachable calls against the packaged `.so` on Android (`FoxCoreNativeSeamAndroidTest.kt`). |
-| Core release version | `1.0.0` comes from the workspace package (`Cargo.toml:38`). `CORE_VERSION` is `CARGO_PKG_VERSION` (`crates/foxcore-api/src/lib.rs:39`) and supplies JNI version and capabilities. A source version is not release qualification. |
+| Core release version | `1.0.4` is the current workspace package version (`Cargo.toml:38`). `CORE_VERSION` is `CARGO_PKG_VERSION` (`crates/foxcore-api/src/lib.rs:39`) and supplies JNI version and capabilities. A source version is not release qualification. |
 | ABI version | `1`, frozen; class and package name are part of the ABI |
 | Structured documents | JSON, with no protobuf. TUN/network handles and signed DNS/fingerprint payloads use their native scalar/byte-array forms. |
 | Build-path contract | `scripts/android-build.sh:67-98` remaps the checkout, Cargo home and Rustup home before compiling. The ELF gate refuses build-host paths (`scripts/android-elf-gate.sh:138-166,222-225`), and the release reproducibility check compares bytes from different checkout and Cargo-home paths (`scripts/reproducible-build.sh:46-150`). |

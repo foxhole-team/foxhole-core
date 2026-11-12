@@ -11,12 +11,12 @@ The Android application owns `VpnService`, the TUN file descriptor, UI state and
 | ABI | `1` |
 | Configuration schema | `1` |
 | Capabilities schema | `1` |
-| Core package | `0.0.5` (`Cargo.toml:36-41`) |
+| Core package (current source) | `1.0.4` (`../Cargo.toml`, workspace package) |
 | Native library | `foxhole_native` |
 
 Compatibility is negotiated by ABI version, configuration schema and the runtime capabilities document. Library version numbers are not used for feature detection.
 
-Core 0.0.5 tightens named-loopback validation: complete credentials are required unless the host
+**Historical change in Core 0.0.5:** named-loopback validation was tightened: complete credentials are required unless the host
 sets `allow_anonymous: true`; missing/partial credentials or conflicting modes fail. Listener
 status adds `authentication: "credentials" | "anonymous"`. ABI/config schema remain v1, while
 legacy anonymous requests must be migrated explicitly (`crates/foxcore-api/src/config/rt.rs:136,162`;
@@ -37,25 +37,79 @@ The C surface exposes version and capabilities discovery:
 
 Buffer ownership never crosses the ABI. The caller allocates and frees all buffers passed to the C interface.
 
-The shipped JNI surface is `FoxholeNativeEngine`: runtime, policy, DNS, traffic,
-LAN/loopback proxy and lifecycle. Its release ELF contains 33 Engine exports; the current Guard
-facade declares 32. The one deliberate omission is legacy `nativeStart`, because production starts
-must supply an Android `Network` handle.
+The Engine JNI source surface has **36 definitions**: 34 in
+`crates/foxcore-android/src/lib.rs` and two in `link.rs`, in the reviewed current
+source. This is a source inventory, not an inventory of a published release ELF.
+The current Guard facade declares **35** methods in
+`core/runtime/src/main/java/com/foxhole/core/runtime/FoxholeNativeEngine.java`.
+Only legacy `nativeStart`, which lacks an Android `Network`, is omitted.
+Guard pins compiled producer `3fc3b70d8e9d700b3e07ec27638515c00651b013`;
+its source-checkout record separately identifies the equivalent public checkout
+`90ae3e0d60de3d35e88e24558c99e771d9ca0bcf`. Declaration parity is checked
+against that consumer and producer, not inferred from an export count.
 
-Release libraries also contain 19 `FoxholeNativeComponents` / `FoxholeNativeShares` exports.
-v0.0.1 shipped those symbols, so removing them while keeping ABI version 1 would break rollback
-and older callers. The current Guard has no product flow for them; they remain compatibility ABI.
+The 19 Component/Share definitions remain compatibility ABI. Do not remove them
+while ABI version1 is supported. Source declarations, Kotlin reachability and
+exported symbols in a particular ELF are separate inventories.
 
-Current Guard reachability is narrower than declaration parity:
+Current Guard has production wrappers for signed/trusted DNS starts, DNS
+continuation and generation-fenced DNS installation. Link import declarations
+remain a separate compatibility boundary; `nativeTrafficMap` is the canonical
+traffic snapshot and `nativeConnections` remains its ABI alias. See
+[the app/Core boundary](architecture/04-app-core-boundary.md).
 
-- signed DNS bundles use `nativeStartWithNetworkAndDnsRuleSet`, so verification and engine start
-  are atomic;
-- traffic-map polling uses canonical `nativeTrafficMap`; `nativeConnections` remains its ABI alias;
-- link import and continuity retain Java declarations as compatibility-only ABI, without Kotlin
-  product wrappers or production call sites;
-- DNS downloads are persisted before a generation-fenced `nativeInstallDnsRuleSet` call. Stable
-  engines adopt them live; enable/trust changes use atomic replacement, and inactive engines read
-  the persisted bundle on start.
+## DNS continuity start and lease ownership
+
+Java signatures (the implicit JNI environment/class parameters are omitted):
+
+```java
+long nativeRetainDnsContinuation(long predecessorHandle);
+void nativeReleaseDnsContinuation(long token);
+long nativeStartOnNetworkWithDnsContinuity(
+    int tunFd, String configJson, long networkHandle, long token,
+    String name, byte[] manifest, byte[] signature, byte[] artifact,
+    boolean trusted, Object host);
+```
+
+Retain while the predecessor handle is still registered, **before stopping it**.
+Retain returns a positive opaque token; error/panic returns0 and attempts to throw
+`IllegalStateException`. There is one process-wide outstanding lease; tokens are
+not reused. The retained policy/cache reference has its own stop fence and
+outlives removal of the predecessor's engine handle.
+
+Start requires a positive, live token and a cleanly joined predecessor. A timed-out
+or force-killed predecessor is not ready. Force-kill revokes the owner's lease.
+A stream/flow DNS continuation cannot be imported into an L3 packet tunnel;
+new runtime/configuration and cache-identity restrictions still apply.
+
+| Continuity-start result | Caller action |
+| ---: | --- |
+| `> 0` | Published successor engine handle. |
+| `0` | Ordinary failure; an `IllegalStateException` is attempted. No successor handle is returned. |
+| `-1` | Unpublished cleanup was quarantined; it is not a handle and does not authorize an overlapping replacement. |
+| `-2` | Unpublished cleanup failed, or the guarded operation panicked. It is not a handle. |
+
+The existing TUN-adoption rule applies, including failures after adoption. Stop
+and cleanup ownership remain authoritative; returning from a failed start does
+not prove that an adopted descriptor or worker has been released.
+
+The caller owns the lease until it explicitly releases it. A successful start
+borrows the continuation and does not consume the token. Keep the lease until
+start returns, and release it on success, failure, cancellation and abandoned
+handover. Releasing it during start can reject publication and invoke unpublished
+cleanup. Release of a nonpositive/stale token is a no-op; a release panic attempts
+to throw `IllegalStateException`. Never infer success merely from an absent
+exception. Guard's `FoxCoreDnsContinuation.kt`, `FoxCoreNativeSeam.kt` and
+`FoxCoreNativeSessionStarter.kt` contain the corresponding lifecycle wrappers.
+
+Bootstrap arrays have exactly one of these shapes:
+
+- none: all payload references null and `trusted=false`;
+- trusted: name/artifact present, manifest/signature null, `trusted=true`;
+- signed: name/manifest/signature/artifact present, `trusted=false`.
+
+Mixed/incomplete shapes are refused. The token is unrelated to the separate
+`nativeConfirmContinuity(handle, token)` network-continuity protocol.
 
 ---
 
@@ -214,6 +268,22 @@ A successful `nativeReloadPolicy` returns the installed revision (`> 0`).
 
 The refusal numbers are part of the ABI and must not be reordered.
 
+Ordinary rejected reloads preserve the current policy. **Emergency exception:**
+when a request enables kill switch and its DNS policy is refused, Core can retain
+the admitted DNS policy, publish emergency Block at a new revision and revoke the
+previous epoch, then return `Invalid (-1)` (`FlowPolicyStore::reload`).
+After a negative return, read `nativeLastPolicyError(handle)` for the bounded
+failure detail and `nativeStats(handle).policy_revision` for the effective revision.
+Serialize these reads with reloads for the same generation; the two calls are not
+an atomic state document. The detail includes the emergency revision when that
+path ran. JNI stats do **not** expose a complete effective routing policy or a
+machine-readable emergency-Block boolean. Do not draw the old saved toggle as
+proven live state: retain conservative protection and reconcile with an explicit
+valid policy operation. Runtime callers in Rust can inspect `policy.gates()`.
+
+For L3 ordinary reload vs revocation, see [atomic policy integration](atomic-policy-updates.md).
+
+
 ### Continuity
 
 | Code | Meaning |
@@ -273,7 +343,9 @@ All externally supplied data is bounded.
 | Route rules | 4096 |
 | DNS blocklist entries | 65,536 |
 | DNS rule sets | 16 |
-| Handshake/member timeout | 120,000 ms |
+| `runtime.connect_timeout_ms` | `100..=120000` ms |
+| `runtime.handshake_timeout_ms` | `100..=300000` ms |
+| `selector.member_timeout_ms` | `1..=120000` ms; default `5000` ms |
 
 Protocol-specific strings, headers and ECH configuration are also bounded before runtime construction.
 

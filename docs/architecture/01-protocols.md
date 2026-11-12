@@ -120,7 +120,7 @@ reserved; `tor` and `i2p` are id-locked in both directions
 | **Naive** | TCP | TLS mandatory, ALPN `h2`, HTTP/2 CONNECT + padding | none | **no** | remote naive server |
 | **HTTP** | TCP | optional TLS | none | **no** | remote HTTP proxy |
 | **SOCKS5** | TCP (+UDP) | **none** - no `tls` field exists | none | yes - UDP ASSOCIATE | remote/LAN/loopback proxy |
-| **WireGuard / AmneziaWG** | **UDP** | Noise IKpsk2; AmneziaWG adds junk/header obfs only | n/a - L3 packet tunnel | yes (carries all IP) | remote WG peer |
+| **WireGuard / AmneziaWG** | **UDP** | Noise IKpsk2; AmneziaWG adds junk/header obfs only | n/a - L3 packet tunnel | TCP/UDP in the current Core TUN integration | remote WG peer |
 | **Tor** | TCP guards | Arti's own crypto; bridges + managed pluggable transports | n/a | **no** | Tor network, in-process |
 | **I2P** | TCP to `127.0.0.1` | none (plain SOCKS5, optional RFC 1929) | n/a | **no** | **external i2pd process** |
 | **Selector** | - | inherits from active member | inherits | inherits | up to 64 members |
@@ -130,7 +130,12 @@ Only VLESS, VMess, Trojan and Shadowsocks carry a `transport` field. Every other
 field at all - the carriers simply do not apply (`crates/foxcore-android/src/capabilities.rs:441-658`).
 
 REALITY and WireGuard are not standalone outbounds: REALITY is a security layer used only by VLESS;
-WireGuard is only reachable as `OutboundMode::PacketTunnel`.
+WireGuard is only reachable as `OutboundMode::PacketTunnel`. The peer tunnel's
+ability to carry IP bytes is broader than Core's production TUN splitter: only
+TCP/UDP is sent to the packet tunnel. Other IP protocols go to the stack;
+the fallback answers ICMPv4 echo locally and ignores other unsupported traffic.
+This does not qualify remote ping. The IPv6 splitter reads the immediate
+next-header and does not traverse extension-header chains.
 
 ---
 

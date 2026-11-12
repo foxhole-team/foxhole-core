@@ -53,8 +53,8 @@ installed APK signer; VPN additionally requires its pinned release-certificate d
 
 ### Guard delivery inventory and native dependencies
 
-Guard 1.0.0 source pins i2pd to OpenSSL 3.5.8 and its Tor transport compiler to Go 1.26.10.
-These source pins require matching fresh native outputs and delivery receipts; they do not establish a completed release build.
+The local Guard 1.0.7 candidate pins i2pd to OpenSSL 3.5.9 and its Tor transport compiler to Go 1.26.11.
+These source pins require matching qualified native outputs and actual delivery receipts; they do not establish a completed release build.
 Go module versions are pinned separately from the upstream helper commits
 (`foxhole_guard/scripts/native-deps.sh:6`; `foxhole_guard/scripts/native-deps.sh:21`;
 `foxhole_guard/config/native/lyrebird/go.mod:1`;
@@ -100,6 +100,49 @@ remain separate receipts. The engine package requires the actual target and Linu
 contract as well as exact original legal delivery; this does not establish authenticated routing,
 physical-router compatibility or a formal minimum RAM requirement
 (`foxhole-openwrt-client/tools/check-engine-package-input.py:39-72`).
+
+---
+
+### Android router installation archive
+
+The local VPN 1.0.6 and Guard 1.0.7 candidates consume the existing OpenWrt archive
+transport. `bundle-transport.json` is bound to the selected `SHA256SUMS`; its canonical
+schema, archive size/alignment and every entry hash are checked before downloading.
+`native-install.tar` replaces only the flat files named by that descriptor. Core module
+packages, repository indexes, trust keys and inline installer metadata retain their own
+bindings. The native installer still verifies and selectively materializes the archive
+(`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/RouterArchiveBundle.kt:24`;
+`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/RouterDeviceInstallBundleProvider.kt:151`;
+`foxhole-openwrt-client/tools/bundle-transport-model.uc:25`).
+
+RAM and tmpfs are separate capacities. The RAM requirement retains resident runtime,
+installation staging, backup, reserves, uploaded files and archive transport allowance.
+The temporary-file requirement excludes only the verified resident runtime component;
+legacy plans retain the conservative full requirement. Both capacities are checked
+before transfer and by the remote staging command, with boot and remaining tmpfs checks
+after upload. Guard uses the same implementation and contract
+(`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/RouterArchiveBundle.kt:64`;
+`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/WifiRouterSetupService.kt:176`;
+`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/RouterSshBundleTransfer.kt:45`).
+
+Authenticated enrollment restarts RPCD. A fresh-install client waits up to five seconds
+for the pinned, public `package.status` response before sending its one-time PIN.
+Only HTTP 503 is retried, using read-only probes; authentication is sent once.
+Certificate/identity errors, HTTP 403 and invalid responses fail without retry.
+Cancellation keeps the existing owner checks and credential cleanup
+(`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/RouterWizardCoordinator.kt:478`;
+`foxhole-vpn/app/src/main/kotlin/com/foxhole/vpn/router/RouterPanelApi.kt:39`;
+`foxhole-openwrt-client/package/foxhole-openwrt-client/root/usr/libexec/foxhole-bootstrap-enroll:60`).
+Guard has the same flow. Both local candidates passed fresh default-on and explicit
+opt-out scenarios through real SSH, TLS, pairing and HTTP management on disposable
+OpenWrt guests. Android network/socket selection was adapted; this is not physical
+Wi-Fi, actual VPN traffic or router firmware-update acceptance.
+
+These source and resource checks do not establish successful installation, paired
+management, tunneled traffic or compatibility with every 512-MiB router. Those require
+separate real execution evidence. The existing archive already carries the locked
+upstream snapshots; absence of their separate flat GitHub assets does not imply an
+incomplete archive delivery.
 
 ---
 

@@ -19,14 +19,11 @@
     >
 </p>
 
-<p align="center">
-  <a href="../README.md">
-    <img src="https://img.shields.io/badge/🇬🇧-English-ff7a00?style=flat-square">
-  </a>
-  <a href="./README.ru.md">
-    <img src="https://img.shields.io/badge/🇷🇺-Русский-ff7a00?style=flat-square">
-  </a>
-</p>
+<div align="center">
+
+[🇬🇧 English](../README.md) · [🇷🇺 **Русский**](README.ru.md)
+
+</div>
 
 <p align="center">
   <a href="https://github.com/foxhole-team/foxhole-core/releases">
@@ -35,10 +32,39 @@
   <img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Status: beta">
 </p>
 
+<div align="center">
+
 ![Rust](https://img.shields.io/badge/core-Rust-000000?logo=rust&logoColor=white&style=flat-square)
 ![Android](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white&style=flat-square)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-007ec6?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0.html)
 ![❤️ We support I2P](https://img.shields.io/badge/❤️_We_support-I2P-7B1FA2?style=flat-square)
+
+</div>
+
+<a id="ecosystem"></a>
+<a id="-экосистема-foxhole"></a>
+
+<div align="center">
+
+**FoxHole ecosystem**
+
+[FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) · [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) · [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) · [FoxHole OpenWRT](https://github.com/foxhole-team/foxhole-openwrt-client) · [FoxHole DB](https://github.com/foxhole-team/foxhole-db)
+
+<details>
+<summary>Роли проектов</summary>
+
+| Проект | Роль |
+| --- | --- |
+| [FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) | Android: VPN, Tor/I2P, правила трафика и локальный мониторинг |
+| [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) | Android: простой VPN-клиент и управление сопряжённым OpenWrt |
+| [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) | Общее сетевое ядро на Rust; состав зависит от сборки |
+| [FoxHole OpenWrt](https://github.com/foxhole-team/foxhole-openwrt-client) | VPN для роутера и управление локальной сетью |
+| [FoxHole DB](https://github.com/foxhole-team/foxhole-db) | Подписанные правила и справочные данные |
+
+</details>
+
+</div>
+
 
 | Вариант сборки | Состав |
 | --- | --- |
@@ -57,20 +83,18 @@
 - Добавлен управляемый DNS из профиля WireGuard для доменных маршрутов, включая Direct; кэш Android изолирован, а при штатной передаче подключения сохраняются только привязки имён к точным источникам и идентичностям.
 - Начальное решение о пакете отклоняется, если оно отозвано за время асинхронного определения приложения.
 
-### Релизы сопутствующих Android-приложений
+### Обновления Android-приложений
 
-**FoxHole VPN 1.0.5**
+Это изменения приложений; бинарники Core и наборы данных DB не изменены.
 
-- Добавлена поддержка Android 7.
-- Добавлена маршрутизация для веб-адресов.
-- Доработан визуальный стиль уведомлений
+**FoxHole VPN 1.0.6**
 
-**FoxHole Guard 1.0.6**
+- Исправлена первоначальная установка и настройка роутера через приложение.
 
-- Добавлена поддержка Android 7.
-- Доработаны фильтры для маршрутизации web-адресов
-- Доработан визуальный стиль уведомлений
+**FoxHole Guard 1.0.7**
 
+- Исправлена первоначальная установка и настройка роутера через приложение.
+- Обновлены Tor-транспорты Lyrebird и conjure-client.
 
 <a id="features"></a>
 
@@ -252,11 +276,18 @@ Block
 - TTL-правила;
 - глобальный kill switch.
 
-Route/DNS/application policy обновляется атомарно без рестарта TUN: каждый
-новый поток видит либо целиком новую политику, либо целиком старую, никогда -
-смесь, а отклонённый reload не меняет ничего. Обычный reload не пересчитывает
-маршрут открытого активного потока немедленно: поведение уже открытых потоков
-зависит от data plane и опубликованных runtime capabilities.
+Route/DNS/application policy обновляется атомарно без перезапуска TUN: новый
+поток видит целую старую либо новую политику. Обычный отклонённый reload сохраняет
+действующую политику. Исключение: отказ DNS-policy при включении kill switch может
+применить аварийный Block и новую revision, даже когда возвращена ошибка.
+Эффективная revision и детали отказа читаются по [контракту ABI](abi.md#policy-reload).
+Обычный reload с выключенным kill switch и до, и после обновления сохраняет
+эпоху и idle-поведение L3. Kill switch,
+смена сетевой эпохи и targeted revoke отменяют кэшированное решение L3, которое
+повторно принимается на следующем пакете. Это не гарантия немедленного TCP reset:
+при повторной оценке поток может снова оказаться разрешённым. Текущие L3-поля
+machine-readable capabilities расходятся с этим source path; см.
+[атомарную интеграцию политики](atomic-policy-updates.md).
 
 До 16 именованных outbound'ов и до 64 членов внутри selector'а. Изменение
 конфигурации протокола или добавление/удаление outbound'ов требует нового
@@ -287,8 +318,13 @@ DNS поддерживает UDP/TCP, DoT, DoH по HTTP/2, DoQ и DoH по HTTP
 и выбор маршрута для DNS-запросов. Для DoQ и DoH по HTTP/3 выбранный
 маршрут должен поддерживать UDP.
 
-`.onion` и `.i2p` обрабатываются fail-closed и никогда не утекают в clearnet
-DNS.
+DNS-запросы, обрабатываемые **Core DNS interceptor**, для `.onion`/`.i2p`
+отказываются fail-closed и не передаются его внешнему resolver. Overlay routing
+требует fake-IP. Гарантия не охватывает raw real-IP passthrough без interceptor,
+managed DNS WireGuard-профиля, app-owned DoH и strict DoT к другим resolver.
+Защита от обхода через DoT касается только advertised resolver. В raw default
+upstreams пусты и advertise отсутствует: interceptor не создаётся. Это контракт
+DNS path, а не инспекция зашифрованного DNS в произвольном трафике.
 
 DNS bootstrap на Android идёт через выбранный физический Android `Network`.
 
@@ -423,7 +459,8 @@ FoxHole Core не выбирает пользовательский режим �
 - скомпилированная routing policy;
 - атомарный reload политики;
 - fail-closed маршрутизация;
-- на Android каждый внешний сокет проходит `protect(fd)` и привязывается к выбранному физическому `Network` до connect/send;
+- на Android внешние Core-owned сокеты используют protected/network-bound dialer до connect/send;
+- локальный IPC с managed Tor PT через loopback намеренно не привязывается к physical Network; внешние сокеты helper-процессов имеют отдельную integration boundary;
 - отсутствие silent downgrade при отказе защищённого маршрута.
 
 Per-app/application policy компилируется внутри `foxcore-route` и обновляется через
@@ -558,7 +595,7 @@ Capabilities включают:
 - опциональные функции;
 - неподдерживаемые расширения.
 
-Релиз 1.0.1 использует профиль поставки `android4`:
+Настроенный профиль поставки Android: `android4`.
 
 ```text
 arm64-v8a
@@ -586,6 +623,16 @@ x86_64
 
 ## 🔏 Целостность релиза
 
+### Native SDK и Linux-артефакты
+
+Состав артефактов и порядок проверки зависят от процесса выпуска. В [релизе v1.0.4](https://github.com/foxhole-team/foxhole-core/releases/tag/v1.0.4) опубликованы `foxhole-core-native-v1.0.4.tar.gz` и `foxhole-core-native-source-v1.0.4.tar`, а также `SHA256SUMS`, `SHA256SUMS.asc` и отдельная подпись архива исходников. Для добавленных Linux-артефактов используются отдельные `LINUX-SHA256SUMS` и `LINUX-SHA256SUMS.asc`.
+
+Перед сверкой загруженных файлов проверьте подпись соответствующего списка контрольных сумм доверенным ключом владельца. Одно совпадение SHA-256 не подтверждает подлинность издателя. Используйте имена артефактов и инструкции выбранного релиза: одинаковый архив и GitHub attestation публикуются не во всех процессах выпуска.
+
+Native SDK v1.0.4 содержит четыре Android ABI, но зафиксированные проверки выполнения на Android охватывают C API на ARM64-устройстве со страницами 4 KiB. Этот SDK-релиз не заявляет проверку выполнения на остальных ABI, на страницах 16 KiB или полную проверку экосистемы. Проверки Linux-пакетов также не заменяют проверку трафика на физических роутерах.
+
+### Полный LAB workflow
+
 Нативные сборки и полные релизные проверки выполняются в приватной LAB или на
 разрешённом build host с закреплёнными Rust, NDK и lockfile. GitHub publisher
 проверяет подписанные владельцем исходники, неизменяемый LAB handoff, выбранный
@@ -593,11 +640,11 @@ x86_64
 пересборки. Handoff отдельно связывает исходники поставки и фактический нативный
 producer; правки документации не меняют идентичность нативного producer.
 
-Архив `foxhole-core-v<version>.tar.gz` содержит четыре прошедшие гейт JNI-библиотеки,
+Для полного LAB-выпуска, публикующего `foxhole-core-v<version>.tar.gz`, этот архив содержит четыре прошедшие гейт JNI-библиотеки,
 Linux x86_64 DNS-компилятор и записи их producer,
-их rollback-манифест, зафиксированные CycloneDX SBOM и `Cargo.lock`. Релиз
-также содержит `SHA256SUMS` и keyless Sigstore provenance, привязанный к этому
-репозиторию, workflow и релизному коммиту:
+их rollback-манифест, зафиксированные CycloneDX SBOM и `Cargo.lock`. Соответствующий LAB-релиз
+также может публиковать `SHA256SUMS` и keyless Sigstore provenance, привязанный к его
+репозиторию, workflow и релизному коммиту. Следующий пример применим только при фактической публикации этого архива и его attestation; `sha256sum -c` сверяет файлы по уже аутентифицированному списку:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -606,6 +653,7 @@ gh attestation verify foxhole-core-v<version>.tar.gz \
 ```
 
 ---
+
 
 ## 🗂️ Структура workspace
 
@@ -675,17 +723,6 @@ FoxHole VPN - отдельный потребитель того же ABI Core. 
 
 ---
 
-<a id="ecosystem"></a>
-
-## 🔗 Экосистема FoxHole
-
-| Проект | Роль |
-| --- | --- |
-| [FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) | Android: VPN, Tor/I2P, правила трафика и локальный мониторинг |
-| [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) | Android: простой VPN-клиент и управление сопряжённым OpenWrt |
-| [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) | Общее сетевое ядро на Rust; состав зависит от сборки |
-| [FoxHole OpenWrt](https://github.com/foxhole-team/foxhole-openwrt-client) | VPN для роутера и управление локальной сетью |
-| [FoxHole DB](https://github.com/foxhole-team/foxhole-db) | Подписанные правила и справочные данные |
 
 ## 🤝 Участие в разработке
 

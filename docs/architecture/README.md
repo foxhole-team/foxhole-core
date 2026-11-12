@@ -129,8 +129,7 @@ Each document ends with the inconsistencies found while writing it:
 | 1 - Protocols | 1.8 - no open inconsistencies after the smoltcp/UDP contract pass |
 | 2 - Cryptography | 2.7 - no open inconsistencies after the current pass |
 | 3 - Updates | 3.7 - inline vs shared verifiers and permissive Kotlin vs strict Rust JSON parsing; stale DNS/updater activation claims were closed in this pass |
-| 4 - Boundary | 4.7 - compatibility-only link/continuity ABI, DNS activation, divergent link parsers, and the path-independent native build contract |
+| 4 - Boundary | [4.8 - Inconsistencies found](04-app-core-boundary.md#48-inconsistencies-found) — version-bound drift and integration boundaries |
 | 5 - Data repository | 5.7 - no open inconsistencies after the five-feed publication pass; source-info files remain audit-only by design |
-
 | 6 - VPN client | Inconsistencies and verification boundaries - clipboard JSON/import mismatch and subscription naming/refresh ownership and fresh candidate restoration closed; provider, camera, device and performance acceptance remain separate |
 | 7 - Router runtime | Inconsistencies and verification boundaries - Linux CLI source and runtime checks are distinct from OpenWrt/package/phone pairing acceptance |

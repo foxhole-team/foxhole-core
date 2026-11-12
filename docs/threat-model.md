@@ -217,15 +217,21 @@ Schema-v1 explicit-name rules use specificity before list order. A specific allo
 override a generic Block; the Rust explanation API identifies matching shadowed Blocks. DNS
 inference cannot grant this exception (`crates/foxcore-route/src/lib.rs:191,237`).
 
-Applications must use the capabilities document rather than assuming stronger live-flow semantics.
+Applications must negotiate capabilities, while accounting for the documented
+L3 existing-flow discrepancy in [atomic policy integration](atomic-policy-updates.md).
+Ordinary reload, next-packet re-evaluation after revocation and stream closure
+are distinct; no immediate TCP reset is inferred for L3.
 
 ---
 
 ## Fingerprinting and censorship resistance
 
-REALITY fingerprint profiles comprise seven tables transcribed from maintained uTLS data and two
-first-party captures of shipping browsers (`chrome_151` and `firefox_153`). Their provenance and
-measured JA4 are recorded per profile.
+REALITY has ten profile tables, defaulting to `chrome_156`: seven derive from
+uTLS and two from historical first-party browser captures (`chrome_151`,
+`firefox_153`); `chrome_156` is derived from pinned Chromium156 source. Per-profile
+provenance and fixture-derived values are not interchangeable with a browser
+capture or live interop result. Chrome156 has no supplied Trust Anchor IDs;
+its metadata does not claim live-browser or live-REALITY verification.
 
 They are not claimed to be byte-identical to every browser release or to provide an independently
 validated censorship-evasion guarantee.

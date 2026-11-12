@@ -95,7 +95,7 @@ Config surface: `CurveGroup::X25519MlKem768`, serde name `x25519mlkem768`, alias
 
 | Profile | `X25519MLKEM768` group | ML-DSA sigalgs |
 |---|---|---|
-| `chrome_151` | yes | **`0x0904 mldsa44`, `0x0905 mldsa65`, `0x0906 mldsa87`** |
+| `chrome_156`, `chrome_151` | yes | **`0x0904 mldsa44`, `0x0905 mldsa65`, `0x0906 mldsa87`** |
 | `chrome_133`, `chrome_131` | yes | no |
 | `firefox_153`, `firefox_148` | yes | no |
 | `safari_26_3` | yes | no |
@@ -105,12 +105,12 @@ Firefox reuses one classical scalar across the standalone and hybrid shares
 (`reuse_classical_key_share`); Chrome uses two independent ones
 (`reality_key_exchange.rs:171-209`).
 
-**ML-DSA is a shape, not a capability.** The three FIPS 204 code points are prepended to Chrome's
-eight classical schemes and the list length grows `0x0010 → 0x0016`
-(`hello_profile.rs:788-815`). None is implemented: the certificate verifier accepts only Ed25519
-(`reality_client_verify.rs:217-225`), and `reality_mldsa65` is declared unsupported in the
-capability document. There is **no Kyber, Dilithium or ML-DSA verification code anywhere in either
-repository** - every hit is a table entry or a comment.
+**Handwritten REALITY advertises ML-DSA shapes, not ML-DSA CertificateVerify.**
+Its verifier accepts only Ed25519 (`reality_client_verify.rs`); the corresponding
+REALITY ML-DSA capability is unsupported. Generic rustls/aws-lc TLS separately
+implements ML-DSA-44/65/87 algorithms and mappings. Neither the advertised shapes
+nor those primitives alone establish end-to-end post-quantum authentication or
+verified peer interoperability.
 
 ---
 
@@ -168,23 +168,25 @@ certificate.
 
 ---
 
+<a id="25-tls-fingerprinting--two-disjoint-mechanisms"></a>
+
 ## 2.5 TLS fingerprinting - two disjoint mechanisms
 
 ```mermaid
 flowchart TD
     subgraph A["Generic TLS path - pinned FoxHole rustls fork"]
         A1["VLESS/VMess/Trojan/SS/AnyTLS/Naive/HTTP over TLS<br/>+ QUIC for Hysteria2 and TUIC"]
-        A1 --> A2["TLS settings plus optional<br/>chrome_151 ClientHello"]
+        A1 --> A2["TLS settings plus optional<br/>chrome_156 or chrome_151 ClientHello"]
         A2 --> A3["Explicit h2/http/1.1 profile;<br/>incompatible ECH, groups or versions refused"]
     end
     subgraph B["REALITY path - hand-written bytes"]
         B1["proto-reality writes the hello itself,<br/>rustls is not involved"]
-        B1 --> B2["9 profile tables + a ported<br/>randomized generator"]
+        B1 --> B2["10 profile tables + a ported<br/>randomized generator"]
         B2 --> B3["spoofs cipher list and order, extension set<br/>and order, GREASE, groups, key shares,<br/>versions, sigalgs, ALPN, ALPS code point,<br/>padding, ECH-GREASE shape"]
     end
 ```
 
-Generic TLS can select `tls.fingerprint: "chrome_151"` through the pinned rustls fork
+Generic TLS can select `tls.fingerprint: "chrome_156"` or `"chrome_151"` through the pinned rustls fork
 (`crates/foxcore-api/src/config/tls.rs:42-46`; `crates/foxcore-transport/src/tls.rs:382-387`).
 The profile requires DNS SNI, explicit h2/http/1.1 ALPN, its TLS1.2..TLS1.3 offer and hybrid-first
 curve order; incompatible settings are refused (`vendor/rustls/src/client/chrome_hello.rs:50-79`).
@@ -197,17 +199,23 @@ webpki-roots 1.0.10 for the emSign distrust fixes (`Cargo.lock`, rustls-webpki/w
 Explicit insecure consent and configured pins remain separate; fingerprint selection does not
 weaken certificate verification.
 
-**REALITY profiles implemented** (`capabilities.rs:1102-1117`): `chrome_151`, `chrome_133`, `chrome_131`,
-`edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`, `firefox_153`, `firefox_148`, plus `random` (one
-modern table chosen per process) and `randomized` (a fresh generated hello per connection). Seven
-tables are transcribed from uTLS; `chrome_151` and `firefox_153` come from first-party captures.
+**REALITY profiles implemented:** `chrome_156` (default), `chrome_151`,
+`chrome_133`, `chrome_131`, `edge_85`, `safari_26_3`, `ios_14`, `qq_11_1`,
+`firefox_153`, `firefox_148`; `random` chooses a modern table once per process,
+while `randomized` generates a fresh hello per connection. Seven tables derive
+from uTLS, two from historical first-party captures (`chrome_151`, `firefox_153`),
+and one from pinned Chromium156 source (`chrome_156`). Source derivation, fixture
+comparison, browser capture and live peer interop are separate evidence classes.
+Chrome156 supplies no Trust Anchor IDs; its metadata records live-browser and
+live-REALITY verification as false (not a recorded failed test). It must not be
+presented as a captured/default-platform Chrome156 or browser-equivalence promise.
 
 **Refused rather than substituted**: `360` and `android` - both TLS 1.2 parrots that send no
 `key_share`, and REALITY derives its auth key from the client's X25519 share, so no REALITY
 handshake is possible with that hello (`capabilities.rs:1117`).
 
 **REALITY offers do not imply implementation.** Its hello advertises TLS 1.2, secp256r1/384r1 without shares,
-HelloRetryRequest, brotli certificate compression, PSK/0-RTT and (on `chrome_151`) ML-DSA. A server
+HelloRetryRequest, brotli certificate compression, PSK/0-RTT and (on the Chrome151/156 tables) ML-DSA. A server
 that takes any of them up is refused, not downgraded to.
 
 ### Table feed

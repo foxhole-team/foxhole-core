@@ -19,14 +19,11 @@ the build and integration.
     >
 </p>
 
-<p align="center">
-  <a href="README.md">
-    <img src="https://img.shields.io/badge/🇬🇧-English-ff7a00?style=flat-square">
-  </a>
-  <a href="./docs/README.ru.md">
-    <img src="https://img.shields.io/badge/🇷🇺-Русский-ff7a00?style=flat-square">
-  </a>
-</p>
+<div align="center">
+
+[🇬🇧 **English**](README.md) · [🇷🇺 Русский](docs/README.ru.md)
+
+</div>
 
 <p align="center">
   <a href="https://github.com/foxhole-team/foxhole-core/releases">
@@ -35,10 +32,39 @@ the build and integration.
   <img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Status: beta">
 </p>
 
+<div align="center">
+
 ![Rust](https://img.shields.io/badge/core-Rust-000000?logo=rust&logoColor=white&style=flat-square)
 ![Android](https://img.shields.io/badge/platform-Android-3DDC84?logo=android&logoColor=white&style=flat-square)
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-007ec6?style=flat-square)](https://www.gnu.org/licenses/gpl-3.0.html)
 ![❤️ We support I2P](https://img.shields.io/badge/❤️_We_support-I2P-7B1FA2?style=flat-square)
+
+</div>
+
+<a id="ecosystem"></a>
+<a id="-foxhole-ecosystem"></a>
+
+<div align="center">
+
+**FoxHole ecosystem**
+
+[FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) · [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) · [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) · [FoxHole OpenWRT](https://github.com/foxhole-team/foxhole-openwrt-client) · [FoxHole DB](https://github.com/foxhole-team/foxhole-db)
+
+<details>
+<summary>Project roles</summary>
+
+| Project | Role |
+| --- | --- |
+| [FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) | Android: VPN, Tor/I2P, traffic rules and local monitoring |
+| [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) | Android: simple VPN client and paired OpenWrt management |
+| [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) | Shared Rust networking core; features depend on the build |
+| [FoxHole OpenWrt](https://github.com/foxhole-team/foxhole-openwrt-client) | Router VPN and local-network management |
+| [FoxHole DB](https://github.com/foxhole-team/foxhole-db) | Signed rules and reference datasets |
+
+</details>
+
+</div>
+
 
 | Build variant | Contents |
 | --- | --- |
@@ -57,20 +83,18 @@ the build and integration.
 - Support managed WireGuard profile DNS for domain routes, including Direct; isolate Android resolver caches and retain only exact authority/identity name bindings across clean handovers.
 - Drop an initial packet decision revoked while flow attribution was pending.
 
-### Companion Android app releases
+### Companion Android app updates
 
-**FoxHole VPN 1.0.5**
+These are app changes; Core binaries and DB datasets are unchanged.
 
-- Added Android 7 support.
-- Added website routing.
-- Improved the visual style of notifications.
+**FoxHole VPN 1.0.6**
 
-**FoxHole Guard 1.0.6**
+- Fixed initial router installation and setup through the app.
 
-- Added Android 7 support.
-- Improved web-address routing filters.
-- Improved the visual style of notifications.
+**FoxHole Guard 1.0.7**
 
+- Fixed initial router installation and setup through the app.
+- Updated Tor transports Lyrebird and conjure-client.
 
 <a id="features"></a>
 
@@ -223,9 +247,16 @@ Policy supplied by the application may use:
 
 Route/DNS/application policy is updated atomically without restarting TUN: each
 new flow sees either the complete old policy or the complete new policy, never a
-mixture. A rejected reload changes nothing. An ordinary reload does not
-immediately recompute the route of an open active flow; existing-flow behavior
-depends on the data plane and the published runtime capabilities.
+mixture. An ordinary rejected reload preserves the active policy. Exception:
+when enabling kill switch fails DNS-policy validation, Core can install emergency
+Block and a new revision while returning an error. Read effective revision and
+failure detail as described in the [ABI](docs/abi.md#policy-reload).
+An ordinary reload with kill switch off both before and after the update
+preserves the current epoch and idle-based L3 behavior. Kill switch, network epoch changes and targeted revocation invalidate
+a cached L3 decision for re-evaluation on the next packet; this is not a promise
+of immediate TCP reset, and re-evaluation can allow the flow again. The current
+machine-readable L3 capability values still disagree with this source path;
+see [atomic policy integration](docs/atomic-policy-updates.md).
 
 Up to 16 named outbounds and up to 64 selector members are supported. Changing protocol configuration or adding/removing outbounds requires a new runtime generation.
 
@@ -249,7 +280,14 @@ Applications explicitly assigned to `Direct` continue to use a separate protecte
 
 DNS supports UDP/TCP, DoT, DoH over HTTP/2, DoQ and DoH over HTTP/3, caching, policy-controlled stale cache, fake-IP, and route-aware DNS. DoQ and DoH over HTTP/3 require a route with UDP support.
 
-`.onion` and `.i2p` are handled fail-closed and never leak to clearnet DNS.
+Queries processed by the **Core DNS interceptor** fail closed for `.onion` and
+`.i2p` instead of going to its external resolver; overlay routing requires
+fake-IP. This scope excludes raw real-IP DNS passthrough without an interceptor,
+managed WireGuard profile DNS, application-owned DoH and strict DoT to other
+resolver addresses. DoT bypass prevention applies only to the advertised resolver.
+The raw default has empty upstreams and no advertised resolver, so no interceptor
+is created. These are DNS-path guarantees, not a claim to inspect encrypted DNS
+inside arbitrary traffic.
 
 DNS bootstrap on Android uses the selected physical Android `Network`.
 
@@ -376,7 +414,8 @@ FoxHole Core does not choose the user mode on its own. Its responsibility is to 
 - compiled routing policy;
 - atomic policy reload;
 - fail-closed routing;
-- on Android, every outbound socket passes `protect(fd)` and binds to the selected physical `Network` before connect/send;
+- on Android, external Core-owned network sockets use the protected/network-bound dialer before connect/send;
+- managed Tor PT loopback IPC is local and intentionally bypasses physical-Network binding; helper processes' external sockets have their own integration boundary;
 - no silent downgrade when a protected route fails.
 
 Per-app/application policy is compiled inside `foxcore-route` and updated through the native API without recreating the TUN interface.
@@ -492,7 +531,7 @@ Capabilities include:
 - optional features;
 - unsupported extensions.
 
-Release 1.0.1 uses the `android4` delivery profile:
+The configured Android delivery profile is `android4`:
 
 ```text
 arm64-v8a
@@ -519,17 +558,27 @@ Native build gates:
 
 ## 🔏 Release integrity
 
+### Native SDK and Linux assets
+
+Release assets and verification instructions depend on the delivery workflow. The [v1.0.4 release](https://github.com/foxhole-team/foxhole-core/releases/tag/v1.0.4) publishes `foxhole-core-native-v1.0.4.tar.gz` and `foxhole-core-native-source-v1.0.4.tar`, with `SHA256SUMS`, `SHA256SUMS.asc` and a detached signature for the source archive. Added Linux assets use the separate `LINUX-SHA256SUMS` and `LINUX-SHA256SUMS.asc` files.
+
+Authenticate the applicable checksum list with the trusted owner signing key before checking downloaded files. A SHA-256 match alone does not authenticate the publisher. Use the asset names and verification instructions for the selected release; do not assume that every release publishes the same archive or a GitHub attestation.
+
+The v1.0.4 native SDK includes four Android ABIs, but its recorded Android runtime checks cover ARM64 C API use on a 4 KiB device. Other-ABI runtime, 16 KiB runtime and full ecosystem qualification are not claimed by this SDK release. Linux package checks also do not replace physical-router traffic acceptance.
+
+### Full LAB release workflow
+
 Native builds and full release checks run in the private LAB or on the authorized build host
 with pinned Rust, NDK and lockfile inputs. The GitHub publisher verifies the owner-signed source
 and immutable LAB handoff, checks the selected archive and required evidence, then publishes
 those exact bytes without rebuilding. The handoff binds the delivery source and compiled
 producer separately; documentation-only changes do not change a native producer identity.
 
-Each `foxhole-core-v<version>.tar.gz` release archive contains the four gated JNI libraries,
+For a full LAB delivery that publishes `foxhole-core-v<version>.tar.gz`, that archive contains the four gated JNI libraries,
 the Linux x86_64 DNS compiler, their producer records, the rollback manifest,
-the committed CycloneDX SBOMs and `Cargo.lock`. The release also contains
-`SHA256SUMS` and keyless Sigstore provenance bound to this repository, workflow
-and release commit:
+the committed CycloneDX SBOMs and `Cargo.lock`. The corresponding full LAB release can also publish
+`SHA256SUMS` and keyless Sigstore provenance bound to its repository, workflow
+and release commit. Use the following example only when that archive and its attestation are actually published; `sha256sum -c` checks files against an already authenticated list:
 
 ```bash
 sha256sum -c SHA256SUMS
@@ -538,6 +587,7 @@ gh attestation verify foxhole-core-v<version>.tar.gz \
 ```
 
 ---
+
 
 ## 🗂️ Workspace structure
 
@@ -603,17 +653,6 @@ without reconnecting the tunnel; see [VPN client architecture](docs/architecture
 
 ---
 
-<a id="ecosystem"></a>
-
-## 🔗 FoxHole ecosystem
-
-| Project | Role |
-| --- | --- |
-| [FoxHole Guard](https://github.com/foxhole-team/foxhole-guard) | Android: VPN, Tor/I2P, traffic rules and local monitoring |
-| [FoxHole VPN](https://github.com/foxhole-team/foxhole-vpn) | Android: simple VPN client and paired OpenWrt management |
-| [**FoxHole Core**](https://github.com/foxhole-team/foxhole-core) | Shared Rust networking core; features depend on the build |
-| [FoxHole OpenWrt](https://github.com/foxhole-team/foxhole-openwrt-client) | Router VPN and local-network management |
-| [FoxHole DB](https://github.com/foxhole-team/foxhole-db) | Signed rules and reference datasets |
 
 ## 🤝 Contributing
 

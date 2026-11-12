@@ -8,7 +8,20 @@
 - Support managed WireGuard profile DNS for domain routes, including Direct; isolate Android resolver caches and retain only exact authority/identity name bindings across clean handovers.
 - Drop an initial packet decision revoked while flow attribution was pending.
 
-### Companion Android app releases
+### Companion Android app updates
+
+These are app changes; Core binaries and DB datasets are unchanged.
+
+**FoxHole VPN 1.0.6**
+
+- Fixed initial router installation and setup through the app.
+
+**FoxHole Guard 1.0.7**
+
+- Fixed initial router installation and setup through the app.
+- Updated Tor transports Lyrebird and conjure-client.
+
+### Previous companion Android app releases
 
 **FoxHole VPN 1.0.5**
 
