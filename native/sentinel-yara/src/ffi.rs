@@ -27,7 +27,7 @@ fn bytes(data: Vec<u8>) -> NativeBuffer {
 fn response(report: Report) -> NativeBuffer {
     match serde_json::to_vec(&report) {
         Ok(data) if data.len() <= limits::RESPONSE_BYTES => bytes(data),
-        _ => bytes(br#"{"protocolVersion":1,"sessionId":0,"status":"error","reason":"response_limit","engine":"yara-x/1.21.0;wasmtime/49.0.4;pulley;profile/sentinel-v2","coverageComplete":false,"requestedBytes":0,"scannedBytes":0,"elapsedMillis":0,"reportingTruncated":false,"diagnosticCount":0,"diagnostics":[],"matches":[]}"#.to_vec()),
+        _ => bytes(br#"{"protocolVersion":1,"sessionId":0,"status":"error","reason":"response_limit","engine":"yara-x/1.21.0;wasmtime/49.0.7;pulley;profile/sentinel-v2","coverageComplete":false,"requestedBytes":0,"scannedBytes":0,"elapsedMillis":0,"reportingTruncated":false,"diagnosticCount":0,"diagnostics":[],"matches":[]}"#.to_vec()),
     }
 }
 fn get(id: i64) -> Result<Arc<CompiledSession>, Report> {

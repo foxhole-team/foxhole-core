@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.0.5
+
+- Updated dependencies for the networking core and the Sentinel scanner.
+
 ## 1.0.4 - 2026-11-09
 
 

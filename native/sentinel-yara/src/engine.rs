@@ -89,7 +89,7 @@ impl Report {
             session_id: 0,
             status,
             reason,
-            engine: "yara-x/1.21.0;wasmtime/49.0.4;pulley;profile/sentinel-v2",
+            engine: "yara-x/1.21.0;wasmtime/49.0.7;pulley;profile/sentinel-v2",
             coverage_complete: false,
             requested_bytes: 0,
             scanned_bytes: 0,

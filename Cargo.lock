@@ -1527,7 +1527,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -1668,7 +1668,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-android"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "foxcore-api",
  "foxcore-dialer",
@@ -1686,7 +1686,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-api"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "ipnet",
@@ -1699,7 +1699,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-cli"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "foxcore-api",
  "foxcore-dialer",
@@ -1719,7 +1719,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-component"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1736,21 +1736,21 @@ dependencies = [
 
 [[package]]
 name = "foxcore-dialer"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "tokio",
 ]
 
 [[package]]
 name = "foxcore-dns"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "ipnet",
 ]
 
 [[package]]
 name = "foxcore-link"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "foxcore-api",
@@ -1766,7 +1766,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-outbound"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1796,7 +1796,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-relay"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "criterion",
  "tokio",
@@ -1804,7 +1804,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-route"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "aws-lc-rs",
  "criterion",
@@ -1819,7 +1819,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-runtime"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "arc-swap",
  "base64",
@@ -1853,7 +1853,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-share"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "argon2",
  "base64",
@@ -1874,7 +1874,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-testkit"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -1895,7 +1895,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-trafficmap"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "arc-swap",
  "foxcore-api",
@@ -1907,7 +1907,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-transport"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "async-trait",
  "aws-lc-rs",
@@ -1937,7 +1937,7 @@ dependencies = [
 
 [[package]]
 name = "foxcore-tun"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -2345,9 +2345,9 @@ dependencies = [
 
 [[package]]
 name = "heapless"
-version = "0.9.3"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
+checksum = "411fdef4df93751117bd9ef8caa0e7f99c65dafec5bd84313eb8e2fdd75e32f2"
 dependencies = [
  "hash32",
  "stable_deref_trait",
@@ -3543,7 +3543,7 @@ dependencies = [
 
 [[package]]
 name = "proto-anytls"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3558,7 +3558,7 @@ dependencies = [
 
 [[package]]
 name = "proto-http"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "bytes",
@@ -3571,7 +3571,7 @@ dependencies = [
 
 [[package]]
 name = "proto-hysteria2"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "blake2",
  "bytes",
@@ -3593,7 +3593,7 @@ dependencies = [
 
 [[package]]
 name = "proto-i2p"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "foxcore-api",
  "foxcore-transport",
@@ -3602,7 +3602,7 @@ dependencies = [
 
 [[package]]
 name = "proto-naive"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "bytes",
@@ -3618,7 +3618,7 @@ dependencies = [
 
 [[package]]
 name = "proto-reality"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -3634,7 +3634,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowsocks"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "base64",
  "bytes",
@@ -3649,7 +3649,7 @@ dependencies = [
 
 [[package]]
 name = "proto-shadowtls"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3669,7 +3669,7 @@ dependencies = [
 
 [[package]]
 name = "proto-socks"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3682,7 +3682,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tor"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "arti-client",
  "async-trait",
@@ -3703,7 +3703,7 @@ dependencies = [
 
 [[package]]
 name = "proto-trojan"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3716,7 +3716,7 @@ dependencies = [
 
 [[package]]
 name = "proto-tuic"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "bytes",
  "foxcore-api",
@@ -3735,7 +3735,7 @@ dependencies = [
 
 [[package]]
 name = "proto-vless"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -3762,7 +3762,7 @@ dependencies = [
 
 [[package]]
 name = "proto-vmess"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "aes 0.8.4",
  "aes-gcm",
@@ -3782,7 +3782,7 @@ dependencies = [
 
 [[package]]
 name = "proto-wireguard"
-version = "1.0.4"
+version = "1.0.5"
 dependencies = [
  "aws-lc-rs",
  "blake2",
@@ -3877,7 +3877,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4248,15 +4248,15 @@ dependencies = [
 
 [[package]]
 name = "rustix"
-version = "1.1.4"
+version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b6fe4565b9518b83ef4f91bb47ce29620ca828bd32cb7e408f0062e9930ba190"
+checksum = "e5e76742e5294153d4dde1207dbec5bdd81eef6fabdc0d2118babadabfd858aa"
 dependencies = [
  "bitflags 2.13.1",
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4996,7 +4996,7 @@ dependencies = [
  "getrandom 0.3.4",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -6829,7 +6829,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

@@ -21,7 +21,7 @@ the build and integration.
 
 <div align="center">
 
-[🇬🇧 **English**](README.md) · [🇷🇺 Русский](docs/README.ru.md)
+🌐 [**English**](README.md) · [Русский](docs/README.ru.md)
 
 </div>
 
@@ -76,25 +76,9 @@ the build and integration.
 
 <a id="whats-new"></a>
 
-## 🆕 What's new - 1.0.4
+## 🆕 What's new - 1.0.5
 
-- Backport SQLite WAL page initialization for CVE-2026-119375; preserve the pinned Arti API.
-- Update Sentinel to Wasmtime 49.0.5 and matching Cranelift security fixes.
-- Support managed WireGuard profile DNS for domain routes, including Direct; isolate Android resolver caches and retain only exact authority/identity name bindings across clean handovers.
-- Drop an initial packet decision revoked while flow attribution was pending.
-
-### Companion Android app updates
-
-These are app changes; Core binaries and DB datasets are unchanged.
-
-**FoxHole VPN 1.0.6**
-
-- Fixed initial router installation and setup through the app.
-
-**FoxHole Guard 1.0.7**
-
-- Fixed initial router installation and setup through the app.
-- Updated Tor transports Lyrebird and conjure-client.
+- Updated dependencies for the networking core and the Sentinel scanner.
 
 <a id="features"></a>
 
